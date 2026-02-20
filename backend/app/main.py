@@ -1,12 +1,23 @@
+import csv
+import io
+import json
 import os
+from typing import Iterable, List, Tuple
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from sqlalchemy import text
 
-from app.db import SessionLocal
+from app.db import SessionLocal, engine
+from app.models import Base, Dataset, DatasetColumn
 
 app = FastAPI(title="TabulaRAG API")
+
+#FastAPI lifecycle event handler
+#calls Base.metadata.create_all to create database tables when app starts
+@app.on_event("startup")
+def startup() -> None:
+    Base.metadata.create_all(bind=engine)
 
 
 @app.get("/health")
@@ -38,4 +49,140 @@ def health_deps():
         "status": "ok" if all_ok else "degraded",
         "postgres": "ok" if postgres_ok else "down",
         "qdrant": "ok" if qdrant_ok else "down",
+    }
+
+#checks if file is a csv or tsv based on file extension, raises HTTPException if not
+def validate_filename(filename: str) -> None:
+    if not filename.lower().endswith((".csv", ".tsv")):
+        raise HTTPException(
+            status_code=400,
+            detail="File must have a .csv or .tsv extension."
+        )
+
+#normalizes header names by stripping whitespace, replacing empty names with col_{index}, and ensuring uniqueness by appending _{count} to duplicates
+def _normalize_headers(headers: List[str]) -> List[str]:
+    seen = {}
+    normalized = []
+    for idx, header in enumerate(headers):
+        base = (header or "").strip()
+        if not base:
+            base = f"col_{idx + 1}"
+        key = base
+        if key in seen:
+            seen[key] += 1
+            key = f"{base}_{seen[base]}"
+        else:
+            seen[key] = 1
+        normalized.append(key)
+    return normalized
+
+
+def _detect_delimiter(filename: str | None) -> str:
+    if filename and filename.lower().endswith(".tsv"):
+        return "\t"
+    if filename and filename.lower().endswith(".csv"):
+        return ","
+    return ","
+
+def _iter_rows(
+    upload: UploadFile,
+    has_header: bool,
+) -> Tuple[List[str], Iterable[List[str]], str]:
+    validate_filename(upload.filename or "")
+    detected_delimiter = _detect_delimiter(upload.filename)
+    if detected_delimiter not in [",", "\t"]:
+        raise HTTPException(status_code=400, detail="Delimiter must be comma or tab.")
+
+    # Use TextIOWrapper to read the uploaded file as text with UTF-8 encoding, which allows csv.reader to process it correctly.
+    text_stream = io.TextIOWrapper(upload.file, encoding="utf-8-sig", newline="")
+    reader = csv.reader(text_stream, delimiter=detected_delimiter)
+
+    try:
+        first_row = next(reader) #gets the first row of the file to determine headers and column count
+    except StopIteration:
+        raise HTTPException(status_code=400, detail="Empty file.")
+
+    if has_header:
+        headers = _normalize_headers(first_row)
+        rows_iter = reader
+    else:
+        headers = _normalize_headers([f"col_{i + 1}" for i in range(len(first_row))])
+        def row_iter() -> Iterable[List[str]]:
+            yield first_row
+            yield from reader
+        rows_iter = row_iter()
+
+    return headers, rows_iter, detected_delimiter
+
+
+@app.post("/ingest")
+def ingest_table(
+    file: UploadFile = File(...),
+    dataset_name: str | None = Form(None),
+    has_header: bool = Form(True),
+    delimiter: str | None = Form(None),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+    validate_filename(file.filename)
+
+    headers, rows_iter, detected_delimiter = _iter_rows(file, delimiter or "", has_header)
+
+    dataset_display_name = dataset_name or os.path.splitext(file.filename)[0]
+
+    with SessionLocal() as db:
+        dataset = Dataset(
+            name=dataset_display_name,
+            source_filename=file.filename,
+            delimiter=detected_delimiter,
+            has_header=has_header,
+            column_count=len(headers),
+        )
+        db.add(dataset)
+        db.flush()
+
+        db.add_all(
+            [
+                DatasetColumn(dataset_id=dataset.id, column_index=i, name=col_name)
+                for i, col_name in enumerate(headers)
+            ]
+        )
+        db.commit()
+        dataset_id = dataset.id
+        dataset_name_value = dataset.name
+        dataset_delimiter = dataset.delimiter
+        dataset_has_header = dataset.has_header
+
+    row_count = 0
+    try:
+        with engine.raw_connection() as conn:
+            with conn.cursor() as cur:
+                with cur.copy(
+                    "COPY dataset_rows (dataset_id, row_index, row_data) FROM STDIN"
+                ) as copy:
+                    for row_index, row in enumerate(rows_iter):
+                        row_obj = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
+                        copy.write_row([dataset_id, row_index, json.dumps(row_obj)])
+                        row_count += 1
+            conn.commit()
+    except Exception as exc:
+        with SessionLocal() as db:
+            db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": dataset_id})
+            db.commit()
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
+
+    with SessionLocal() as db:
+        db.execute(
+            text("UPDATE datasets SET row_count = :row_count WHERE id = :id"),
+            {"row_count": row_count, "id": dataset_id},
+        )
+        db.commit()
+
+    return {
+        "dataset_id": dataset_id,
+        "name": dataset_name_value,
+        "rows": row_count,
+        "columns": len(headers),
+        "delimiter": dataset_delimiter,
+        "has_header": dataset_has_header,
     }
