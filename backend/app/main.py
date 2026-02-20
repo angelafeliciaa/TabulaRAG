@@ -120,13 +120,12 @@ def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     has_header: bool = Form(True),
-    delimiter: str | None = Form(None),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
     validate_filename(file.filename)
 
-    headers, rows_iter, detected_delimiter = _iter_rows(file, delimiter or "", has_header)
+    headers, rows_iter, detected_delimiter = _iter_rows(file, has_header)
 
     dataset_display_name = dataset_name or os.path.splitext(file.filename)[0]
 
@@ -138,22 +137,24 @@ def ingest_table(
             has_header=has_header,
             column_count=len(headers),
         )
-        db.add(dataset)
-        db.flush()
+        db.add(dataset) #adds the new dataset to the session, which assigns it an ID after flush() is called
+        db.flush() #sends it to the database to get the generated ID, but does not commit yet so it can be rolled back if needed
 
         db.add_all(
             [
                 DatasetColumn(dataset_id=dataset.id, column_index=i, name=col_name)
                 for i, col_name in enumerate(headers)
             ]
-        )
-        db.commit()
+        ) #creates a DatasetColumn object for each header and adds them to the session, associating them with the dataset by dataset_id
+        db.commit() #commits the dataset to the database
         dataset_id = dataset.id
         dataset_name_value = dataset.name
         dataset_delimiter = dataset.delimiter
         dataset_has_header = dataset.has_header
 
     row_count = 0
+    # Use a raw connection and COPY command for efficient bulk insertion of rows. 
+    # loops through the rows from the CSV and creates a dictionary mapping header names to row values, then writes each row to the copy stream as JSON.
     try:
         with engine.raw_connection() as conn:
             with conn.cursor() as cur:
@@ -170,7 +171,8 @@ def ingest_table(
             db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": dataset_id})
             db.commit()
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
-
+    #update the row count for the dataset after all rows have been inserted, using a raw SQL UPDATE statement for efficiency
+    #look at database in __init__.py
     with SessionLocal() as db:
         db.execute(
             text("UPDATE datasets SET row_count = :row_count WHERE id = :id"),
