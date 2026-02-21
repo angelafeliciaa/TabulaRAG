@@ -31,7 +31,7 @@ def startup() -> None:
 
 
 mcp = FastMCP("TabulaRAG")
-app.mount("/mcp", mcp.get_asgi_app())
+app.mount("/mcp", mcp.streamable_http_app)
 
 
 @app.get("/health")
