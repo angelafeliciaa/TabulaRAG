@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.embeddings import embed_texts, row_to_text
-from app.qdrant_client import ensure_collection, upsert_vectors
+from app.qdrant_client import ensure_collection, ensure_text_index, upsert_vectors
 
 EMBED_BATCH_SIZE = 256
 
@@ -19,6 +19,7 @@ def index_dataset(dataset_id: int) -> None:
     search results can be returned without an extra PG round-trip.
     """
     ensure_collection(dataset_id)
+    ensure_text_index(dataset_id)
 
     # Fetch all rows from Postgres
     with SessionLocal() as db:

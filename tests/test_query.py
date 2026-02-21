@@ -2,6 +2,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from app.retrieval import extract_keywords
+
 
 # ── Helper: ingest a small CSV so the dataset + rows exist in PG ──
 
@@ -123,3 +125,81 @@ def test_highlight_column_with_underscore(client):
     assert resp.status_code == 200
     assert resp.json()["column"] == "first_name"
     assert resp.json()["value"] == "Alice"
+
+
+# ── extract_keywords tests ────────────────────────────────────────
+
+def test_extract_keywords_basic():
+    """Should extract meaningful keywords, stripping stop words."""
+    keywords = extract_keywords("who is the engineer from asana")
+    assert "engineer" in keywords
+    assert "asana" in keywords
+    # Stop words should be excluded
+    assert "who" not in keywords
+    assert "is" not in keywords
+    assert "the" not in keywords
+    assert "from" not in keywords
+
+
+def test_extract_keywords_all_stop_words():
+    """A query of only stop words should return an empty list."""
+    keywords = extract_keywords("who is the from")
+    assert keywords == []
+
+
+def test_extract_keywords_punctuation():
+    """Punctuation should be stripped before extracting keywords."""
+    keywords = extract_keywords("what's the role at asana?")
+    assert "asana" in keywords
+    assert "role" in keywords
+    # Punctuation artifacts should not appear
+    for kw in keywords:
+        assert "?" not in kw
+        assert "'" not in kw
+
+
+# ── Two-pass search behavior ──────────────────────────────────────
+
+def test_two_pass_search_filtered_results_first(client):
+    """Filtered (keyword-matched) results should appear before fallback results."""
+    dataset_id = _ingest(client)
+
+    # Filtered hit: contains "London" keyword
+    filtered_hit = {
+        "id": 0,
+        "score": 0.85,
+        "payload": {
+            "row_data": {"name": "Alice", "city": "London", "age": "30"},
+            "text": "name: Alice | city: London | age: 30",
+        },
+    }
+    # Fallback hit: does not contain "London"
+    fallback_hit = {
+        "id": 1,
+        "score": 0.90,
+        "payload": {
+            "row_data": {"name": "Bob", "city": "Paris", "age": "25"},
+            "text": "name: Bob | city: Paris | age: 25",
+        },
+    }
+
+    def mock_search(dataset_id, query_vector, limit=10, query_filter=None):
+        if query_filter is not None:
+            return [filtered_hit]
+        return [fallback_hit, filtered_hit]
+
+    with patch("app.retrieval.search_vectors", side_effect=mock_search), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={"question": "Who lives in London?", "dataset_id": dataset_id},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    results = data["results"]
+    assert len(results) >= 2
+    # Filtered result (Alice/London) should come first
+    assert results[0]["row_data"]["city"] == "London"
+    # Fallback result (Bob/Paris) should come second (deduplicated)
+    assert results[1]["row_data"]["city"] == "Paris"
