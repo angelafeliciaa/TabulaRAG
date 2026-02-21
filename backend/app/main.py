@@ -9,7 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from sqlalchemy import text
 
 from app.db import SessionLocal, engine
-from app.models import Base, Dataset, DatasetColumn
+from app.models import Base, Dataset, DatasetColumn, DatasetRow
 
 app = FastAPI(title="TabulaRAG API")
 
@@ -153,19 +153,19 @@ def ingest_table(
         dataset_has_header = dataset.has_header
 
     row_count = 0
-    # Use a raw connection and COPY command for efficient bulk insertion of rows. 
-    # loops through the rows from the CSV and creates a dictionary mapping header names to row values, then writes each row to the copy stream as JSON.
+    # Insert rows using SQLAlchemy ORM for compatibility with both SQLite and PostgreSQL
     try:
-        with engine.raw_connection() as conn:
-            with conn.cursor() as cur:
-                with cur.copy(
-                    "COPY dataset_rows (dataset_id, row_index, row_data) FROM STDIN"
-                ) as copy:
-                    for row_index, row in enumerate(rows_iter):
-                        row_obj = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
-                        copy.write_row([dataset_id, row_index, json.dumps(row_obj)])
-                        row_count += 1
-            conn.commit()
+        with SessionLocal() as db:
+            for row_index, row in enumerate(rows_iter):
+                row_obj = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
+                dataset_row = DatasetRow(
+                    dataset_id=dataset_id,
+                    row_index=row_index,
+                    row_data=json.dumps(row_obj)
+                )
+                db.add(dataset_row)
+                row_count += 1
+            db.commit()
     except Exception as exc:
         with SessionLocal() as db:
             db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": dataset_id})
