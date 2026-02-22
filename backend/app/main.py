@@ -4,6 +4,7 @@ import json
 import os
 from typing import Iterable, List, Tuple
 from pydantic import BaseModel
+import unicodedata
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -96,6 +97,20 @@ def _normalize_headers(headers: List[str]) -> List[str]:
     return normalized
 
 
+NULL_VALUES = {"null", "none", "na", "n/a", "nan", "-", ""}
+
+
+def _normalize_value(value: str) -> str | None:
+    if value is None:
+        return None
+    value = unicodedata.normalize("NFC", value)
+    value = value.replace("\xa0", " ")
+    value = " ".join(value.split())  # collapse extra whitespace
+    if value.lower() in NULL_VALUES:
+        return None
+    return value
+
+
 def _detect_delimiter(filename: str | None) -> str:
     if filename and filename.lower().endswith(".tsv"):
         return "\t"
@@ -184,13 +199,13 @@ def ingest_table(
         with SessionLocal() as db:
             for row_index, row in enumerate(rows_iter):
                 row_obj = {
-                    headers[i]: (row[i] if i < len(row) else None)
+                    headers[i]: _normalize_value(row[i] if i < len(row) else None)
                     for i in range(len(headers))
                 }
                 dataset_row = DatasetRow(
                     dataset_id=dataset_id,
                     row_index=row_index,
-                    row_data=json.dumps(row_obj),
+                    row_data=row_obj,
                 )
                 db.add(dataset_row)
                 row_count += 1
