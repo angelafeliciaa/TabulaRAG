@@ -779,7 +779,8 @@ ul {
 }
 
 .tables-scroll {
-    max-height: 144px;
+    /* Keep exactly about 3 rows visible; rest is scrollable. */
+    max-height: 116px;
     overflow: auto;
     padding: 6px 4px 2px 2px;
 }
@@ -1305,6 +1306,10 @@ ul {
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+}
+
+.upload-preview .table-area {
+    max-height: 74vh;
 }
 
 .preview-header {
