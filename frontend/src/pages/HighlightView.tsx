@@ -257,7 +257,7 @@ export default function HighlightView() {
 
             <Link className="return-link" to="/">
               <img src={returnIcon} alt="" />
-              Return to Upload Page
+              Back to Upload
             </Link>
           </div>
         </>
