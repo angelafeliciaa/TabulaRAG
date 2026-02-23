@@ -238,6 +238,78 @@ h3 {
     color: var(--text-muted);
 }
 
+.upload-progress {
+    margin-top: 2px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.upload-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.upload-progress-label {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.upload-progress-percent {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
+.upload-progress-track {
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--overlay);
+    overflow: hidden;
+}
+
+.upload-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    width: 0;
+    transition: width 220ms ease;
+}
+
+.upload-progress-fill.processing {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent));
+    background-size: 200% 100%;
+    animation: uploadProgressFlow 1.3s linear infinite;
+}
+
+@keyframes uploadProgressFlow {
+    from {
+        background-position: 0 0;
+    }
+    to {
+        background-position: 200% 0;
+    }
+}
+
+.upload-progress-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.upload-progress-rows {
+    font-size: 12px;
+    color: var(--text);
+    font-weight: 600;
+}
+
 .toast {
     position: absolute;
     top: 16px;
@@ -674,6 +746,95 @@ li {
     cursor: pointer;
 }
 
+.index-job {
+    width: 178px;
+    min-width: 178px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elev);
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.index-job-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.index-job-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text);
+}
+
+.index-job-percent {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.index-job-track {
+    height: 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--overlay);
+    overflow: hidden;
+}
+
+.index-job-fill {
+    height: 100%;
+    border-radius: inherit;
+    width: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width 220ms ease;
+}
+
+.index-job-fill.queued {
+    background: linear-gradient(90deg, #94a3b8, #64748b);
+}
+
+.index-job-fill.indexing {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent));
+    background-size: 200% 100%;
+    animation: indexJobFlow 1.3s linear infinite;
+}
+
+@keyframes indexJobFlow {
+    from {
+        background-position: 0 0;
+    }
+    to {
+        background-position: 200% 0;
+    }
+}
+
+.index-job-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.index-job-ready {
+    font-size: 11px;
+    font-weight: 700;
+    color: #16a34a;
+    text-align: center;
+    padding: 3px 0;
+}
+
+.index-job.error {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.index-job.error .index-job-ready {
+    color: #dc2626;
+}
+
 .icon-button {
     width: 32px;
     height: 32px;
@@ -737,6 +898,44 @@ li {
     min-height: 0;
 }
 
+.preview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.preview-table-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(79, 70, 229, 0.28);
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.12), rgba(14, 165, 233, 0.12));
+    color: var(--text);
+}
+
+.preview-table-name-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.preview-table-name-value {
+    font-size: 19px;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    max-width: 48ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 table {
     width: 100%;
     border-collapse: separate;
@@ -792,6 +991,21 @@ tr:hover td {
 }
 
 @media (max-width: 720px) {
+    .list-row {
+        flex-wrap: wrap;
+        align-items: flex-start;
+    }
+
+    .list-item {
+        flex: 1 1 100%;
+    }
+
+    .index-job {
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+    }
+
     .theme-toggle-wrap {
         right: 16px;
     }

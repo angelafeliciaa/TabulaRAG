@@ -1,6 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export type ServerStatus = "online" | "offline" | "unknown";
+export type IndexJobState = "queued" | "indexing" | "ready" | "error";
 
 export type TableRow = Record<string, unknown>;
 
@@ -24,9 +25,22 @@ export interface TableSlice {
   rows: TableRow[];
 }
 
+export interface TableIndexStatus {
+  dataset_id: number;
+  state: IndexJobState;
+  progress: number;
+  processed_rows: number;
+  total_rows: number;
+  message: string;
+  started_at: string | null;
+  updated_at: string | null;
+  finished_at: string | null;
+}
+
 interface TableSliceApiRow {
   row_index: number;
-  data: TableRow;
+  data?: unknown;
+  row_data?: unknown;
 }
 
 interface TableSliceApiResponse {
@@ -38,6 +52,28 @@ interface TableSliceApiResponse {
   has_header: boolean;
   columns: string[];
   rows: TableSliceApiRow[];
+}
+
+function normalizeRowData(raw: unknown): TableRow {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as TableRow;
+  }
+
+  if (typeof raw === "string") {
+    try {
+      let parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === "string") {
+        parsed = JSON.parse(parsed);
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as TableRow;
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
 }
 
 export interface HighlightResponse {
@@ -58,7 +94,16 @@ interface IngestResponse {
   has_header: boolean;
 }
 
-export async function uploadTable(file: File, name: string): Promise<IngestResponse> {
+export interface UploadProgress {
+  percent: number;
+  phase: "uploading" | "processing";
+}
+
+export async function uploadTable(
+  file: File,
+  name: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
   form.append("has_header", "true");
@@ -68,11 +113,89 @@ export async function uploadTable(file: File, name: string): Promise<IngestRespo
     form.append("dataset_name", trimmed);
   }
 
-  const res = await fetch(`${API_BASE}/ingest`, { method: "POST", body: form });
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return (await res.json()) as IngestResponse;
+  return await new Promise<IngestResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let processingTimer: number | null = null;
+
+    const report = (percent: number, phase: UploadProgress["phase"]) => {
+      if (!onProgress) {
+        return;
+      }
+      onProgress({ percent: Math.max(0, Math.min(100, percent)), phase });
+    };
+
+    const stopProcessingTimer = () => {
+      if (processingTimer !== null) {
+        window.clearInterval(processingTimer);
+        processingTimer = null;
+      }
+    };
+
+    xhr.open("POST", `${API_BASE}/ingest`);
+
+    xhr.upload.onloadstart = () => {
+      report(2, "uploading");
+    };
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) {
+        return;
+      }
+      // Reserve final percentage points for server-side parse/store/indexing.
+      const uploadPercent = (event.loaded / event.total) * 82;
+      report(uploadPercent, "uploading");
+    };
+
+    xhr.upload.onload = () => {
+      let processingPercent = 82;
+      const processingStart = Date.now();
+      report(processingPercent, "processing");
+      processingTimer = window.setInterval(() => {
+        const elapsedMs = Date.now() - processingStart;
+        // Keep progress moving while backend parses/stores/indexes rows.
+        const easedTarget = 82 + 17.2 * (1 - Math.exp(-elapsedMs / 9000));
+        processingPercent = Math.min(
+          99.7,
+          Math.max(processingPercent + 0.12, easedTarget),
+        );
+        report(processingPercent, "processing");
+      }, 220);
+    };
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== XMLHttpRequest.DONE) {
+        return;
+      }
+
+      stopProcessingTimer();
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = JSON.parse(xhr.responseText) as IngestResponse;
+          report(100, "processing");
+          resolve(response);
+        } catch {
+          reject(new Error("Invalid upload response format."));
+        }
+        return;
+      }
+
+      const detail = xhr.responseText?.trim();
+      reject(new Error(detail || `Upload failed with status ${xhr.status}.`));
+    };
+
+    xhr.onerror = () => {
+      stopProcessingTimer();
+      reject(new Error("Network error while uploading file."));
+    };
+
+    xhr.onabort = () => {
+      stopProcessingTimer();
+      reject(new Error("Upload was aborted."));
+    };
+
+    xhr.send(form);
+  });
 }
 
 export async function listTables(): Promise<TableSummary[]> {
@@ -81,6 +204,21 @@ export async function listTables(): Promise<TableSummary[]> {
     throw new Error(await res.text());
   }
   return (await res.json()) as TableSummary[];
+}
+
+export async function listIndexStatus(
+  datasetIds?: number[],
+): Promise<TableIndexStatus[]> {
+  const url = new URL(`${API_BASE}/tables/index-status`);
+  (datasetIds || []).forEach((datasetId) => {
+    url.searchParams.append("dataset_id", String(datasetId));
+  });
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as TableIndexStatus[];
 }
 
 export async function getSlice(
@@ -108,7 +246,7 @@ export async function getSlice(
     column_count: data.column_count,
     has_header: data.has_header,
     columns: data.columns,
-    rows: (data.rows || []).map((row) => row.data ?? {}),
+    rows: (data.rows || []).map((row) => normalizeRowData(row.data ?? row.row_data)),
   };
 }
 

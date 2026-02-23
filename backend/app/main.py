@@ -1,16 +1,22 @@
 import csv
 import io
-import json
 import os
 from typing import Iterable, List, Tuple
 import unicodedata
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text, select
+from sqlalchemy import insert, text
 
 from app.db import SessionLocal, engine
+from app.index_jobs import (
+    mark_index_job_error,
+    mark_index_job_ready,
+    queue_index_job,
+    start_index_job,
+    update_index_job,
+)
 from app.indexing import index_dataset
 from app.models import Base, Dataset, DatasetColumn, DatasetRow
 from app.mcp_server import mcp
@@ -110,6 +116,7 @@ def _normalize_headers(headers: List[str]) -> List[str]:
 
 
 NULL_VALUES = {"null", "none", "na", "n/a", "nan", "-", ""}
+ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "2000"))
 
 
 def _normalize_value(value: str) -> str | None:
@@ -166,8 +173,24 @@ def _iter_rows(
     return headers, rows_iter, detected_delimiter
 
 
+def _index_dataset_safe(dataset_id: int, total_rows: int) -> None:
+    start_index_job(dataset_id, total_rows)
+
+    try:
+        index_dataset(
+            dataset_id,
+            progress_callback=lambda processed, total: update_index_job(
+                dataset_id, processed, total
+            ),
+        )
+        mark_index_job_ready(dataset_id, total_rows)
+    except Exception as exc:
+        mark_index_job_error(dataset_id, total_rows, f"Indexing failed: {exc}")
+
+
 @app.post("/ingest")
 def ingest_table(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     has_header: bool = Form(True),
@@ -206,21 +229,30 @@ def ingest_table(
         dataset_has_header = dataset.has_header
 
     row_count = 0
-    # Insert rows using SQLAlchemy ORM for compatibility with both SQLite and PostgreSQL
+    # Insert rows in batches for better throughput on large files.
     try:
         with SessionLocal() as db:
+            batch_rows = []
             for row_index, row in enumerate(rows_iter):
                 row_obj = {
                     headers[i]: _normalize_value(row[i] if i < len(row) else None)
                     for i in range(len(headers))
                 }
-                dataset_row = DatasetRow(
-                    dataset_id=dataset_id,
-                    row_index=row_index,
-                    row_data=json.dumps(row_obj),
+                batch_rows.append(
+                    {
+                        "dataset_id": dataset_id,
+                        "row_index": row_index,
+                        "row_data": row_obj,
+                    }
                 )
-                db.add(dataset_row)
-                row_count += 1
+                if len(batch_rows) >= ROW_INSERT_BATCH_SIZE:
+                    db.execute(insert(DatasetRow), batch_rows)
+                    row_count += len(batch_rows)
+                    batch_rows.clear()
+
+            if batch_rows:
+                db.execute(insert(DatasetRow), batch_rows)
+                row_count += len(batch_rows)
             db.commit()
     except Exception as exc:
         with SessionLocal() as db:
@@ -236,11 +268,9 @@ def ingest_table(
         )
         db.commit()
 
-    # Index dataset in Qdrant for vector search (non-blocking: failure shouldn't fail ingestion)
-    try:
-        index_dataset(dataset_id)
-    except Exception:
-        pass
+    # Start vector indexing after response so uploads don't block on embedding/Qdrant upserts.
+    queue_index_job(dataset_id, row_count)
+    background_tasks.add_task(_index_dataset_safe, dataset_id, row_count)
 
     return {
         "dataset_id": dataset_id,
