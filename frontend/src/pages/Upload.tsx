@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteTable,
   getSlice,
@@ -17,6 +17,7 @@ import uploadLogo from "../images/upload.png";
 
 const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
 const PENDING_DELETE_SESSION_KEY = "tabularag_pending_delete";
+const PINNED_TABLES_STORAGE_KEY = "tabularag_pinned_table_ids";
 const DELETE_UNDO_WINDOW_MS = 5600;
 const SUCCESS_TOAST_MS = 2800;
 
@@ -31,6 +32,8 @@ type PendingDelete = {
   previousPreview: TableSlice | null;
   timeoutId: number;
 };
+
+type TableSortMode = "alphabet" | "rows" | "recent";
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -79,8 +82,28 @@ export default function Upload() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
+  const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
   const [deletingTableIds, setDeletingTableIds] = useState<Record<number, boolean>>({});
+  const [pinnedTableIds, setPinnedTableIds] = useState<number[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(PINNED_TABLES_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+        .map((value) => Math.trunc(value));
+    } catch {
+      return [];
+    }
+  });
   const [indexStatusByTable, setIndexStatusByTable] = useState<
     Record<number, TableIndexStatus>
   >({});
@@ -88,10 +111,18 @@ export default function Upload() {
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const estimateJobRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
   const pendingDeleteRef = useRef<PendingDelete | null>(null);
   const pendingDeleteIdsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      PINNED_TABLES_STORAGE_KEY,
+      JSON.stringify(pinnedTableIds),
+    );
+  }, [pinnedTableIds]);
 
   async function estimateDataRows(nextFile: File): Promise<number | null> {
     try {
@@ -326,6 +357,32 @@ export default function Upload() {
   }, [editingId, busy]);
 
   useEffect(() => {
+    if (!sortMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (sortMenuRef.current && !sortMenuRef.current.contains(target)) {
+        setSortMenuOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSortMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [sortMenuOpen]);
+
+  useEffect(() => {
     return () => {
       clearToastTimer();
       const pendingDelete = pendingDeleteRef.current;
@@ -380,7 +437,7 @@ export default function Upload() {
       element.removeEventListener("scroll", updateHint);
       window.removeEventListener("resize", updateHint);
     };
-  }, [tables.length]);
+  }, [tables.length, tableSearchQuery]);
 
   useEffect(() => {
     const container = previewAreaRef.current;
@@ -533,6 +590,9 @@ export default function Upload() {
       setErr(getErrorMessage(error));
       restoreDeletedTable(pending);
     } finally {
+      setPinnedTableIds((previous) =>
+        previous.filter((currentId) => currentId !== datasetId),
+      );
       pendingDeleteIdsRef.current.delete(datasetId);
       clearPendingDeleteSession(datasetId);
       setDeletingTableIds((previous) => {
@@ -685,6 +745,59 @@ export default function Upload() {
     activeTableId !== null
       ? tables.find((table) => table.dataset_id === activeTableId)?.name || "Table"
       : null;
+  const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
+  const sortedTables = useMemo(() => {
+    const sortByMode = (a: TableSummary, b: TableSummary): number => {
+      if (tableSortMode === "alphabet") {
+        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        if (byName !== 0) {
+          return byName;
+        }
+      } else if (tableSortMode === "rows") {
+        const byRows = b.row_count - a.row_count;
+        if (byRows !== 0) {
+          return byRows;
+        }
+      }
+
+      // Default/fallback ordering is most recent first.
+      const aTime = Number.isFinite(Date.parse(a.created_at))
+        ? Date.parse(a.created_at)
+        : a.dataset_id;
+      const bTime = Number.isFinite(Date.parse(b.created_at))
+        ? Date.parse(b.created_at)
+        : b.dataset_id;
+      return bTime - aTime;
+    };
+
+    const next = [...tables];
+    next.sort((a, b) => {
+      const aPinned = pinnedTableIdSet.has(a.dataset_id);
+      const bPinned = pinnedTableIdSet.has(b.dataset_id);
+      if (aPinned !== bPinned) {
+        return aPinned ? -1 : 1;
+      }
+      return sortByMode(a, b);
+    });
+    return next;
+  }, [tables, pinnedTableIdSet, tableSortMode]);
+  const normalizedTableSearchQuery = tableSearchQuery.trim().toLowerCase();
+  const filteredTables = useMemo(() => {
+    if (!normalizedTableSearchQuery) {
+      return sortedTables;
+    }
+    return sortedTables.filter((table) =>
+      table.name.toLowerCase().includes(normalizedTableSearchQuery),
+    );
+  }, [sortedTables, normalizedTableSearchQuery]);
+  function onTogglePin(datasetId: number) {
+    setPinnedTableIds((previous) => {
+      if (previous.includes(datasetId)) {
+        return previous.filter((currentId) => currentId !== datasetId);
+      }
+      return [datasetId, ...previous];
+    });
+  }
 
   function scrollUploadedTablesToBottom() {
     const element = tablesScrollRef.current;
@@ -807,16 +920,81 @@ export default function Upload() {
       </div>
 
       <div className="panel">
-        <div className="row" style={{ justifyContent: "space-between" }}>
+        <div className="row tables-header-row">
           <h3 style={{ marginBottom: 0 }}>Uploaded tables</h3>
-          <span className="small">Tap a table to preview</span>
+          <div className="tables-header-controls">
+            <label className="tables-search-input-wrap" aria-label="Search table name">
+              <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon">
+                <path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.06l4.24 4.24a1 1 0 0 1-1.42 1.42l-4.24-4.24A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z" />
+              </svg>
+              <input
+                type="text"
+                className="tables-search-input"
+                value={tableSearchQuery}
+                onChange={(event) => setTableSearchQuery(event.target.value)}
+                placeholder="Search"
+                aria-label="Search table name"
+              />
+            </label>
+            <div className="sort-menu-wrap" ref={sortMenuRef}>
+              <button
+                type="button"
+                className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
+                onClick={() => setSortMenuOpen((current) => !current)}
+                aria-haspopup="dialog"
+                aria-expanded={sortMenuOpen}
+                aria-label="Sort tables"
+                title="Sort tables"
+              >
+                <svg viewBox="0 0 24 24" role="presentation" className="sort-toggle-icon">
+                  <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
+                </svg>
+                <span className="sort-toggle-text">Sort</span>
+              </button>
+              {sortMenuOpen && (
+                <div className="sort-menu" role="dialog" aria-label="Sort options">
+                  <button
+                    type="button"
+                    className={`sort-menu-item ${tableSortMode === "recent" ? "active" : ""}`}
+                    onClick={() => {
+                      setTableSortMode("recent");
+                      setSortMenuOpen(false);
+                    }}
+                  >
+                    Most recent
+                  </button>
+                  <button
+                    type="button"
+                    className={`sort-menu-item ${tableSortMode === "rows" ? "active" : ""}`}
+                    onClick={() => {
+                      setTableSortMode("rows");
+                      setSortMenuOpen(false);
+                    }}
+                  >
+                    Most rows
+                  </button>
+                  <button
+                    type="button"
+                    className={`sort-menu-item ${tableSortMode === "alphabet" ? "active" : ""}`}
+                    onClick={() => {
+                      setTableSortMode("alphabet");
+                      setSortMenuOpen(false);
+                    }}
+                  >
+                    Alphabet
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="tables-scroll" ref={tablesScrollRef}>
           <ul>
-            {tables.map((table) => {
+            {filteredTables.map((table) => {
               const indexStatus = indexStatusByTable[table.dataset_id];
               const indexState = indexStatus?.state || "ready";
+              const isPinned = pinnedTableIdSet.has(table.dataset_id);
               const indexProgress = Math.max(
                 0,
                 Math.min(
@@ -842,7 +1020,24 @@ export default function Upload() {
               return (
                 <li key={table.dataset_id}>
                   <div className="list-row">
-                    <div className="list-item">
+                    <button
+                      type="button"
+                      className={`icon-button ${isPinned ? "pinned" : "pin"}`}
+                      onClick={() => onTogglePin(table.dataset_id)}
+                      aria-label={isPinned ? `Unpin ${table.name}` : `Pin ${table.name}`}
+                      title={isPinned ? "Unpin table" : "Pin table"}
+                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
+                    >
+                      <svg viewBox="0 0 24 24" role="presentation">
+                        <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
+                      </svg>
+                    </button>
+
+                    <div
+                      className={`list-item ${
+                        activeTableId === table.dataset_id ? "selected" : ""
+                      }`}
+                    >
                       {editingId === table.dataset_id ? (
                         <input
                           ref={renameInputRef}
