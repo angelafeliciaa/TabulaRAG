@@ -76,7 +76,7 @@ export default function Upload() {
     setPreviewErr(null);
 
     try {
-      const slice = await getSlice(datasetId, 0, 50);
+      const slice = await getSlice(datasetId, 0, 30);
       setPreview(slice);
     } catch (error: unknown) {
       setPreviewErr(getErrorMessage(error));
@@ -322,7 +322,7 @@ export default function Upload() {
         )}
 
         {!previewBusy && !preview && !previewErr && (
-          <p className="small">Select a table above to preview the first 50 rows.</p>
+          <p className="small">Select a table above to preview the first 30 rows.</p>
         )}
       </div>
     </div>
