@@ -53,16 +53,14 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   position: relative;
 }
 
-.content {
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-
 .server-status {
+  position: absolute;
+  top: 22px;
+  left: 24px;
+  width: max-content;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -70,33 +68,20 @@ body {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: #ffffff;
-  color: #f59e0b;
   font-size: 12px;
+  --status-color: #f59e0b;
+  color: var(--status-color);
+}
+.server-status.Online {
+  --status-color: #22c55e;
+}
+.server-status.Offline {
+  --status-color: #ef4444;
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #f59e0b;
-}
-
-.server-status.online .status-dot {
-  background: #22c55e;
-}
-
-.server-status.offline .status-dot {
-  background: #ef4444;
-}
-
-.server-status.online {
-  color: #16a34a;
-}
-
-.server-status.offline {
-  color: #dc2626;
-}
-
-.server-status.unknown {
-  color: #f59e0b;
+  background: var(--status-color);
 }

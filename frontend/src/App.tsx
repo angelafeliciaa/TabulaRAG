@@ -3,19 +3,19 @@ import { getServerStatus } from "./api";
 
 export default function App() {
   const [serverStatus, setServerStatus] = useState<
-    "online" | "offline" | "unknown"
-  >("unknown");
+    "Online" | "Offline" | "Unknown"
+  >("Unknown");
 
   useEffect(() => {
     let mounted = true;
 
     async function checkStatus() {
-    const status = await getServerStatus();
-    if (mounted) setServerStatus(status);
-}
+      const status = await getServerStatus();
+      if (mounted) setServerStatus(status);
+    }
 
     checkStatus();
-    const id = window.setInterval(checkStatus, 1000);
+    const id = window.setInterval(checkStatus,5000);
     return () => {
       mounted = false;
       window.clearInterval(id);
@@ -26,14 +26,7 @@ export default function App() {
     <div className="app-shell">
       <div className={`server-status ${serverStatus}`}>
         <span className="status-dot" />
-        <span>
-          Server Status:{" "}
-          {serverStatus === "online"
-            ? "Online"
-            : serverStatus === "offline"
-              ? "Offline"
-              : "Unknown"}
-        </span>
+        <span>Server Status: {serverStatus}</span>
       </div>
     </div>
   );

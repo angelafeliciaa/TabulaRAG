@@ -53,16 +53,16 @@ export async function getHighlight(highlightId: string) {
 }
 
 // Health
-export async function getServerStatus(): Promise<"online" | "offline"> {
-    try {
-        const res = await fetch(`${API_BASE}/health`);
-        console.log("health response:", res.status);
-        if (!res.ok) return "offline";
-        const data = await res.json();
-        console.log("health data:", data);
-        return data.status === "ok" ? "online" : "offline";
-    } catch (e) {
-        console.log("health error:", e);
-        return "offline";
-    }
+export async function getServerStatus(): Promise<"Online" | "Offline"> {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    console.log("health response:", res.status);
+    if (!res.ok) return "Offline";
+    const data = await res.json();
+    console.log("health data:", data);
+    return data.status === "ok" ? "Online" : "Offline";
+  } catch (e) {
+    console.log("health error:", e);
+    return "Offline";
+  }
 }
