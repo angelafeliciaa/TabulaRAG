@@ -13,9 +13,9 @@ router = APIRouter()
 # ── Request / Response models ──────────────────────────────────────
 
 class QueryRequest(BaseModel):
-    question: str
-    dataset_id: int
-    top_k: int = Field(default=10, ge=1, le=100)
+    question: str = Field(description="Natural language question to search the dataset with")
+    dataset_id: int =Field(description="ID of the dataset to query. Call GET /tables first to discover valid IDs.")
+    top_k: int
     filters: Optional[Dict[str, str]] = None
 
 
@@ -38,7 +38,6 @@ class QueryResponse(BaseModel):
     dataset_id: int
     question: str
     results: List[ResultItem]
-
 
 class HighlightResponse(BaseModel):
     highlight_id: str
@@ -66,7 +65,7 @@ def query_dataset(body: QueryRequest):
         dataset_id=body.dataset_id,
         question=body.question,
         filters=body.filters,
-        top_k=body.top_k,
+        top_k=10,
     )
 
     return QueryResponse(
