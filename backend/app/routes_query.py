@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.db import SessionLocal
-from app.retrieval import get_highlight, hybrid_search
+from app.retrieval import get_highlight, smart_query
 
 router = APIRouter()
 
@@ -14,8 +14,8 @@ router = APIRouter()
 
 class QueryRequest(BaseModel):
     question: str = Field(description="Natural language question to search the dataset with")
-    dataset_id: int =Field(description="ID of the dataset to query. Call GET /tables first to discover valid IDs.")
-    top_k: int
+    dataset_id: int = Field(description="ID of the dataset to query. Call GET /tables first to discover valid IDs.")
+    top_k: int = Field(default=10, ge=1, le=100)
     filters: Optional[Dict[str, str]] = None
 
 
@@ -32,12 +32,20 @@ class ResultItem(BaseModel):
     row_data: Dict[str, Any]
     highlights: List[HighlightItem]
     match_type: str
+    source_url: Optional[str] = None
+    top_highlight_id: Optional[str] = None
+    highlight_url: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
     dataset_id: int
     question: str
     results: List[ResultItem]
+    answer: Optional[str] = None
+    answer_type: Optional[str] = None
+    answer_details: Optional[Dict[str, Any]] = None
+    dataset_url: Optional[str] = None
+    final_response: Optional[str] = None
 
 class HighlightResponse(BaseModel):
     highlight_id: str
@@ -61,18 +69,13 @@ def query_dataset(body: QueryRequest):
     if row is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    results = hybrid_search(
+    payload = smart_query(
         dataset_id=body.dataset_id,
         question=body.question,
         filters=body.filters,
-        top_k=10,
+        top_k=body.top_k,
     )
-
-    return QueryResponse(
-        dataset_id=body.dataset_id,
-        question=body.question,
-        results=results,
-    )
+    return QueryResponse(**payload)
 
 
 @router.get("/highlights/{highlight_id}", response_model=HighlightResponse)

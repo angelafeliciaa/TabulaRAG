@@ -33,6 +33,20 @@ def test_query_missing_question(client):
     assert resp.status_code == 422
 
 
+def test_query_top_k_optional(client):
+    dataset_id = _ingest(client)
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={"question": "Who lives in London?", "dataset_id": dataset_id},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["dataset_id"] == dataset_id
+
+
 def test_query_semantic_results(client):
     dataset_id = _ingest(client)
 
@@ -61,6 +75,9 @@ def test_query_semantic_results(client):
     assert len(data["results"]) >= 1
     assert data["results"][0]["row_index"] == 0
     assert data["results"][0]["match_type"] == "semantic"
+    assert data["results"][0]["source_url"].endswith(
+        f"/tables/{dataset_id}/slice?offset=0&limit=1"
+    )
 
 
 def test_query_with_filters(client):
@@ -84,6 +101,108 @@ def test_query_with_filters(client):
     assert len(exact_results) == 1
     assert exact_results[0]["row_data"]["city"] == "London"
     assert exact_results[0]["score"] == 1.0
+
+
+def test_query_aggregate_answer_with_source_links(client):
+    csv_content = (
+        b"Product,Boxes Shipped,Country\n"
+        b"Dark,10,UK\n"
+        b"Caramel,14,US\n"
+        b"Dark,30,UK\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("choco.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={
+                "question": "What product has the most amount of boxes shipped?",
+                "dataset_id": dataset_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["answer_type"] == "aggregate"
+    assert "Dark" in data["answer"]
+    assert data["answer_details"]["group_by_column"] == "Product"
+    assert data["answer_details"]["metric_column"] == "Boxes Shipped"
+    assert data["answer_details"]["metric_value"] == 40
+    assert data["answer_details"]["source_url"].endswith(
+        f"/tables/{dataset_id}/slice?offset=2&limit=1"
+    )
+    assert data["dataset_url"].endswith(f"/tables/{dataset_id}/slice?offset=0&limit=30")
+    assert data["results"][0]["source_url"].startswith("http://localhost:8000/tables/")
+
+
+def test_query_sum_with_natural_language_filter(client):
+    csv_content = (
+        b"Product,Boxes Shipped,Country\n"
+        b"Dark,10,UK\n"
+        b"Caramel,14,US\n"
+        b"Dark,30,UK\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("choco.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={
+                "question": "How many boxes shipped for Dark?",
+                "dataset_id": dataset_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["answer_type"] == "aggregate"
+    assert data["answer_details"]["operation"] == "sum"
+    assert data["answer_details"]["metric_column"] == "Boxes Shipped"
+    assert data["answer_details"]["metric_value"] == 40
+    assert data["answer_details"]["filters"]["Product"] == "Dark"
+    assert "Source URL:" in data["final_response"]
+
+
+def test_query_count_with_natural_language_filter(client):
+    csv_content = (
+        b"Product,Boxes Shipped,Country\n"
+        b"Dark,10,UK\n"
+        b"Caramel,14,US\n"
+        b"Dark,30,UK\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("choco.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={
+                "question": "How many entries are in UK?",
+                "dataset_id": dataset_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["answer_type"] == "aggregate"
+    assert data["answer_details"]["operation"] == "count"
+    assert data["answer_details"]["metric_value"] == 2
+    assert data["answer_details"]["filters"]["Country"] == "UK"
+    assert "Source URL:" in data["final_response"]
 
 
 # ── GET /highlights/{highlight_id} ────────────────────────────────
