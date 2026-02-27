@@ -3,7 +3,7 @@ import os
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse, unquote
 
 from qdrant_client import models
 from sqlalchemy import text
@@ -61,6 +61,27 @@ _METRIC_KEYWORD_TOKENS: Set[str] = {
     "revenue",
     "volume",
 }
+_SINGLE_ROW_HINT_RE = re.compile(
+    r"\b(one|single)\s+(deal|transaction|row|entry|order|sale|shipment)\b"
+)
+_QUESTION_ROLE_COLUMN_KEYWORDS: Dict[str, Set[str]] = {
+    "person": {
+        "sale",
+        "sales",
+        "salesperson",
+        "seller",
+        "person",
+        "name",
+        "rep",
+        "agent",
+        "employee",
+        "staff",
+        "owner",
+    },
+    "product": {"product", "item", "sku", "brand", "flavor"},
+    "location": {"country", "region", "market", "city", "state", "location"},
+    "date": {"date", "day", "month", "year", "time"},
+}
 _NUMBER_CLEAN_RE = re.compile(r"[$€£¥₹]")
 _DIGIT_ONLY_RE = re.compile(r"^[0-9./\\-]+$")
 
@@ -113,6 +134,38 @@ def _public_api_base_url() -> str:
     return base.rstrip("/")
 
 
+def _verification_enabled() -> bool:
+    return os.getenv("QUERY_ENABLE_VERIFICATION", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _fail_closed_on_verification_error() -> bool:
+    return os.getenv("QUERY_FAIL_CLOSED_ON_VERIFY_ERROR", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _public_ui_base_url() -> str:
+    base = (
+        os.getenv("PUBLIC_UI_BASE_URL")
+        or os.getenv("UI_PUBLIC_BASE_URL")
+        or os.getenv("FRONTEND_PUBLIC_URL")
+        or "http://localhost:5173"
+    ).strip()
+    return base.rstrip("/")
+
+
+def _table_ui_url(dataset_id: int) -> str:
+    return f"{_public_ui_base_url()}/tables/{dataset_id}"
+
+
 def _normalize_dataset_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -138,7 +191,7 @@ def _list_dataset_summaries() -> List[Dict[str, Any]]:
                 "row_count": int(row[3] or 0),
                 "column_count": int(row[4] or 0),
                 "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
-                "source_url": f"{_public_api_base_url()}/tables/{dataset_id}/slice?offset=0&limit=30",
+                "source_url": _table_ui_url(dataset_id),
             }
         )
     return summaries
@@ -238,15 +291,31 @@ def resolve_dataset_context(
     return best_id, best, note
 
 
-def _row_source_url(dataset_id: int, row_index: int) -> str:
-    return (
-        f"{_public_api_base_url()}/tables/{dataset_id}/slice"
-        f"?offset={row_index}&limit=1"
-    )
+def _highlight_source_url(
+    highlight_id: str,
+    question: Optional[str] = None,
+    additional_targets: Optional[List[str]] = None,
+) -> str:
+    path = f"{_public_ui_base_url()}/highlight/{quote(highlight_id, safe='')}"
+    params: Dict[str, str] = {}
 
+    if additional_targets:
+        ordered_targets = []
+        seen = set([highlight_id])
+        for target in additional_targets:
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            ordered_targets.append(target)
+        if ordered_targets:
+            params["targets"] = ",".join(ordered_targets)
 
-def _highlight_source_url(highlight_id: str) -> str:
-    return f"{_public_api_base_url()}/highlights/{quote(highlight_id, safe='')}"
+    if question and question.strip():
+        params["q"] = question.strip()
+
+    if not params:
+        return path
+    return f"{path}?{urlencode(params)}"
 
 
 def _fallback_highlight(
@@ -295,6 +364,11 @@ def _build_result_item(
         if fallback is not None:
             highlights = [fallback]
     top_highlight_id = highlights[0]["highlight_id"] if highlights else None
+    highlight_ui_url = (
+        _highlight_source_url(top_highlight_id, question=question)
+        if top_highlight_id
+        else _table_ui_url(dataset_id)
+    )
 
     result: Dict[str, Any] = {
         "row_index": row_index,
@@ -302,9 +376,9 @@ def _build_result_item(
         "row_data": row_data,
         "highlights": highlights,
         "match_type": match_type,
-        "source_url": _row_source_url(dataset_id, row_index),
+        "source_url": highlight_ui_url,
         "top_highlight_id": top_highlight_id,
-        "highlight_url": _highlight_source_url(top_highlight_id) if top_highlight_id else None,
+        "highlight_url": highlight_ui_url,
     }
     return result
 
@@ -817,6 +891,43 @@ def _detect_numeric_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
     }
 
 
+def _question_roles(question: str) -> Set[str]:
+    tokens = set(_tokenize(question))
+    roles: Set[str] = set()
+
+    if "who" in tokens or tokens & {"seller", "sold", "sale", "salesperson", "sales", "person", "name"}:
+        roles.add("person")
+    if tokens & {"product", "item", "sku", "brand", "flavor"}:
+        roles.add("product")
+    if "where" in tokens or tokens & {"country", "region", "market", "city", "state", "location"}:
+        roles.add("location")
+    if "when" in tokens or tokens & {"date", "day", "month", "year", "time"}:
+        roles.add("date")
+    return roles
+
+
+def _column_role_bonus(column: str, roles: Set[str]) -> float:
+    if not roles:
+        return 0.0
+    col_tokens = set(_tokenize(column))
+    if not col_tokens:
+        return 0.0
+
+    bonus = 0.0
+    for role in roles:
+        keywords = _QUESTION_ROLE_COLUMN_KEYWORDS.get(role)
+        if keywords and col_tokens & keywords:
+            bonus += 5.0
+    return bonus
+
+
+def _looks_like_single_row_rank_query(question: str) -> bool:
+    lowered = question.lower()
+    if _SINGLE_ROW_HINT_RE.search(lowered):
+        return True
+    return bool(re.search(r"\bin\s+one\s+(deal|transaction|row|entry|order|sale|shipment)\b", lowered))
+
+
 def _extract_group_hint(question: str) -> Optional[str]:
     lowered = question.lower()
     patterns = (
@@ -913,14 +1024,47 @@ def _pick_group_column(
 
     question_tokens = set(_tokenize(question))
     normalized_question = " ".join(_tokenize(question))
+    roles = _question_roles(question)
     best_col = None
     best_score = 0.0
     for column in candidate_columns:
         score = _column_overlap_score(column, question_tokens, normalized_question)
+        score += _column_role_bonus(column, roles)
         if score > best_score:
             best_score = score
             best_col = column
     return best_col
+
+
+def _pick_row_answer_column(
+    columns: List[str],
+    numeric_columns: Set[str],
+    metric_column: Optional[str],
+    question: str,
+) -> Optional[str]:
+    candidate_columns = [
+        col for col in columns
+        if col not in numeric_columns and col != metric_column
+    ]
+    if not candidate_columns:
+        return None
+
+    question_tokens = set(_tokenize(question))
+    normalized_question = " ".join(_tokenize(question))
+    roles = _question_roles(question)
+
+    best_col: Optional[str] = None
+    best_score = 0.0
+    for column in candidate_columns:
+        score = _column_overlap_score(column, question_tokens, normalized_question)
+        score += _column_role_bonus(column, roles)
+        if score > best_score:
+            best_score = score
+            best_col = column
+
+    if best_col:
+        return best_col
+    return candidate_columns[0]
 
 
 def _infer_aggregate_answer(
@@ -982,7 +1126,7 @@ def _infer_aggregate_answer(
     use_grouping = bool(
         group_column
         and (
-            mode == "rank"
+            (mode == "rank" and not _looks_like_single_row_rank_query(question))
             or has_group_phrase
             or top_n > 1
         )
@@ -1136,6 +1280,8 @@ def _infer_aggregate_answer(
     source_row_index: Optional[int] = None
     source_row_data: Optional[Dict[str, Any]] = None
     metric_value: Optional[float] = None
+    answer_column: Optional[str] = None
+    answer_value: Optional[str] = None
 
     if mode == "count":
         metric_value = float(len(filtered_rows))
@@ -1182,10 +1328,27 @@ def _infer_aggregate_answer(
             return None
         metric_value = best_metric
         direction = "lowest" if operator == "min" else "highest"
-        answer = (
-            f"The {direction} {metric_for_mode} is {_format_number(metric_value)} "
-            f"(row {source_row_index})."
+        answer_column = _pick_row_answer_column(
+            columns=columns,
+            numeric_columns=numeric_columns,
+            metric_column=metric_for_mode,
+            question=question,
         )
+        if answer_column:
+            raw_value = source_row_data.get(answer_column)
+            if raw_value is not None and str(raw_value).strip():
+                answer_value = str(raw_value).strip()
+
+        if answer_column and answer_value:
+            answer = (
+                f"The {direction} {metric_for_mode} in one deal is {_format_number(metric_value)} "
+                f"by {answer_column} {answer_value} (row {source_row_index})."
+            )
+        else:
+            answer = (
+                f"The {direction} {metric_for_mode} is {_format_number(metric_value)} "
+                f"(row {source_row_index})."
+            )
 
     source_result = None
     if source_row_index is not None and source_row_data is not None:
@@ -1223,8 +1386,13 @@ def _infer_aggregate_answer(
                 "source_url": source_result["source_url"],
                 "top_highlight_id": source_result["top_highlight_id"],
                 "highlight_url": source_result["highlight_url"],
+                "source_row_data": source_result.get("row_data"),
             }
         )
+    if answer_column:
+        answer_details["answer_column"] = answer_column
+    if answer_value:
+        answer_details["answer_value"] = answer_value
 
     return {
         "answer": answer,
@@ -1237,15 +1405,12 @@ def _infer_aggregate_answer(
 def _build_final_response(payload: Dict[str, Any]) -> str:
     answer = str(payload.get("answer") or "").strip()
     details = payload.get("answer_details") or {}
-    source_url = details.get("source_url")
-    highlight_url = details.get("highlight_url")
+    ui_link = details.get("highlight_url") or details.get("source_url")
 
     if answer:
         lines = [answer]
-        if source_url:
-            lines.append(f"Source URL: {source_url}")
-        if highlight_url:
-            lines.append(f"Highlight URL: {highlight_url}")
+        if ui_link:
+            lines.append(f"Link: {ui_link}")
         return "\n".join(lines)
 
     results = payload.get("results") or []
@@ -1262,11 +1427,114 @@ def _build_final_response(payload: Dict[str, Any]) -> str:
         lead = f"Best matching row is {row_index}."
 
     lines = [lead]
-    if top.get("source_url"):
-        lines.append(f"Source URL: {top['source_url']}")
-    if top.get("highlight_url"):
-        lines.append(f"Highlight URL: {top['highlight_url']}")
+    ui_link = top.get("highlight_url") or top.get("source_url")
+    if ui_link:
+        lines.append(f"Link: {ui_link}")
     return "\n".join(lines)
+
+
+def _extract_highlight_id_from_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = urlparse(value)
+        if "/highlight/" not in parsed.path:
+            return None
+        tail = parsed.path.split("/highlight/", 1)[1].strip("/")
+        if not tail:
+            return None
+        return unquote(tail)
+    except Exception:
+        return None
+
+
+def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    checks: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    details = payload.get("answer_details") or {}
+
+    source_row_index = details.get("source_row_index")
+    if source_row_index is not None:
+        results = payload.get("results") or []
+        present = any(
+            int(item.get("row_index")) == int(source_row_index)
+            for item in results
+            if isinstance(item, dict) and item.get("row_index") is not None
+        )
+        checks.append(
+            {
+                "name": "source_row_present_in_results",
+                "passed": present,
+                "source_row_index": int(source_row_index),
+            }
+        )
+        if not present:
+            errors.append("source_row_index not present in results.")
+
+    answer_column = details.get("answer_column")
+    answer_value = details.get("answer_value")
+    source_row_data = details.get("source_row_data") or {}
+    if answer_column and answer_value is not None and isinstance(source_row_data, dict):
+        source_value = source_row_data.get(answer_column)
+        is_match = source_value is not None and str(source_value).strip() == str(answer_value).strip()
+        checks.append(
+            {
+                "name": "answer_value_matches_source_row",
+                "passed": is_match,
+                "answer_column": answer_column,
+            }
+        )
+        if not is_match:
+            errors.append("answer_value does not match source_row_data for answer_column.")
+
+    op = str(details.get("operation") or "").lower()
+    group_column = details.get("group_by_column")
+    metric_column = details.get("metric_column")
+    metric_value = details.get("metric_value")
+    if (
+        op == "rank"
+        and not group_column
+        and isinstance(source_row_data, dict)
+        and metric_column
+        and metric_value is not None
+    ):
+        source_metric = _parse_number(source_row_data.get(metric_column))
+        metric_ok = source_metric is not None and abs(float(source_metric) - float(metric_value)) < 1e-9
+        checks.append(
+            {
+                "name": "rank_metric_matches_source_row",
+                "passed": metric_ok,
+                "metric_column": metric_column,
+            }
+        )
+        if not metric_ok:
+            errors.append("rank metric_value does not match source row metric.")
+
+    highlight_id = details.get("top_highlight_id")
+    if not highlight_id:
+        highlight_id = _extract_highlight_id_from_url(details.get("highlight_url") or details.get("source_url"))
+    if not highlight_id:
+        results = payload.get("results") or []
+        if results and isinstance(results[0], dict):
+            highlight_id = results[0].get("top_highlight_id")
+            if not highlight_id:
+                highlight_id = _extract_highlight_id_from_url(
+                    results[0].get("highlight_url") or results[0].get("source_url")
+                )
+    if highlight_id:
+        highlight_exists = get_highlight(str(highlight_id)) is not None
+        checks.append(
+            {
+                "name": "highlight_exists",
+                "passed": highlight_exists,
+                "highlight_id": str(highlight_id),
+            }
+        )
+        if not highlight_exists:
+            errors.append("highlight reference is missing.")
+
+    status = "pass" if not errors else "fail"
+    return {"status": status, "checks": checks, "errors": errors}
 
 
 def smart_query(
@@ -1287,12 +1555,17 @@ def smart_query(
         "dataset_id": dataset_id,
         "question": question,
         "results": results,
-        "dataset_url": f"{_public_api_base_url()}/tables/{dataset_id}/slice?offset=0&limit=30",
+        "dataset_url": _table_ui_url(dataset_id),
     }
 
     aggregate_answer = _infer_aggregate_answer(dataset_id, question)
     if not aggregate_answer:
         response["final_response"] = _build_final_response(response)
+        if _verification_enabled():
+            verification = _verify_response(response)
+            response["verification"] = verification
+            if verification["status"] != "pass" and _fail_closed_on_verification_error():
+                response["final_response"] = "I could not verify this answer against source rows."
         return response
 
     source_result = aggregate_answer.get("source_result")
@@ -1305,6 +1578,15 @@ def smart_query(
     response["answer_type"] = aggregate_answer["answer_type"]
     response["answer_details"] = aggregate_answer["answer_details"]
     response["final_response"] = _build_final_response(response)
+    if _verification_enabled():
+        verification = _verify_response(response)
+        response["verification"] = verification
+        if verification["status"] != "pass" and _fail_closed_on_verification_error():
+            fallback_lines = [
+                "I could not verify this answer against source rows.",
+                f"Open table: {response.get('dataset_url')}",
+            ]
+            response["final_response"] = "\n".join(fallback_lines)
     return response
 
 

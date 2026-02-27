@@ -36,7 +36,7 @@ def mcp_query(
     dataset_name: Optional[str] = None,
     top_k: int = 10,
 ) -> dict:
-    """Answer natural-language table questions with direct answer text, SQL-equivalent plan, and source URLs."""
+    """Answer natural-language table questions and use payload['final_response'] verbatim for end-user output."""
     resolved_dataset_id, resolved_dataset, resolution_note = resolve_dataset_context(
         dataset_id=dataset_id,
         dataset_name=dataset_name,

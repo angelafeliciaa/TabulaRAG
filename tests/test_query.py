@@ -47,6 +47,42 @@ def test_query_top_k_optional(client):
     assert resp.json()["dataset_id"] == dataset_id
 
 
+def test_query_strict_mode_requires_dataset_id(client, monkeypatch):
+    _ingest(client)
+    monkeypatch.setenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "true")
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={"question": "Who lives in London?"},
+        )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "dataset_id is required" in detail["message"]
+    assert isinstance(detail["available_tables"], list)
+    assert len(detail["available_tables"]) >= 1
+
+
+def test_query_strict_mode_rejects_invalid_dataset_id(client, monkeypatch):
+    dataset_id = _ingest(client)
+    monkeypatch.setenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "true")
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={"question": "Who lives in London?", "dataset_id": dataset_id + 9999},
+        )
+
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert "not found" in detail["message"].lower()
+    assert isinstance(detail["available_tables"], list)
+    assert any(int(item["dataset_id"]) == dataset_id for item in detail["available_tables"])
+
+
 def test_query_auto_resolves_dataset_from_question(client):
     csv_content = b"Product,Boxes Shipped,Country\nDark,10,UK\n"
     ingest_resp = client.post(
@@ -124,9 +160,7 @@ def test_query_semantic_results(client):
     assert len(data["results"]) >= 1
     assert data["results"][0]["row_index"] == 0
     assert data["results"][0]["match_type"] == "semantic"
-    assert data["results"][0]["source_url"].endswith(
-        f"/tables/{dataset_id}/slice?offset=0&limit=1"
-    )
+    assert data["results"][0]["source_url"].startswith("http://localhost:5173/highlight/")
 
 
 def test_query_with_filters(client):
@@ -182,11 +216,75 @@ def test_query_aggregate_answer_with_source_links(client):
     assert data["answer_details"]["group_by_column"] == "Product"
     assert data["answer_details"]["metric_column"] == "Boxes Shipped"
     assert data["answer_details"]["metric_value"] == 40
-    assert data["answer_details"]["source_url"].endswith(
-        f"/tables/{dataset_id}/slice?offset=2&limit=1"
+    assert data["answer_details"]["source_url"].startswith("http://localhost:5173/highlight/")
+    assert data["dataset_url"].endswith(f"/tables/{dataset_id}")
+    assert data["results"][0]["source_url"].startswith("http://localhost:5173/highlight/")
+
+
+def test_query_rank_single_row_returns_name_for_who_question(client):
+    csv_content = (
+        b"Sales Person,Product,Boxes Shipped,Country\n"
+        b"Alice,Dark Bites,100,UK\n"
+        b"Andrew,Milk Choco,620,US\n"
+        b"Karlen McCaffrey,50% Dark Bites,778,Australia\n"
+        b"Bob,White Choc,300,Canada\n"
     )
-    assert data["dataset_url"].endswith(f"/tables/{dataset_id}/slice?offset=0&limit=30")
-    assert data["results"][0]["source_url"].startswith("http://localhost:8000/tables/")
+    resp = client.post(
+        "/ingest",
+        files={"file": ("choco_sales.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    with patch("app.retrieval.search_vectors", return_value=[]), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
+        resp = client.post(
+            "/query",
+            json={
+                "question": "Who sold the most boxes in one deal?",
+                "dataset_id": dataset_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["answer_type"] == "aggregate"
+    assert data["answer_details"]["operation"] == "rank"
+    assert data["answer_details"]["answer_column"] == "Sales Person"
+    assert data["answer_details"]["answer_value"] == "Karlen McCaffrey"
+    assert round(float(data["answer_details"]["metric_value"]), 3) == 778.0
+    assert "Karlen McCaffrey" in data["answer"]
+    assert "Karlen McCaffrey" in data["final_response"]
+    assert data["verification"]["status"] == "pass"
+
+
+def test_query_fail_closed_when_verification_fails(client, monkeypatch):
+    dataset_id = _ingest(client)
+    monkeypatch.setenv("QUERY_ENABLE_VERIFICATION", "true")
+    monkeypatch.setenv("QUERY_FAIL_CLOSED_ON_VERIFY_ERROR", "true")
+
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"name": "Alice", "city": "London", "age": "30"},
+                "text": "name: Alice | city: London | age: 30",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), \
+         patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]), \
+         patch("app.retrieval.get_highlight", return_value=None):
+        resp = client.post(
+            "/query",
+            json={"question": "Who lives in London?", "dataset_id": dataset_id},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["verification"]["status"] == "fail"
+    assert "I could not verify this answer against source rows." in data["final_response"]
 
 
 def test_query_sum_with_natural_language_filter(client):
@@ -219,7 +317,7 @@ def test_query_sum_with_natural_language_filter(client):
     assert data["answer_details"]["metric_column"] == "Boxes Shipped"
     assert data["answer_details"]["metric_value"] == 40
     assert data["answer_details"]["filters"]["Product"] == "Dark"
-    assert "Source URL:" in data["final_response"]
+    assert "Link: http://localhost:5173/highlight/" in data["final_response"]
 
 
 def test_query_count_with_natural_language_filter(client):
@@ -251,7 +349,7 @@ def test_query_count_with_natural_language_filter(client):
     assert data["answer_details"]["operation"] == "count"
     assert data["answer_details"]["metric_value"] == 2
     assert data["answer_details"]["filters"]["Country"] == "UK"
-    assert "Source URL:" in data["final_response"]
+    assert "Link: http://localhost:5173/highlight/" in data["final_response"]
 
 
 # ── GET /highlights/{highlight_id} ────────────────────────────────
