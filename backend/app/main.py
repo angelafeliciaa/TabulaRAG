@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from typing import Iterable, List, Tuple
-import unicodedata
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +24,7 @@ from app.mcp_server import mcp
 from app.qdrant_client import get_collection_point_count
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
+from app.typed_values import normalize_row_obj
 
 
 logger = logging.getLogger(__name__)
@@ -136,21 +136,9 @@ def _normalize_headers(headers: List[str]) -> List[str]:
     return normalized
 
 
-NULL_VALUES = {"null", "none", "na", "n/a", "nan", "-", ""}
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
-
-
-def _normalize_value(value: str) -> str | None:
-    if value is None:
-        return None
-    value = unicodedata.normalize("NFC", value)
-    value = value.replace("\xa0", " ")
-    value = " ".join(value.split())  # collapse extra whitespace
-    if value.lower() in NULL_VALUES:
-        return None
-    return value
 
 
 def validate_upload_size(upload: UploadFile) -> None:
@@ -213,10 +201,7 @@ def _iter_rows(
 
 
 def _build_row_obj(headers: List[str], row: List[str]) -> dict:
-    return {
-        headers[i]: _normalize_value(row[i] if i < len(row) else None)
-        for i in range(len(headers))
-    }
+    return normalize_row_obj(headers, row)
 
 
 def _insert_rows_postgres_copy(

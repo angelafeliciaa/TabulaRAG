@@ -11,6 +11,12 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.embeddings import embed_texts
 from app.qdrant_client import search_vectors
+from app.typed_values import (
+    get_numeric_value,
+    is_internal_key,
+    parse_number as _typed_parse_number,
+    strip_internal_fields,
+)
 
 
 # Common English stop words to exclude from keyword filters
@@ -89,7 +95,6 @@ _QUESTION_ROLE_COLUMN_KEYWORDS: Dict[str, Set[str]] = {
     "location": {"country", "region", "market", "city", "state", "location"},
     "date": {"date", "day", "month", "year", "time"},
 }
-_NUMBER_CLEAN_RE = re.compile(r"[$€£¥₹]")
 _DIGIT_ONLY_RE = re.compile(r"^[0-9./\\-]+$")
 
 
@@ -365,9 +370,10 @@ def _build_result_item(
     question: str,
     match_type: str,
 ) -> Dict[str, Any]:
-    highlights = generate_highlights(dataset_id, row_index, row_data, question)
+    public_row_data = strip_internal_fields(row_data)
+    highlights = generate_highlights(dataset_id, row_index, public_row_data, question)
     if not highlights:
-        fallback = _fallback_highlight(dataset_id, row_index, row_data, question)
+        fallback = _fallback_highlight(dataset_id, row_index, public_row_data, question)
         if fallback is not None:
             highlights = [fallback]
     top_highlight_id = highlights[0]["highlight_id"] if highlights else None
@@ -380,7 +386,7 @@ def _build_result_item(
     result: Dict[str, Any] = {
         "row_index": row_index,
         "score": score,
-        "row_data": row_data,
+        "row_data": public_row_data,
         "highlights": highlights,
         "match_type": match_type,
         "source_url": highlight_ui_url,
@@ -796,50 +802,7 @@ def _detect_analytic_mode(
 
 
 def _parse_number(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    raw = str(value).strip()
-    if not raw:
-        return None
-
-    lowered = raw.lower()
-    if lowered in {"na", "n/a", "nan", "none", "null"}:
-        return None
-
-    is_negative_parentheses = raw.startswith("(") and raw.endswith(")")
-    if is_negative_parentheses:
-        raw = raw[1:-1].strip()
-
-    raw = raw.replace(",", "").replace(" ", "")
-    raw = _NUMBER_CLEAN_RE.sub("", raw)
-
-    multiplier = 1.0
-    if raw and raw[-1].lower() in {"k", "m", "b"}:
-        suffix = raw[-1].lower()
-        raw = raw[:-1]
-        if suffix == "k":
-            multiplier = 1_000.0
-        elif suffix == "m":
-            multiplier = 1_000_000.0
-        else:
-            multiplier = 1_000_000_000.0
-
-    if raw.endswith("%"):
-        raw = raw[:-1]
-
-    try:
-        parsed = float(raw) * multiplier
-    except ValueError:
-        return None
-
-    if is_negative_parentheses:
-        parsed *= -1.0
-    return parsed
+    return _typed_parse_number(value)
 
 
 def _format_number(value: float) -> str:
@@ -874,6 +837,8 @@ def _collect_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> List[str]:
     seen: Set[str] = set()
     for _, row_data in rows[:300]:
         for column in row_data.keys():
+            if is_internal_key(str(column)):
+                continue
             if column not in seen:
                 seen.add(column)
                 ordered.append(column)
@@ -887,8 +852,10 @@ def _detect_numeric_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
 
     numeric_counts: Dict[str, int] = defaultdict(int)
     for _, row_data in sampled:
-        for col, val in row_data.items():
-            if _parse_number(val) is not None:
+        for col in row_data.keys():
+            if is_internal_key(str(col)):
+                continue
+            if get_numeric_value(row_data, col) is not None:
                 numeric_counts[col] += 1
 
     min_hits = max(2, int(len(sampled) * 0.40))
@@ -1152,7 +1119,9 @@ def _infer_aggregate_answer(
     if use_grouping and group_column:
         grouped: Dict[str, Dict[str, Any]] = {}
         for row_index, row_data in filtered_rows:
-            metric_value = _parse_number(row_data.get(metric_for_mode)) if metric_for_mode else None
+            metric_value = (
+                get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
+            )
             if mode in {"sum", "avg", "rank"} and metric_value is None:
                 continue
 
@@ -1306,7 +1275,7 @@ def _infer_aggregate_answer(
         values: List[float] = []
         best_metric: Optional[float] = None
         for row_index, row_data in filtered_rows:
-            parsed = _parse_number(row_data.get(metric_for_mode))
+            parsed = get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
             if parsed is None:
                 continue
             values.append(parsed)
@@ -1325,7 +1294,7 @@ def _infer_aggregate_answer(
     else:
         best_metric: Optional[float] = None
         for row_index, row_data in filtered_rows:
-            parsed = _parse_number(row_data.get(metric_for_mode))
+            parsed = get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
             if parsed is None:
                 continue
             if best_metric is None:
@@ -1677,8 +1646,9 @@ def get_highlight(highlight_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     row_data = _deserialize_row_data(row[0])
+    public_row_data = strip_internal_fields(row_data)
 
-    if column not in row_data:
+    if column not in public_row_data:
         return None
 
     return {
@@ -1686,6 +1656,6 @@ def get_highlight(highlight_id: str) -> Optional[Dict[str, Any]]:
         "dataset_id": dataset_id,
         "row_index": row_index,
         "column": column,
-        "value": row_data[column],
-        "row_context": row_data,
+        "value": public_row_data[column],
+        "row_context": public_row_data,
     }
