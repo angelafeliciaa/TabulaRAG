@@ -59,12 +59,12 @@ app.include_router(tables_router)
 app.include_router(query_router)
 
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 def health():
     return {"status": "ok"}
 
 
-@app.get("/health/deps")
+@app.get("/health/deps", include_in_schema=False)
 def health_deps():
     postgres_ok = False
     qdrant_ok = False
@@ -315,7 +315,7 @@ def _resume_incomplete_index_jobs() -> None:
         _index_worker.enqueue(dataset_id, row_count)
 
 
-@app.post("/ingest")
+@app.post("/ingest", include_in_schema=False)
 def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
