@@ -181,7 +181,7 @@ def query_dataset(body: QueryRequest):
     return QueryResponse(**payload)
 
 
-@router.get("/highlights/{highlight_id}", response_model=HighlightResponse)
+@router.get("/highlights/{highlight_id}", response_model=HighlightResponse, include_in_schema=False)
 def highlight_endpoint(highlight_id: str):
     result = get_highlight(highlight_id)
     if result is None:
