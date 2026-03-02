@@ -39,7 +39,7 @@ def _delete_collection_safe(dataset_id: int) -> None:
         pass
 
 
-@router.get("/tables")
+@router.get("/tables",summary="List all datasets", description="Returns all available datasets with their IDs, names, and metadata.")
 def list_tables():
     with SessionLocal() as db:
         datasets = (
