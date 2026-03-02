@@ -39,7 +39,11 @@ def _delete_collection_safe(dataset_id: int) -> None:
         pass
 
 
-@router.get("/tables",summary="List all datasets", description="Returns all available datasets with their IDs, names, and metadata.")
+@router.get(
+    "/tables",
+    summary="List all datasets",
+    description="Returns all available datasets with their IDs, names, and metadata.",
+)
 def list_tables():
     with SessionLocal() as db:
         datasets = (
@@ -56,6 +60,35 @@ def list_tables():
             }
             for d in datasets
         ]
+
+
+@router.get(
+    "/tables/{dataset_id}/columns",
+    summary="List all columns for a dataset",
+    description="Returns column names and indexes for a dataset. Call this to understand the data structure before querying.",
+)
+def list_columns_for_dataset(dataset_id: int):
+    with SessionLocal() as db:
+        dataset = db.execute(
+            select(Dataset).where(Dataset.id == dataset_id)
+        ).scalar_one_or_none()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+
+        columns = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+
+    return {
+        "dataset_id": dataset_id,
+        "columns": [{"column_index": c.column_index, "name": c.name} for c in columns],
+    }
 
 
 @router.get("/tables/index-status", include_in_schema=False)
@@ -128,12 +161,18 @@ def list_index_status(dataset_id: Optional[List[int]] = Query(default=None)):
 
 @router.get(
     "/tables/{dataset_id}/slice",
-    include_in_schema=False,
+    summary="Browse raw rows from a dataset",
+    description="Returns rows in order by row index. Use this when the user wants to see or explore raw data, not for analytical questions like sums or rankings.",
 )
 def get_table_slice(
     dataset_id: int,
-    offset: int = 0,
-    limit: int = 30,
+    offset: int = Query(
+        default=0,
+        description="Number of rows to skip. Use 0 to start from the beginning.",
+    ),
+    limit: int = Query(
+        default=30, description="Number of rows to return. Default is 30."
+    ),
 ):
     with SessionLocal() as db:
         dataset = db.get(Dataset, dataset_id)
@@ -180,9 +219,7 @@ def get_table_slice(
 @router.delete("/tables/{dataset_id}", include_in_schema=False)
 def delete_table(dataset_id: int, background_tasks: BackgroundTasks):
     with SessionLocal() as db:
-        exists = db.execute(
-            select(Dataset.id).where(Dataset.id == dataset_id)
-        ).first()
+        exists = db.execute(select(Dataset.id).where(Dataset.id == dataset_id)).first()
         if not exists:
             raise HTTPException(status_code=404, detail="Table not found")
         # Use direct SQL deletes to avoid expensive ORM cascade object loading.
