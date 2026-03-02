@@ -12,8 +12,11 @@ router = APIRouter()
 
 # ── Request / Response models ──────────────────────────────────────
 
+
 class QueryRequest(BaseModel):
-    question: str = Field(description="Natural language question to search the dataset with")
+    question: str = Field(
+        description="Natural language question to search the dataset with"
+    )
     dataset_id: Optional[int] = Field(
         default=None,
         description=(
@@ -72,8 +75,15 @@ class QueryResponse(BaseModel):
     final_response: Optional[str] = Field(
         default=None,
         description=(
-            "Canonical user-facing answer with citation link. Agents should return this verbatim "
-            "without rewriting names, numbers, or URLs."
+            "Canonical user-facing answer. Agents should return this verbatim "
+            "without rewriting names, numbers."
+        ),
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical citation URL for this answer. Points to the highlighted cell "
+            "when available, otherwise the table view. Return this to users as the source link."
         ),
     )
     verification: Optional[Dict[str, Any]] = Field(
@@ -85,6 +95,7 @@ class QueryResponse(BaseModel):
     )
     resolved_dataset: Optional[Dict[str, Any]] = None
     resolution_note: Optional[str] = None
+
 
 class HighlightResponse(BaseModel):
     highlight_id: str
@@ -133,11 +144,12 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
 
 # ── Endpoints ──────────────────────────────────────────────────────
 
+
 @router.post(
     "/query",
     response_model=QueryResponse,
     summary="Answer natural-language table queries",
-    description="Primary analytics endpoint. Use this instead of row-slice tools for sums/counts/top-N and precise citations.",
+    description="Primary analytics endpoint. Use this instead of row-slice tools for sums/counts/top-N and precise citations. Always return URL from response",
 )
 def query_dataset(body: QueryRequest):
     if _enforce_list_tables_first() and body.dataset_id is None:
@@ -159,10 +171,12 @@ def query_dataset(body: QueryRequest):
         resolution_note = None
     else:
         try:
-            resolved_dataset_id, resolved_dataset, resolution_note = resolve_dataset_context(
-                dataset_id=body.dataset_id,
-                dataset_name=body.dataset_name,
-                question=body.question,
+            resolved_dataset_id, resolved_dataset, resolution_note = (
+                resolve_dataset_context(
+                    dataset_id=body.dataset_id,
+                    dataset_name=body.dataset_name,
+                    question=body.question,
+                )
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
@@ -178,12 +192,25 @@ def query_dataset(body: QueryRequest):
     payload["resolved_dataset"] = resolved_dataset
     if resolution_note:
         payload["resolution_note"] = resolution_note
+
+    payload["url"] = (
+        payload.get("answer_details", {}).get("highlight_url")
+        or payload.get("answer_details", {}).get("source_url")
+        or payload.get("dataset_url")
+    )
     return QueryResponse(**payload)
 
 
-@router.get("/highlights/{highlight_id}", response_model=HighlightResponse, include_in_schema=False)
+@router.get(
+    "/highlights/{highlight_id}",
+    response_model=HighlightResponse,
+    include_in_schema=False,
+)
 def highlight_endpoint(highlight_id: str):
     result = get_highlight(highlight_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Highlight not found.")
     return result
+
+
+

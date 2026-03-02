@@ -15,27 +15,170 @@ from app.qdrant_client import search_vectors
 
 # Common English stop words to exclude from keyword filters
 _STOP_WORDS: Set[str] = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "dare", "ought",
-    "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-    "as", "into", "through", "during", "before", "after", "above", "below",
-    "between", "out", "off", "over", "under", "again", "further", "then",
-    "once", "here", "there", "when", "where", "why", "how", "all", "each",
-    "every", "both", "few", "more", "most", "other", "some", "such", "no",
-    "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-    "just", "because", "but", "and", "or", "if", "while", "about",
-    "what", "which", "who", "whom", "this", "that", "these", "those",
-    "am", "it", "its", "i", "me", "my", "myself", "we", "our", "ours",
-    "you", "your", "yours", "he", "him", "his", "she", "her", "hers",
-    "they", "them", "their", "theirs", "tell", "show", "find", "get",
-    "give", "know", "think", "say", "make", "go", "see", "come", "take",
-    "want", "look", "use", "many", "much",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "shall",
+    "can",
+    "need",
+    "dare",
+    "ought",
+    "used",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "between",
+    "out",
+    "off",
+    "over",
+    "under",
+    "again",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "because",
+    "but",
+    "and",
+    "or",
+    "if",
+    "while",
+    "about",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "this",
+    "that",
+    "these",
+    "those",
+    "am",
+    "it",
+    "its",
+    "i",
+    "me",
+    "my",
+    "myself",
+    "we",
+    "our",
+    "ours",
+    "you",
+    "your",
+    "yours",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "hers",
+    "they",
+    "them",
+    "their",
+    "theirs",
+    "tell",
+    "show",
+    "find",
+    "get",
+    "give",
+    "know",
+    "think",
+    "say",
+    "make",
+    "go",
+    "see",
+    "come",
+    "take",
+    "want",
+    "look",
+    "use",
+    "many",
+    "much",
 }
 
-_SUPERLATIVE_MAX_TOKENS: Set[str] = {"most", "highest", "max", "maximum", "largest", "top"}
-_SUPERLATIVE_MIN_TOKENS: Set[str] = {"least", "lowest", "min", "minimum", "smallest", "fewest"}
-_AGGREGATE_HINT_TOKENS: Set[str] = {"total", "sum", "average", "avg", "mean", "amount", "number"}
+_SUPERLATIVE_MAX_TOKENS: Set[str] = {
+    "most",
+    "highest",
+    "max",
+    "maximum",
+    "largest",
+    "top",
+}
+_SUPERLATIVE_MIN_TOKENS: Set[str] = {
+    "least",
+    "lowest",
+    "min",
+    "minimum",
+    "smallest",
+    "fewest",
+}
+_AGGREGATE_HINT_TOKENS: Set[str] = {
+    "total",
+    "sum",
+    "average",
+    "avg",
+    "mean",
+    "amount",
+    "number",
+}
 _SUM_TOKENS: Set[str] = {"sum", "total"}
 _AVERAGE_TOKENS: Set[str] = {"average", "avg", "mean"}
 _COUNT_HINT_TOKENS: Set[str] = {"count", "many", "number"}
@@ -197,7 +340,11 @@ def _list_dataset_summaries() -> List[Dict[str, Any]]:
                 "source_filename": row[2],
                 "row_count": int(row[3] or 0),
                 "column_count": int(row[4] or 0),
-                "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+                "created_at": (
+                    created_at.isoformat()
+                    if hasattr(created_at, "isoformat")
+                    else str(created_at)
+                ),
                 "source_url": _table_ui_url(dataset_id),
             }
         )
@@ -267,8 +414,12 @@ def resolve_dataset_context(
     if not has_hint:
         for item in summaries:
             name_norm = _normalize_dataset_name(str(item.get("name") or ""))
-            file_norm = _normalize_dataset_name(str(item.get("source_filename") or "").rsplit(".", 1)[0])
-            if (name_norm and name_norm in question_norm) or (file_norm and file_norm in question_norm):
+            file_norm = _normalize_dataset_name(
+                str(item.get("source_filename") or "").rsplit(".", 1)[0]
+            )
+            if (name_norm and name_norm in question_norm) or (
+                file_norm and file_norm in question_norm
+            ):
                 has_hint = True
                 break
 
@@ -340,7 +491,9 @@ def _fallback_highlight(
             continue
         col_tokens = set(_tokenize(col))
         val_tokens = set(_tokenize(str(val)))
-        score = len(col_tokens & question_tokens) * 2 + len(val_tokens & question_tokens)
+        score = len(col_tokens & question_tokens) * 2 + len(
+            val_tokens & question_tokens
+        )
         if score > best_score:
             best_score = score
             best_col = col
@@ -738,14 +891,18 @@ def _sql_equivalent_query(
 
     if mode == "sum":
         return (
-            "SELECT SUM(" + metric_expr + ") AS metric_value "
+            "SELECT SUM("
+            + metric_expr
+            + ") AS metric_value "
             + "FROM dataset_rows WHERE "
             + where_sql
             + ";"
         )
     if mode == "avg":
         return (
-            "SELECT AVG(" + metric_expr + ") AS metric_value "
+            "SELECT AVG("
+            + metric_expr
+            + ") AS metric_value "
             + "FROM dataset_rows WHERE "
             + where_sql
             + ";"
@@ -788,7 +945,9 @@ def _detect_analytic_mode(
         # Questions like "how many boxes shipped" usually expect SUM(metric), not row count.
         if metric_column:
             metric_tokens = set(_tokenize(metric_column))
-            asked_metric = bool(metric_tokens & tokens) or bool(tokens & _METRIC_KEYWORD_TOKENS)
+            asked_metric = bool(metric_tokens & tokens) or bool(
+                tokens & _METRIC_KEYWORD_TOKENS
+            )
             if asked_metric:
                 return "sum", None, None
         return "count", None, None
@@ -892,21 +1051,33 @@ def _detect_numeric_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
                 numeric_counts[col] += 1
 
     min_hits = max(2, int(len(sampled) * 0.40))
-    return {
-        col for col, count in numeric_counts.items()
-        if count >= min_hits
-    }
+    return {col for col, count in numeric_counts.items() if count >= min_hits}
 
 
 def _question_roles(question: str) -> Set[str]:
     tokens = set(_tokenize(question))
     roles: Set[str] = set()
 
-    if "who" in tokens or tokens & {"seller", "sold", "sale", "salesperson", "sales", "person", "name"}:
+    if "who" in tokens or tokens & {
+        "seller",
+        "sold",
+        "sale",
+        "salesperson",
+        "sales",
+        "person",
+        "name",
+    }:
         roles.add("person")
     if tokens & {"product", "item", "sku", "brand", "flavor"}:
         roles.add("product")
-    if "where" in tokens or tokens & {"country", "region", "market", "city", "state", "location"}:
+    if "where" in tokens or tokens & {
+        "country",
+        "region",
+        "market",
+        "city",
+        "state",
+        "location",
+    }:
         roles.add("location")
     if "when" in tokens or tokens & {"date", "day", "month", "year", "time"}:
         roles.add("date")
@@ -932,12 +1103,16 @@ def _looks_like_single_row_rank_query(question: str) -> bool:
     lowered = question.lower()
     if _SINGLE_ROW_HINT_RE.search(lowered):
         return True
-    if re.search(r"\bin\s+one\s+(deal|transaction|row|entry|order|sale|shipment)\b", lowered):
+    if re.search(
+        r"\bin\s+one\s+(deal|transaction|row|entry|order|sale|shipment)\b", lowered
+    ):
         return True
 
     # "in a day" is commonly intended as a single daily record, not grouped totals.
     if _SINGLE_DAY_HINT_RE.search(lowered):
-        if not _DAY_GROUPING_HINT_RE.search(lowered) and not _EXPLICIT_AGGREGATE_HINT_RE.search(lowered):
+        if not _DAY_GROUPING_HINT_RE.search(
+            lowered
+        ) and not _EXPLICIT_AGGREGATE_HINT_RE.search(lowered):
             return True
     return False
 
@@ -959,7 +1134,9 @@ def _extract_group_hint(question: str) -> Optional[str]:
     return None
 
 
-def _column_overlap_score(column: str, token_set: Set[str], normalized_phrase: str) -> float:
+def _column_overlap_score(
+    column: str, token_set: Set[str], normalized_phrase: str
+) -> float:
     col_tokens = set(_tokenize(column))
     if not col_tokens:
         return 0.0
@@ -1016,8 +1193,7 @@ def _pick_group_column(
     question: str,
 ) -> Optional[str]:
     candidate_columns = [
-        col for col in columns
-        if col not in numeric_columns and col != metric_column
+        col for col in columns if col not in numeric_columns and col != metric_column
     ]
     if not candidate_columns:
         return None
@@ -1057,8 +1233,7 @@ def _pick_row_answer_column(
     question: str,
 ) -> Optional[str]:
     candidate_columns = [
-        col for col in columns
-        if col not in numeric_columns and col != metric_column
+        col for col in columns if col not in numeric_columns and col != metric_column
     ]
     if not candidate_columns:
         return None
@@ -1097,7 +1272,11 @@ def _infer_aggregate_answer(
         return None
 
     numeric_columns = _detect_numeric_columns(rows)
-    metric_column = _pick_metric_column(columns, numeric_columns, question) if numeric_columns else None
+    metric_column = (
+        _pick_metric_column(columns, numeric_columns, question)
+        if numeric_columns
+        else None
+    )
 
     mode, operator, rank_aggregation = _detect_analytic_mode(question, metric_column)
     if not mode:
@@ -1132,7 +1311,9 @@ def _infer_aggregate_answer(
         return None
 
     top_n = _extract_top_n(question)
-    group_column = _pick_group_column(columns, numeric_columns, metric_for_mode, question)
+    group_column = _pick_group_column(
+        columns, numeric_columns, metric_for_mode, question
+    )
     has_group_phrase = bool(
         re.search(r"\b(by|per|each|group by)\b", question.lower())
         or _extract_group_hint(question)
@@ -1152,7 +1333,11 @@ def _infer_aggregate_answer(
     if use_grouping and group_column:
         grouped: Dict[str, Dict[str, Any]] = {}
         for row_index, row_data in filtered_rows:
-            metric_value = _parse_number(row_data.get(metric_for_mode)) if metric_for_mode else None
+            metric_value = (
+                _parse_number(row_data.get(metric_for_mode))
+                if metric_for_mode
+                else None
+            )
             if mode in {"sum", "avg", "rank"} and metric_value is None:
                 continue
 
@@ -1219,9 +1404,9 @@ def _infer_aggregate_answer(
 
         if top_n > 1:
             metric_label = (
-                "average" if mode == "avg" or (mode == "rank" and rank_aggregation == "avg")
-                else "count" if mode == "count"
-                else "total"
+                "average"
+                if mode == "avg" or (mode == "rank" and rank_aggregation == "avg")
+                else "count" if mode == "count" else "total"
             )
             metric_name = "rows" if mode == "count" else metric_for_mode
             preview = "; ".join(
@@ -1321,7 +1506,9 @@ def _infer_aggregate_answer(
             source_row_index = filtered_rows[0][0]
             source_row_data = filtered_rows[0][1]
         metric_label = "total" if mode == "sum" else "average"
-        answer = f"The {metric_label} {metric_for_mode} is {_format_number(metric_value)}."
+        answer = (
+            f"The {metric_label} {metric_for_mode} is {_format_number(metric_value)}."
+        )
     else:
         best_metric: Optional[float] = None
         for row_index, row_data in filtered_rows:
@@ -1333,7 +1520,9 @@ def _infer_aggregate_answer(
                 source_row_index = row_index
                 source_row_data = row_data
                 continue
-            is_better = parsed < best_metric if operator == "min" else parsed > best_metric
+            is_better = (
+                parsed < best_metric if operator == "min" else parsed > best_metric
+            )
             if is_better:
                 best_metric = parsed
                 source_row_index = row_index
@@ -1418,14 +1607,9 @@ def _infer_aggregate_answer(
 
 def _build_final_response(payload: Dict[str, Any]) -> str:
     answer = str(payload.get("answer") or "").strip()
-    details = payload.get("answer_details") or {}
-    ui_link = details.get("highlight_url") or details.get("source_url")
 
     if answer:
-        lines = [answer]
-        if ui_link:
-            lines.append(f"Link: {ui_link}")
-        return "\n".join(lines)
+        return answer  # ← just the answer, no Link:
 
     results = payload.get("results") or []
     if not results:
@@ -1436,15 +1620,38 @@ def _build_final_response(payload: Dict[str, Any]) -> str:
     highlights = top.get("highlights") or []
     if highlights:
         h = highlights[0]
-        lead = f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
+        return f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
     else:
-        lead = f"Best matching row is {row_index}."
+        return f"Best matching row is {row_index}."
 
-    lines = [lead]
-    ui_link = top.get("highlight_url") or top.get("source_url")
-    if ui_link:
-        lines.append(f"Link: {ui_link}")
-    return "\n".join(lines)
+    # answer = str(payload.get("answer") or "").strip()
+    # details = payload.get("answer_details") or {}
+    # ui_link = details.get("highlight_url") or details.get("source_url")
+
+    # if answer:
+    #     lines = [answer]
+    #     if ui_link:
+    #         lines.append(f"Link: {ui_link}")
+    #     return "\n".join(lines)
+
+    # results = payload.get("results") or []
+    # if not results:
+    #     return "No matching rows found."
+
+    # top = results[0]
+    # row_index = top.get("row_index")
+    # highlights = top.get("highlights") or []
+    # if highlights:
+    #     h = highlights[0]
+    #     lead = f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
+    # else:
+    #     lead = f"Best matching row is {row_index}."
+
+    # lines = [lead]
+    # ui_link = top.get("highlight_url") or top.get("source_url")
+    # if ui_link:
+    #     lines.append(f"Link: {ui_link}")
+    # return "\n".join(lines)
 
 
 def _extract_highlight_id_from_url(value: Any) -> Optional[str]:
@@ -1490,7 +1697,10 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_row_data = details.get("source_row_data") or {}
     if answer_column and answer_value is not None and isinstance(source_row_data, dict):
         source_value = source_row_data.get(answer_column)
-        is_match = source_value is not None and str(source_value).strip() == str(answer_value).strip()
+        is_match = (
+            source_value is not None
+            and str(source_value).strip() == str(answer_value).strip()
+        )
         checks.append(
             {
                 "name": "answer_value_matches_source_row",
@@ -1499,7 +1709,9 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
         if not is_match:
-            errors.append("answer_value does not match source_row_data for answer_column.")
+            errors.append(
+                "answer_value does not match source_row_data for answer_column."
+            )
 
     op = str(details.get("operation") or "").lower()
     group_column = details.get("group_by_column")
@@ -1513,7 +1725,10 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         and metric_value is not None
     ):
         source_metric = _parse_number(source_row_data.get(metric_column))
-        metric_ok = source_metric is not None and abs(float(source_metric) - float(metric_value)) < 1e-9
+        metric_ok = (
+            source_metric is not None
+            and abs(float(source_metric) - float(metric_value)) < 1e-9
+        )
         checks.append(
             {
                 "name": "rank_metric_matches_source_row",
@@ -1526,7 +1741,9 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     highlight_id = details.get("top_highlight_id")
     if not highlight_id:
-        highlight_id = _extract_highlight_id_from_url(details.get("highlight_url") or details.get("source_url"))
+        highlight_id = _extract_highlight_id_from_url(
+            details.get("highlight_url") or details.get("source_url")
+        )
     if not highlight_id:
         results = payload.get("results") or []
         if results and isinstance(results[0], dict):
@@ -1578,8 +1795,13 @@ def smart_query(
         if _verification_enabled():
             verification = _verify_response(response)
             response["verification"] = verification
-            if verification["status"] != "pass" and _fail_closed_on_verification_error():
-                response["final_response"] = "I could not verify this answer against source rows."
+            if (
+                verification["status"] != "pass"
+                and _fail_closed_on_verification_error()
+            ):
+                response["final_response"] = (
+                    "I could not verify this answer against source rows."
+                )
         return response
 
     source_result = aggregate_answer.get("source_result")
@@ -1626,18 +1848,17 @@ def generate_highlights(
         overlap = question_tokens & val_tokens
         if overlap:
             # Weight keyword matches 2x, stop-word matches 0.5x
-            score = sum(
-                2.0 if tok in keywords else 0.5
-                for tok in overlap
-            )
+            score = sum(2.0 if tok in keywords else 0.5 for tok in overlap)
             max_possible = max(len(question_tokens), 1)
             highlight_id = f"d{dataset_id}_r{row_index}_{col}"
-            highlights.append({
-                "highlight_id": highlight_id,
-                "column": col,
-                "value": str(val),
-                "relevance": score / max_possible,
-            })
+            highlights.append(
+                {
+                    "highlight_id": highlight_id,
+                    "column": col,
+                    "value": str(val),
+                    "relevance": score / max_possible,
+                }
+            )
 
     highlights.sort(key=lambda h: h["relevance"], reverse=True)
     return highlights

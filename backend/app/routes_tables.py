@@ -91,6 +91,63 @@ def list_columns_for_dataset(dataset_id: int):
     }
 
 
+@router.get(
+    "/tables/{dataset_id}/slice",
+    summary="Browse raw rows from a dataset",
+    description="Returns rows in order by row index. Use this when the user wants to see or explore raw data, not for analytical questions like sums or rankings.",
+)
+def get_table_slice(
+    dataset_id: int,
+    offset: int = Query(
+        default=0,
+        description="Number of rows to skip. Use 0 to start from the beginning.",
+    ),
+    limit: int = Query(
+        default=30, description="Number of rows to return. Default is 30."
+    ),
+):
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        rows = (
+            db.execute(
+                select(DatasetRow)
+                .where(DatasetRow.dataset_id == dataset_id)
+                .order_by(DatasetRow.row_index)
+                .offset(offset)
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+
+        columns = (
+            db.execute(
+                select(DatasetColumn.name)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+
+        return {
+            "dataset_id": dataset_id,
+            "offset": offset,
+            "limit": limit,
+            "row_count": dataset.row_count,
+            "column_count": dataset.column_count,
+            "has_header": dataset.has_header,
+            "rows": [
+                {"row_index": r.row_index, "data": _normalize_row_data(r.row_data)}
+                for r in rows
+            ],
+            "columns": columns,
+        }
+
+
 @router.get("/tables/index-status", include_in_schema=False)
 def list_index_status(dataset_id: Optional[List[int]] = Query(default=None)):
     with SessionLocal() as db:
@@ -157,63 +214,6 @@ def list_index_status(dataset_id: Optional[List[int]] = Query(default=None)):
         )
 
     return response
-
-
-@router.get(
-    "/tables/{dataset_id}/slice",
-    summary="Browse raw rows from a dataset",
-    description="Returns rows in order by row index. Use this when the user wants to see or explore raw data, not for analytical questions like sums or rankings.",
-)
-def get_table_slice(
-    dataset_id: int,
-    offset: int = Query(
-        default=0,
-        description="Number of rows to skip. Use 0 to start from the beginning.",
-    ),
-    limit: int = Query(
-        default=30, description="Number of rows to return. Default is 30."
-    ),
-):
-    with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
-
-        rows = (
-            db.execute(
-                select(DatasetRow)
-                .where(DatasetRow.dataset_id == dataset_id)
-                .order_by(DatasetRow.row_index)
-                .offset(offset)
-                .limit(limit)
-            )
-            .scalars()
-            .all()
-        )
-
-        columns = (
-            db.execute(
-                select(DatasetColumn.name)
-                .where(DatasetColumn.dataset_id == dataset_id)
-                .order_by(DatasetColumn.column_index)
-            )
-            .scalars()
-            .all()
-        )
-
-        return {
-            "dataset_id": dataset_id,
-            "offset": offset,
-            "limit": limit,
-            "row_count": dataset.row_count,
-            "column_count": dataset.column_count,
-            "has_header": dataset.has_header,
-            "rows": [
-                {"row_index": r.row_index, "data": _normalize_row_data(r.row_data)}
-                for r in rows
-            ],
-            "columns": columns,
-        }
 
 
 @router.delete("/tables/{dataset_id}", include_in_schema=False)
