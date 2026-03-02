@@ -21,7 +21,8 @@ from app.index_jobs import (
 from app.indexing import index_dataset
 from app.index_worker import IndexWorker
 from app.models import Base, Dataset, DatasetColumn, DatasetRow
-from app.mcp_server import mcp
+# from app.mcp_server import mcp
+from fastapi_mcp import FastApiMCP
 from app.qdrant_client import get_collection_point_count
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
@@ -34,27 +35,13 @@ INDEX_WORKER_CONCURRENCY = max(1, int(os.getenv("INDEX_WORKER_CONCURRENCY", "4")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _index_worker
     Base.metadata.create_all(bind=engine)
     try:
         from app.embeddings import get_model
         get_model()
     except Exception:
         pass
-
-    _index_worker = IndexWorker(
-        _index_dataset_safe,
-        worker_count=INDEX_WORKER_CONCURRENCY,
-    )
-    _index_worker.start()
-    _resume_incomplete_index_jobs()
-
-    async with mcp.session_manager.run():
-        try:
-            yield
-        finally:
-            if _index_worker is not None:
-                _index_worker.stop()
+    yield
 
 
 app = FastAPI(title="TabulaRAG API", lifespan=lifespan)
@@ -70,7 +57,6 @@ app.add_middleware(
 
 app.include_router(tables_router)
 app.include_router(query_router)
-app.mount("/mcp", mcp.streamable_http_app())
 
 
 @app.get("/health")
@@ -103,11 +89,6 @@ def health_deps():
         "postgres": "ok" if postgres_ok else "down",
         "qdrant": "ok" if qdrant_ok else "down",
     }
-
-
-@app.get("/mcp-status")
-def mcp_status():
-    return {"status": "ok", "endpoint": "/mcp"}
 
 
 # checks if file is a csv or tsv based on file extension, raises HTTPException if not
@@ -406,3 +387,10 @@ def ingest_table(
         "delimiter": dataset_delimiter,
         "has_header": dataset_has_header,
     }
+
+
+mcp = FastApiMCP(
+    app,
+    name="TabulaRAG",
+)
+mcp.mount_http()
