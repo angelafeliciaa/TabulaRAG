@@ -1054,7 +1054,7 @@ ul {
 }
 
 .full-table-scroll-indicator {
-  bottom: 20px;
+  bottom: 8px;
 }
 
 .file-input-hidden {
@@ -1366,8 +1366,8 @@ ul {
 }
 
 :root[data-theme="dark"] .index-job {
-  background: #141a25;
-  border-color: #3a465d;
+  background: #1f2a3b;
+  border-color: #51617d;
 }
 
 :root[data-theme="dark"] .index-job-ready {
@@ -1563,6 +1563,90 @@ ul {
     min-width: 240px;
 }
 
+.table-view-pagination {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.table-view-pagination-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.table-view-pagination-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+}
+
+.table-view-page-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    color: var(--text);
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: none;
+}
+
+.table-view-page-btn:hover,
+.table-view-page-btn:focus,
+.table-view-page-btn:focus-visible {
+    transform: none;
+    box-shadow: none;
+    background: var(--bg-elev);
+}
+
+.table-view-page-btn:disabled {
+    opacity: 0.45;
+    transform: none;
+    box-shadow: none;
+}
+
+.table-view-page-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 130px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.table-view-page-input {
+    height: 28px;
+    min-width: 42px;
+    padding: 0 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    box-shadow: none;
+}
+
+.table-view-page-input:focus,
+.table-view-page-input:focus-visible {
+    outline: none;
+    border-color: var(--border-soft);
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
 .table-view-title {
     font-size: 24px;
     font-weight: 700;
@@ -1750,5 +1834,14 @@ tr:hover td {
 
   .tables-search-input {
     width: 100%;
+  }
+
+  .table-view-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .table-view-pagination-controls {
+    margin-left: 0;
   }
 }

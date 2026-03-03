@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  getFullTableSlice,
+  getSlice,
   listTables,
   type TableSlice,
   type TableSummary,
@@ -10,6 +10,7 @@ import DataTable from "../components/DataTable";
 import returnIcon from "../images/return.png";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
+const ROWS_PER_PAGE = 500;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -107,6 +108,8 @@ export default function TableView() {
   const [searchQuery, setSearchQuery] = useState("");
   const [dateViewMode, setDateViewMode] = useState<DateViewMode>("default");
   const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
@@ -118,25 +121,69 @@ export default function TableView() {
 
     setErr(null);
     setData(null);
-    setLoading(true);
+    setTableName(null);
+    setTableRowCount(0);
+    setDateMenu(null);
 
     let mounted = true;
     listTables()
-      .then(async (tables: TableSummary[]) => {
+      .then((tables: TableSummary[]) => {
         if (!mounted) {
           return;
         }
         const table = tables.find((row) => row.dataset_id === numericDatasetId);
-        const rowCount = table?.row_count ?? 0;
         setTableName(table?.name || null);
-        setTableRowCount(rowCount);
-        const fullSlice = await getFullTableSlice(numericDatasetId, rowCount);
+        if (typeof table?.row_count === "number") {
+          setTableRowCount(Math.max(0, table.row_count));
+        }
+      })
+      .catch(() => {
+        // Keep table view usable even if metadata lookup fails.
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [numericDatasetId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+    setPageInput("1");
+    setSearchQuery("");
+  }, [numericDatasetId]);
+
+  useEffect(() => {
+    if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
+      return;
+    }
+
+    let mounted = true;
+    setErr(null);
+    setLoading(true);
+
+    const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
+    const pageEndExclusive = pageOffset + ROWS_PER_PAGE;
+
+    getSlice(numericDatasetId, pageOffset, pageEndExclusive)
+      .then((slice) => {
         if (!mounted) {
           return;
         }
-        setData(fullSlice);
+        setData(slice);
+        setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
+
+        const fetchedTotalPages = Math.max(1, Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE));
+        if (currentPage > fetchedTotalPages) {
+          setCurrentPage(fetchedTotalPages);
+        }
       })
-      .catch((error: unknown) => setErr(getErrorMessage(error)))
+      .catch((error: unknown) => {
+        if (!mounted) {
+          return;
+        }
+        setErr(getErrorMessage(error));
+        setData(null);
+      })
       .finally(() => {
         if (mounted) {
           setLoading(false);
@@ -146,9 +193,13 @@ export default function TableView() {
     return () => {
       mounted = false;
     };
-  }, [numericDatasetId]);
+  }, [numericDatasetId, currentPage]);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
+  const effectiveRowCount = Math.max(tableRowCount, Math.max(0, data?.row_count || 0));
+  const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
     [data],
@@ -160,7 +211,7 @@ export default function TableView() {
     if (!normalizedSearch) {
       return {
         rows: data.rows,
-        rowIndices: data.rows.map((_, index) => index),
+        rowIndices: data.rows.map((_, index) => data.offset + index),
       };
     }
 
@@ -173,7 +224,7 @@ export default function TableView() {
       );
       if (matches) {
         nextRows.push(row);
-        nextRowIndices.push(i);
+        nextRowIndices.push(data.offset + i);
       }
     }
     return { rows: nextRows, rowIndices: nextRowIndices };
@@ -256,7 +307,20 @@ export default function TableView() {
       element.removeEventListener("scroll", updateHint);
       window.removeEventListener("resize", updateHint);
     };
-  }, [displayRows.length, data?.columns.length, loading, err, dateViewMode]);
+  }, [displayRows.length, data?.columns.length, data?.offset, loading, err, dateViewMode]);
+
+  useEffect(() => {
+    const container = tableAreaRef.current;
+    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
+    if (!element) {
+      return;
+    }
+    element.scrollTo({ top: 0, behavior: "auto" });
+  }, [currentPage]);
+
+  useEffect(() => {
+    setPageInput(String(safeCurrentPage));
+  }, [safeCurrentPage]);
 
   function scrollTableToEdge() {
     const container = tableAreaRef.current;
@@ -269,6 +333,23 @@ export default function TableView() {
       return;
     }
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }
+
+  function commitPageInput() {
+    const trimmed = pageInput.trim();
+    if (!trimmed) {
+      setPageInput(String(safeCurrentPage));
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      setPageInput(String(safeCurrentPage));
+      return;
+    }
+    const normalized = Math.trunc(parsed);
+    const nextPage = Math.min(totalPages, Math.max(1, normalized));
+    setCurrentPage(nextPage);
+    setPageInput(String(nextPage));
   }
 
   if (!datasetId) {
@@ -291,8 +372,10 @@ export default function TableView() {
             <div className="table-view-title">{tableName || "Table"}</div>
             <div className="small">
               {loading
-                ? "Loading full table..."
-                : `Showing ${filtered.rows.length.toLocaleString()} of ${tableRowCount.toLocaleString()} rows.`}
+                ? "Loading table page..."
+                : data && data.rows.length > 0
+                  ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
+                  : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
             </div>
           </div>
           <div className="table-view-tools">
@@ -301,7 +384,7 @@ export default function TableView() {
               className="table-view-search"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search all columns"
+              placeholder="Search this page"
               aria-label="Search rows"
             />
             <Link className="table-view-back-link" to="/">
@@ -339,6 +422,80 @@ export default function TableView() {
               {tableAtBottom ? "▲" : "▼"}
             </button>
           )}
+        </div>
+      )}
+      {data && effectiveRowCount > 0 && (
+        <div className="table-view-pagination" aria-label="Full table pagination">
+          <div className="table-view-pagination-controls">
+            <button
+              type="button"
+              className="table-view-page-btn"
+              onClick={() => setCurrentPage(1)}
+              disabled={loading || safeCurrentPage <= 1}
+              aria-label="First page"
+              title="First page"
+            >
+              {"<<"}
+            </button>
+            <button
+              type="button"
+              className="table-view-page-btn"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={loading || safeCurrentPage <= 1}
+              aria-label="Previous page"
+              title="Previous page"
+            >
+              {"<"}
+            </button>
+            <span className="table-view-page-count">
+              Page{" "}
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                className="table-view-page-input"
+                style={{ width: `${pageInputWidthCh}ch` }}
+                value={pageInput}
+                onChange={(event) => {
+                  const digitsOnly = event.target.value.replace(/[^\d]/g, "");
+                  setPageInput(digitsOnly);
+                }}
+                onBlur={commitPageInput}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitPageInput();
+                  } else if (event.key === "Escape") {
+                    setPageInput(String(safeCurrentPage));
+                  }
+                }}
+                disabled={loading}
+                aria-label="Current page number"
+                title="Enter page number"
+              />{" "}
+              of {totalPages}
+            </span>
+            <button
+              type="button"
+              className="table-view-page-btn"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={loading || safeCurrentPage >= totalPages}
+              aria-label="Next page"
+              title="Next page"
+            >
+              {">"}
+            </button>
+            <button
+              type="button"
+              className="table-view-page-btn"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={loading || safeCurrentPage >= totalPages}
+              aria-label="Last page"
+              title="Last page"
+            >
+              {">>"}
+            </button>
+          </div>
+          <span className="table-view-pagination-meta">{ROWS_PER_PAGE.toLocaleString()} rows per page</span>
         </div>
       )}
       {dateMenu && (
