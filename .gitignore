@@ -51,6 +51,7 @@ htmlcov/
 *.sqlite
 *.sqlite3
 tabularag.db
+*.webui_secret_key
 
 # Logs
 *.log
