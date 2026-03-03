@@ -11,6 +11,12 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.embeddings import embed_texts
 from app.qdrant_client import search_vectors
+from app.typed_values import (
+    get_numeric_value,
+    is_internal_key,
+    parse_number as _typed_parse_number,
+    strip_internal_fields,
+)
 
 
 # Common English stop words to exclude from keyword filters
@@ -154,31 +160,9 @@ _STOP_WORDS: Set[str] = {
     "much",
 }
 
-_SUPERLATIVE_MAX_TOKENS: Set[str] = {
-    "most",
-    "highest",
-    "max",
-    "maximum",
-    "largest",
-    "top",
-}
-_SUPERLATIVE_MIN_TOKENS: Set[str] = {
-    "least",
-    "lowest",
-    "min",
-    "minimum",
-    "smallest",
-    "fewest",
-}
-_AGGREGATE_HINT_TOKENS: Set[str] = {
-    "total",
-    "sum",
-    "average",
-    "avg",
-    "mean",
-    "amount",
-    "number",
-}
+_SUPERLATIVE_MAX_TOKENS: Set[str] = {"most", "highest", "max", "maximum", "largest", "top"}
+_SUPERLATIVE_MIN_TOKENS: Set[str] = {"least", "lowest", "min", "minimum", "smallest", "fewest"}
+_AGGREGATE_HINT_TOKENS: Set[str] = {"total", "sum", "average", "avg", "mean", "amount", "number"}
 _SUM_TOKENS: Set[str] = {"sum", "total"}
 _AVERAGE_TOKENS: Set[str] = {"average", "avg", "mean"}
 _COUNT_HINT_TOKENS: Set[str] = {"count", "many", "number"}
@@ -491,9 +475,7 @@ def _fallback_highlight(
             continue
         col_tokens = set(_tokenize(col))
         val_tokens = set(_tokenize(str(val)))
-        score = len(col_tokens & question_tokens) * 2 + len(
-            val_tokens & question_tokens
-        )
+        score = len(col_tokens & question_tokens) * 2 + len(val_tokens & question_tokens)
         if score > best_score:
             best_score = score
             best_col = col
@@ -518,9 +500,10 @@ def _build_result_item(
     question: str,
     match_type: str,
 ) -> Dict[str, Any]:
-    highlights = generate_highlights(dataset_id, row_index, row_data, question)
+    public_row_data = strip_internal_fields(row_data)
+    highlights = generate_highlights(dataset_id, row_index, public_row_data, question)
     if not highlights:
-        fallback = _fallback_highlight(dataset_id, row_index, row_data, question)
+        fallback = _fallback_highlight(dataset_id, row_index, public_row_data, question)
         if fallback is not None:
             highlights = [fallback]
     top_highlight_id = highlights[0]["highlight_id"] if highlights else None
@@ -533,7 +516,7 @@ def _build_result_item(
     result: Dict[str, Any] = {
         "row_index": row_index,
         "score": score,
-        "row_data": row_data,
+        "row_data": public_row_data,
         "highlights": highlights,
         "match_type": match_type,
         "source_url": highlight_ui_url,
@@ -945,9 +928,7 @@ def _detect_analytic_mode(
         # Questions like "how many boxes shipped" usually expect SUM(metric), not row count.
         if metric_column:
             metric_tokens = set(_tokenize(metric_column))
-            asked_metric = bool(metric_tokens & tokens) or bool(
-                tokens & _METRIC_KEYWORD_TOKENS
-            )
+            asked_metric = bool(metric_tokens & tokens) or bool(tokens & _METRIC_KEYWORD_TOKENS)
             if asked_metric:
                 return "sum", None, None
         return "count", None, None
@@ -955,50 +936,52 @@ def _detect_analytic_mode(
 
 
 def _parse_number(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
+    return _typed_parse_number(value)
+# Commented out on merge conflict just in case it's actually needed
+#     if value is None:
+#         return None
+#     if isinstance(value, bool):
+#         return None
+#     if isinstance(value, (int, float)):
+#         return float(value)
 
-    raw = str(value).strip()
-    if not raw:
-        return None
+#     raw = str(value).strip()
+#     if not raw:
+#         return None
 
-    lowered = raw.lower()
-    if lowered in {"na", "n/a", "nan", "none", "null"}:
-        return None
+#     lowered = raw.lower()
+#     if lowered in {"na", "n/a", "nan", "none", "null"}:
+#         return None
 
-    is_negative_parentheses = raw.startswith("(") and raw.endswith(")")
-    if is_negative_parentheses:
-        raw = raw[1:-1].strip()
+#     is_negative_parentheses = raw.startswith("(") and raw.endswith(")")
+#     if is_negative_parentheses:
+#         raw = raw[1:-1].strip()
 
-    raw = raw.replace(",", "").replace(" ", "")
-    raw = _NUMBER_CLEAN_RE.sub("", raw)
+#     raw = raw.replace(",", "").replace(" ", "")
+#     raw = _NUMBER_CLEAN_RE.sub("", raw)
 
-    multiplier = 1.0
-    if raw and raw[-1].lower() in {"k", "m", "b"}:
-        suffix = raw[-1].lower()
-        raw = raw[:-1]
-        if suffix == "k":
-            multiplier = 1_000.0
-        elif suffix == "m":
-            multiplier = 1_000_000.0
-        else:
-            multiplier = 1_000_000_000.0
+#     multiplier = 1.0
+#     if raw and raw[-1].lower() in {"k", "m", "b"}:
+#         suffix = raw[-1].lower()
+#         raw = raw[:-1]
+#         if suffix == "k":
+#             multiplier = 1_000.0
+#         elif suffix == "m":
+#             multiplier = 1_000_000.0
+#         else:
+#             multiplier = 1_000_000_000.0
 
-    if raw.endswith("%"):
-        raw = raw[:-1]
+#     if raw.endswith("%"):
+#         raw = raw[:-1]
 
-    try:
-        parsed = float(raw) * multiplier
-    except ValueError:
-        return None
+#     try:
+#         parsed = float(raw) * multiplier
+#     except ValueError:
+#         return None
 
-    if is_negative_parentheses:
-        parsed *= -1.0
-    return parsed
+#     if is_negative_parentheses:
+#         parsed *= -1.0
+#     return parsed
 
 
 def _format_number(value: float) -> str:
@@ -1033,6 +1016,8 @@ def _collect_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> List[str]:
     seen: Set[str] = set()
     for _, row_data in rows[:300]:
         for column in row_data.keys():
+            if is_internal_key(str(column)):
+                continue
             if column not in seen:
                 seen.add(column)
                 ordered.append(column)
@@ -1046,38 +1031,28 @@ def _detect_numeric_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
 
     numeric_counts: Dict[str, int] = defaultdict(int)
     for _, row_data in sampled:
-        for col, val in row_data.items():
-            if _parse_number(val) is not None:
+        for col in row_data.keys():
+            if is_internal_key(str(col)):
+                continue
+            if get_numeric_value(row_data, col) is not None:
                 numeric_counts[col] += 1
 
     min_hits = max(2, int(len(sampled) * 0.40))
-    return {col for col, count in numeric_counts.items() if count >= min_hits}
+    return {
+        col for col, count in numeric_counts.items()
+        if count >= min_hits
+    }
 
 
 def _question_roles(question: str) -> Set[str]:
     tokens = set(_tokenize(question))
     roles: Set[str] = set()
 
-    if "who" in tokens or tokens & {
-        "seller",
-        "sold",
-        "sale",
-        "salesperson",
-        "sales",
-        "person",
-        "name",
-    }:
+    if "who" in tokens or tokens & {"seller", "sold", "sale", "salesperson", "sales", "person", "name"}:
         roles.add("person")
     if tokens & {"product", "item", "sku", "brand", "flavor"}:
         roles.add("product")
-    if "where" in tokens or tokens & {
-        "country",
-        "region",
-        "market",
-        "city",
-        "state",
-        "location",
-    }:
+    if "where" in tokens or tokens & {"country", "region", "market", "city", "state", "location"}:
         roles.add("location")
     if "when" in tokens or tokens & {"date", "day", "month", "year", "time"}:
         roles.add("date")
@@ -1103,16 +1078,12 @@ def _looks_like_single_row_rank_query(question: str) -> bool:
     lowered = question.lower()
     if _SINGLE_ROW_HINT_RE.search(lowered):
         return True
-    if re.search(
-        r"\bin\s+one\s+(deal|transaction|row|entry|order|sale|shipment)\b", lowered
-    ):
+    if re.search(r"\bin\s+one\s+(deal|transaction|row|entry|order|sale|shipment)\b", lowered):
         return True
 
     # "in a day" is commonly intended as a single daily record, not grouped totals.
     if _SINGLE_DAY_HINT_RE.search(lowered):
-        if not _DAY_GROUPING_HINT_RE.search(
-            lowered
-        ) and not _EXPLICIT_AGGREGATE_HINT_RE.search(lowered):
+        if not _DAY_GROUPING_HINT_RE.search(lowered) and not _EXPLICIT_AGGREGATE_HINT_RE.search(lowered):
             return True
     return False
 
@@ -1134,9 +1105,7 @@ def _extract_group_hint(question: str) -> Optional[str]:
     return None
 
 
-def _column_overlap_score(
-    column: str, token_set: Set[str], normalized_phrase: str
-) -> float:
+def _column_overlap_score(column: str, token_set: Set[str], normalized_phrase: str) -> float:
     col_tokens = set(_tokenize(column))
     if not col_tokens:
         return 0.0
@@ -1334,9 +1303,7 @@ def _infer_aggregate_answer(
         grouped: Dict[str, Dict[str, Any]] = {}
         for row_index, row_data in filtered_rows:
             metric_value = (
-                _parse_number(row_data.get(metric_for_mode))
-                if metric_for_mode
-                else None
+                get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
             )
             if mode in {"sum", "avg", "rank"} and metric_value is None:
                 continue
@@ -1404,9 +1371,9 @@ def _infer_aggregate_answer(
 
         if top_n > 1:
             metric_label = (
-                "average"
-                if mode == "avg" or (mode == "rank" and rank_aggregation == "avg")
-                else "count" if mode == "count" else "total"
+                "average" if mode == "avg" or (mode == "rank" and rank_aggregation == "avg")
+                else "count" if mode == "count"
+                else "total"
             )
             metric_name = "rows" if mode == "count" else metric_for_mode
             preview = "; ".join(
@@ -1491,7 +1458,7 @@ def _infer_aggregate_answer(
         values: List[float] = []
         best_metric: Optional[float] = None
         for row_index, row_data in filtered_rows:
-            parsed = _parse_number(row_data.get(metric_for_mode))
+            parsed = get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
             if parsed is None:
                 continue
             values.append(parsed)
@@ -1506,13 +1473,11 @@ def _infer_aggregate_answer(
             source_row_index = filtered_rows[0][0]
             source_row_data = filtered_rows[0][1]
         metric_label = "total" if mode == "sum" else "average"
-        answer = (
-            f"The {metric_label} {metric_for_mode} is {_format_number(metric_value)}."
-        )
+        answer = f"The {metric_label} {metric_for_mode} is {_format_number(metric_value)}."
     else:
         best_metric: Optional[float] = None
         for row_index, row_data in filtered_rows:
-            parsed = _parse_number(row_data.get(metric_for_mode))
+            parsed = get_numeric_value(row_data, metric_for_mode) if metric_for_mode else None
             if parsed is None:
                 continue
             if best_metric is None:
@@ -1520,9 +1485,7 @@ def _infer_aggregate_answer(
                 source_row_index = row_index
                 source_row_data = row_data
                 continue
-            is_better = (
-                parsed < best_metric if operator == "min" else parsed > best_metric
-            )
+            is_better = parsed < best_metric if operator == "min" else parsed > best_metric
             if is_better:
                 best_metric = parsed
                 source_row_index = row_index
@@ -1607,9 +1570,14 @@ def _infer_aggregate_answer(
 
 def _build_final_response(payload: Dict[str, Any]) -> str:
     answer = str(payload.get("answer") or "").strip()
+    details = payload.get("answer_details") or {}
+    ui_link = details.get("highlight_url") or details.get("source_url")
 
     if answer:
-        return answer  # ← just the answer, no Link:
+        lines = [answer]
+        if ui_link:
+            lines.append(f"Link: {ui_link}")
+        return "\n".join(lines)
 
     results = payload.get("results") or []
     if not results:
@@ -1620,38 +1588,15 @@ def _build_final_response(payload: Dict[str, Any]) -> str:
     highlights = top.get("highlights") or []
     if highlights:
         h = highlights[0]
-        return f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
+        lead = f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
     else:
-        return f"Best matching row is {row_index}."
+        lead = f"Best matching row is {row_index}."
 
-    # answer = str(payload.get("answer") or "").strip()
-    # details = payload.get("answer_details") or {}
-    # ui_link = details.get("highlight_url") or details.get("source_url")
-
-    # if answer:
-    #     lines = [answer]
-    #     if ui_link:
-    #         lines.append(f"Link: {ui_link}")
-    #     return "\n".join(lines)
-
-    # results = payload.get("results") or []
-    # if not results:
-    #     return "No matching rows found."
-
-    # top = results[0]
-    # row_index = top.get("row_index")
-    # highlights = top.get("highlights") or []
-    # if highlights:
-    #     h = highlights[0]
-    #     lead = f"Best match: {h.get('column')} = {h.get('value')} (row {row_index})."
-    # else:
-    #     lead = f"Best matching row is {row_index}."
-
-    # lines = [lead]
-    # ui_link = top.get("highlight_url") or top.get("source_url")
-    # if ui_link:
-    #     lines.append(f"Link: {ui_link}")
-    # return "\n".join(lines)
+    lines = [lead]
+    ui_link = top.get("highlight_url") or top.get("source_url")
+    if ui_link:
+        lines.append(f"Link: {ui_link}")
+    return "\n".join(lines)
 
 
 def _extract_highlight_id_from_url(value: Any) -> Optional[str]:
@@ -1697,10 +1642,7 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_row_data = details.get("source_row_data") or {}
     if answer_column and answer_value is not None and isinstance(source_row_data, dict):
         source_value = source_row_data.get(answer_column)
-        is_match = (
-            source_value is not None
-            and str(source_value).strip() == str(answer_value).strip()
-        )
+        is_match = source_value is not None and str(source_value).strip() == str(answer_value).strip()
         checks.append(
             {
                 "name": "answer_value_matches_source_row",
@@ -1709,9 +1651,7 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
         if not is_match:
-            errors.append(
-                "answer_value does not match source_row_data for answer_column."
-            )
+            errors.append("answer_value does not match source_row_data for answer_column.")
 
     op = str(details.get("operation") or "").lower()
     group_column = details.get("group_by_column")
@@ -1725,10 +1665,7 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         and metric_value is not None
     ):
         source_metric = _parse_number(source_row_data.get(metric_column))
-        metric_ok = (
-            source_metric is not None
-            and abs(float(source_metric) - float(metric_value)) < 1e-9
-        )
+        metric_ok = source_metric is not None and abs(float(source_metric) - float(metric_value)) < 1e-9
         checks.append(
             {
                 "name": "rank_metric_matches_source_row",
@@ -1741,9 +1678,7 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     highlight_id = details.get("top_highlight_id")
     if not highlight_id:
-        highlight_id = _extract_highlight_id_from_url(
-            details.get("highlight_url") or details.get("source_url")
-        )
+        highlight_id = _extract_highlight_id_from_url(details.get("highlight_url") or details.get("source_url"))
     if not highlight_id:
         results = payload.get("results") or []
         if results and isinstance(results[0], dict):
@@ -1795,13 +1730,8 @@ def smart_query(
         if _verification_enabled():
             verification = _verify_response(response)
             response["verification"] = verification
-            if (
-                verification["status"] != "pass"
-                and _fail_closed_on_verification_error()
-            ):
-                response["final_response"] = (
-                    "I could not verify this answer against source rows."
-                )
+            if verification["status"] != "pass" and _fail_closed_on_verification_error():
+                response["final_response"] = "I could not verify this answer against source rows."
         return response
 
     source_result = aggregate_answer.get("source_result")
@@ -1898,8 +1828,9 @@ def get_highlight(highlight_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     row_data = _deserialize_row_data(row[0])
+    public_row_data = strip_internal_fields(row_data)
 
-    if column not in row_data:
+    if column not in public_row_data:
         return None
 
     return {
@@ -1907,6 +1838,6 @@ def get_highlight(highlight_id: str) -> Optional[Dict[str, Any]]:
         "dataset_id": dataset_id,
         "row_index": row_index,
         "column": column,
-        "value": row_data[column],
-        "row_context": row_data,
+        "value": public_row_data[column],
+        "row_context": public_row_data,
     }

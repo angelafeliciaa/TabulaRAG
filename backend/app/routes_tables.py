@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
+from app.typed_values import strip_internal_fields
 
 router = APIRouter()
 
@@ -18,14 +19,14 @@ class RenameRequest(BaseModel):
 
 def _normalize_row_data(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
-        return raw
+        return strip_internal_fields(raw)
     if isinstance(raw, str):
         try:
             parsed: Any = json.loads(raw)
             if isinstance(parsed, str):
                 parsed = json.loads(parsed)
             if isinstance(parsed, dict):
-                return parsed
+                return strip_internal_fields(parsed)
         except Exception:
             return {}
     return {}

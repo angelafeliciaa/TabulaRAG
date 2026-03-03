@@ -1,19 +1,51 @@
 import json
-from typing import Callable, Dict, List, Optional
+import math
+import os
+from typing import Any, Callable, Dict, List, Optional
 
 from qdrant_client import models
 from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.embeddings import embed_texts, row_to_text
-from app.qdrant_client import ensure_collection, ensure_text_index, upsert_vectors
+from app.qdrant_client import (
+    ensure_collection,
+    finalize_collection_after_ingest,
+    prepare_collection_for_bulk_ingest,
+    upsert_vectors,
+)
 
-EMBED_BATCH_SIZE = 256
+EMBED_BATCH_SIZE = max(64, int(os.getenv("INDEX_EMBED_BATCH_SIZE", "768")))
+INDEX_EMBED_MIN_BATCH_SIZE = max(16, int(os.getenv("INDEX_EMBED_MIN_BATCH_SIZE", "64")))
+INDEX_PROGRESS_TARGET_UPDATES = max(
+    4, int(os.getenv("INDEX_PROGRESS_TARGET_UPDATES", "12"))
+)
+
+
+def _effective_embed_batch_size(total_rows: int) -> int:
+    """Choose a batch size that keeps indexing throughput high while reporting progress steadily."""
+    if total_rows <= 0:
+        return EMBED_BATCH_SIZE
+    target = int(math.ceil(total_rows / INDEX_PROGRESS_TARGET_UPDATES))
+    return max(INDEX_EMBED_MIN_BATCH_SIZE, min(EMBED_BATCH_SIZE, target))
+
+
+def _deserialize_row_data(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        data = json.loads(raw)
+        if isinstance(data, str):
+            data = json.loads(data)
+        if isinstance(data, dict):
+            return data
+    return {}
 
 
 def index_dataset(
     dataset_id: int,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    expected_total_rows: Optional[int] = None,
 ) -> None:
     """Read all rows for a dataset from PG, embed them, and upsert into Qdrant.
 
@@ -22,54 +54,34 @@ def index_dataset(
     search results can be returned without an extra PG round-trip.
     """
     ensure_collection(dataset_id)
-    ensure_text_index(dataset_id)
+    prepare_collection_for_bulk_ingest(dataset_id)
 
-    # Fetch all rows from Postgres
-    with SessionLocal() as db:
-        result = db.execute(
-            text(
-                "SELECT row_index, row_data FROM dataset_rows "
-                "WHERE dataset_id = :dataset_id ORDER BY row_index"
-            ),
-            {"dataset_id": dataset_id},
-        )
-        rows = result.fetchall()
+    total_rows = max(expected_total_rows or 0, 0)
+    if total_rows <= 0:
+        with SessionLocal() as db:
+            total_rows = int(
+                db.execute(
+                    text("SELECT row_count FROM datasets WHERE id = :dataset_id"),
+                    {"dataset_id": dataset_id},
+                ).scalar()
+                or 0
+            )
 
-    if not rows:
-        return
+    effective_embed_batch_size = _effective_embed_batch_size(total_rows)
 
-    # Prepare texts and metadata
-    row_indices: List[int] = []
-    texts: List[str] = []
-    row_datas: List[Dict] = []
-
-    for row in rows:
-        row_index = row[0]
-        raw = row[1]
-        # Handle potential double-serialization (json.dumps into JSON column)
-        row_data = json.loads(raw) if isinstance(raw, str) else raw
-        if isinstance(row_data, str):
-            row_data = json.loads(row_data)
-        serialized = row_to_text(row_data)
-        if not serialized:
-            continue
-        row_indices.append(row_index)
-        texts.append(serialized)
-        row_datas.append(row_data)
-
-    total_rows = len(texts)
     processed_rows = 0
     if progress_callback:
         progress_callback(processed_rows, total_rows)
 
-    # Embed and upsert in batches
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch_texts = texts[i : i + EMBED_BATCH_SIZE]
-        batch_indices = row_indices[i : i + EMBED_BATCH_SIZE]
-        batch_row_datas = row_datas[i : i + EMBED_BATCH_SIZE]
+    batch_indices: List[int] = []
+    batch_texts: List[str] = []
+    batch_row_datas: List[Dict[str, Any]] = []
 
+    def flush_batch() -> None:
+        nonlocal processed_rows
+        if not batch_texts:
+            return
         vectors = embed_texts(batch_texts)
-
         points = [
             models.PointStruct(
                 id=idx,
@@ -77,10 +89,41 @@ def index_dataset(
                 payload={"row_data": rd, "text": txt},
             )
             for idx, vec, rd, txt in zip(
-                batch_indices, vectors, batch_row_datas, batch_texts
+                batch_indices,
+                vectors,
+                batch_row_datas,
+                batch_texts,
             )
         ]
         upsert_vectors(dataset_id, points)
         processed_rows += len(batch_texts)
         if progress_callback:
             progress_callback(processed_rows, total_rows)
+        batch_indices.clear()
+        batch_texts.clear()
+        batch_row_datas.clear()
+
+    with SessionLocal() as db:
+        result = db.execute(
+            text(
+                "SELECT row_index, row_data FROM dataset_rows "
+                "WHERE dataset_id = :dataset_id ORDER BY row_index"
+            ).execution_options(stream_results=True),
+            {"dataset_id": dataset_id},
+        )
+
+        for row in result:
+            row_index = row[0]
+            row_data = _deserialize_row_data(row[1])
+            serialized = row_to_text(row_data)
+            if not serialized:
+                continue
+            batch_indices.append(row_index)
+            batch_texts.append(serialized)
+            batch_row_datas.append(row_data)
+
+            if len(batch_texts) >= effective_embed_batch_size:
+                flush_batch()
+
+    flush_batch()
+    finalize_collection_after_ingest(dataset_id)
