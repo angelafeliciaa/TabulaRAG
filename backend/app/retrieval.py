@@ -2,6 +2,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, urlencode, urlparse, unquote
 
@@ -12,6 +13,7 @@ from app.db import SessionLocal
 from app.embeddings import embed_texts
 from app.qdrant_client import search_vectors
 from app.typed_values import (
+    get_date_epoch_seconds,
     get_numeric_value,
     is_internal_key,
     parse_number as _typed_parse_number,
@@ -187,6 +189,23 @@ _METRIC_KEYWORD_TOKENS: Set[str] = {
     "cost",
     "revenue",
     "volume",
+}
+_EARLIEST_DATE_TOKENS: Set[str] = {"earliest", "oldest", "first", "minimum", "min"}
+_LATEST_DATE_TOKENS: Set[str] = {"latest", "newest", "recent", "last", "maximum", "max"}
+_DATE_QUERY_HINT_TOKENS: Set[str] = {"date", "day", "month", "year", "earliest", "latest", "oldest", "newest"}
+_MONTH_LOOKUP: Dict[str, int] = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
 }
 _SINGLE_ROW_HINT_RE = re.compile(
     r"\b(one|single)\s+(deal|transaction|row|entry|order|sale|shipment)\b"
@@ -1044,6 +1063,39 @@ def _detect_numeric_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
     }
 
 
+def _detect_date_columns(rows: List[Tuple[int, Dict[str, Any]]]) -> Set[str]:
+    sampled = rows[:400]
+    if not sampled:
+        return set()
+    date_counts: Dict[str, int] = defaultdict(int)
+    for _, row_data in sampled:
+        for col in row_data.keys():
+            if is_internal_key(str(col)):
+                continue
+            if get_date_epoch_seconds(row_data, col) is not None:
+                date_counts[col] += 1
+    min_hits = max(2, int(len(sampled) * 0.40))
+    return {col for col, count in date_counts.items() if count >= min_hits}
+
+
+def _extract_month_from_question(question: str) -> Optional[int]:
+    lowered = question.lower()
+    for token, month in _MONTH_LOOKUP.items():
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            return month
+    return None
+
+
+def _extract_year_from_question(question: str) -> Optional[int]:
+    match = re.search(r"\b(19|20)\d{2}\b", question)
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
 def _question_roles(question: str) -> Set[str]:
     tokens = set(_tokenize(question))
     roles: Set[str] = set()
@@ -1223,6 +1275,161 @@ def _pick_row_answer_column(
     if best_col:
         return best_col
     return candidate_columns[0]
+
+
+def _infer_date_query_answer(
+    dataset_id: int,
+    question: str,
+    top_k: int = 10,
+) -> Optional[Dict[str, Any]]:
+    tokens = set(_tokenize(question))
+    month_filter = _extract_month_from_question(question)
+    year_filter = _extract_year_from_question(question)
+    asks_earliest = bool(tokens & _EARLIEST_DATE_TOKENS)
+    asks_latest = bool(tokens & _LATEST_DATE_TOKENS)
+    has_date_intent = bool(
+        tokens & _DATE_QUERY_HINT_TOKENS
+        or month_filter is not None
+        or year_filter is not None
+    )
+    if not has_date_intent:
+        return None
+
+    rows = _load_dataset_rows(dataset_id)
+    if not rows:
+        return None
+    date_columns = _detect_date_columns(rows)
+    if not date_columns:
+        return None
+
+    hinted = match_column_from_question(dataset_id, question)
+    if hinted in date_columns:
+        date_column = hinted
+    else:
+        date_column = sorted(date_columns)[0]
+
+    filtered: List[Tuple[int, Dict[str, Any], int]] = []
+    for row_index, row_data in rows:
+        epoch = get_date_epoch_seconds(row_data, date_column)
+        if epoch is None:
+            continue
+        dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+        if month_filter is not None and dt.month != month_filter:
+            continue
+        if year_filter is not None and dt.year != year_filter:
+            continue
+        filtered.append((row_index, row_data, int(epoch)))
+
+    if not filtered:
+        filter_bits = []
+        if month_filter is not None:
+            filter_bits.append(f"month={month_filter}")
+        if year_filter is not None:
+            filter_bits.append(f"year={year_filter}")
+        where_suffix = f" with {' and '.join(filter_bits)}" if filter_bits else ""
+        return {
+            "answer": f"No rows matched {date_column}{where_suffix}.",
+            "answer_type": "date_filter",
+            "answer_details": {
+                "operation": "date_filter",
+                "date_column": date_column,
+                "month": month_filter,
+                "year": year_filter,
+                "matched_rows": 0,
+                "sql_query": (
+                    "SELECT row_index, row_data FROM dataset_rows "
+                    f"WHERE dataset_id = {dataset_id} "
+                    f"ORDER BY row_data->>'{date_column}' ASC;"
+                ),
+            },
+            "results": [],
+        }
+
+    filtered.sort(key=lambda item: item[2])
+    if asks_latest and not asks_earliest:
+        chosen = filtered[-1]
+        operation = "latest"
+    else:
+        chosen = filtered[0]
+        operation = "earliest" if asks_earliest else "date_filter"
+
+    source_result = _build_result_item(
+        dataset_id=dataset_id,
+        row_index=int(chosen[0]),
+        row_data=chosen[1],
+        score=1.0,
+        question=question,
+        match_type="date_query",
+    )
+
+    if operation in {"earliest", "latest"}:
+        dt = datetime.fromtimestamp(chosen[2], tz=timezone.utc).date().isoformat()
+        answer = f"The {operation} {date_column} is {dt} (row {chosen[0]})."
+        return {
+            "answer": answer,
+            "answer_type": "date_extrema",
+            "answer_details": {
+                "operation": operation,
+                "date_column": date_column,
+                "iso_date": dt,
+                "source_row_index": source_result["row_index"],
+                "source_url": source_result["source_url"],
+                "top_highlight_id": source_result["top_highlight_id"],
+                "highlight_url": source_result["highlight_url"],
+                "source_row_data": source_result.get("row_data"),
+                "month": month_filter,
+                "year": year_filter,
+                "matched_rows": len(filtered),
+                "sql_query": (
+                    "SELECT row_index, row_data FROM dataset_rows "
+                    f"WHERE dataset_id = {dataset_id} "
+                    f"ORDER BY row_data->>'{date_column}' {'DESC' if operation == 'latest' else 'ASC'} LIMIT 1;"
+                ),
+            },
+            "source_result": source_result,
+        }
+
+    limited = filtered[: max(1, min(top_k, 100))]
+    results = [
+        _build_result_item(
+            dataset_id=dataset_id,
+            row_index=int(row_index),
+            row_data=row_data,
+            score=1.0,
+            question=question,
+            match_type="date_filter",
+        )
+        for row_index, row_data, _ in limited
+    ]
+    answer = f"Found {len(filtered)} row(s) matching date filters on {date_column}."
+    first = results[0] if results else None
+    details: Dict[str, Any] = {
+        "operation": "date_filter",
+        "date_column": date_column,
+        "month": month_filter,
+        "year": year_filter,
+        "matched_rows": len(filtered),
+        "sql_query": (
+            "SELECT row_index, row_data FROM dataset_rows "
+            f"WHERE dataset_id = {dataset_id} ORDER BY row_index ASC;"
+        ),
+    }
+    if first:
+        details.update(
+            {
+                "source_row_index": first["row_index"],
+                "source_url": first["source_url"],
+                "top_highlight_id": first["top_highlight_id"],
+                "highlight_url": first["highlight_url"],
+                "source_row_data": first.get("row_data"),
+            }
+        )
+    return {
+        "answer": answer,
+        "answer_type": "date_filter",
+        "answer_details": details,
+        "results": results,
+    }
 
 
 def _infer_aggregate_answer(
@@ -1710,6 +1917,31 @@ def smart_query(
     top_k: int = 10,
 ) -> Dict[str, Any]:
     top_k = max(1, top_k)
+    date_answer = _infer_date_query_answer(dataset_id=dataset_id, question=question, top_k=top_k)
+    if date_answer is not None:
+        results = date_answer.get("results")
+        if results is None:
+            results = []
+            source_result = date_answer.get("source_result")
+            if source_result:
+                results = [source_result]
+        response: Dict[str, Any] = {
+            "dataset_id": dataset_id,
+            "question": question,
+            "results": results,
+            "dataset_url": _table_ui_url(dataset_id),
+            "answer": date_answer.get("answer"),
+            "answer_type": date_answer.get("answer_type"),
+            "answer_details": date_answer.get("answer_details"),
+        }
+        response["final_response"] = _build_final_response(response)
+        if _verification_enabled():
+            verification = _verify_response(response)
+            response["verification"] = verification
+            if verification["status"] != "pass" and _fail_closed_on_verification_error():
+                response["final_response"] = "I could not verify this answer against source rows."
+        return response
+
     results = hybrid_search(
         dataset_id=dataset_id,
         question=question,

@@ -11,6 +11,7 @@ import returnIcon from "../images/return.png";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
 const ROWS_PER_PAGE = 500;
+const FETCH_BATCH_SIZE = 2000;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -161,45 +162,76 @@ export default function TableView() {
     setErr(null);
     setLoading(true);
 
-    const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
-    const pageEndExclusive = pageOffset + ROWS_PER_PAGE;
+    const fetchAllRows = async () => {
+      try {
+        let offset = 0;
+        let totalRows = 0;
+        let columns: string[] = [];
+        let columnCount = 0;
+        let hasHeader = true;
+        const rows: Record<string, unknown>[] = [];
 
-    getSlice(numericDatasetId, pageOffset, pageEndExclusive)
-      .then((slice) => {
+        while (true) {
+          const slice = await getSlice(numericDatasetId, offset, offset + FETCH_BATCH_SIZE);
+          if (!mounted) {
+            return;
+          }
+
+          if (columns.length === 0) {
+            columns = slice.columns;
+            columnCount = slice.column_count;
+            hasHeader = slice.has_header;
+          }
+
+          rows.push(...slice.rows);
+          totalRows = Math.max(totalRows, Math.max(0, slice.row_count || 0));
+
+          if (slice.rows.length <= 0 || rows.length >= totalRows) {
+            break;
+          }
+
+          offset += slice.rows.length;
+        }
+
         if (!mounted) {
           return;
         }
-        setData(slice);
-        setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
 
-        const fetchedTotalPages = Math.max(1, Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE));
-        if (currentPage > fetchedTotalPages) {
-          setCurrentPage(fetchedTotalPages);
-        }
-      })
-      .catch((error: unknown) => {
+        const resolvedRowCount = Math.max(totalRows, rows.length);
+
+        setData({
+          dataset_id: numericDatasetId,
+          offset: 0,
+          limit: rows.length,
+          row_count: resolvedRowCount,
+          column_count: columnCount,
+          has_header: hasHeader,
+          columns,
+          rows,
+        });
+        setTableRowCount((previous) => Math.max(previous, resolvedRowCount));
+      } catch (error: unknown) {
         if (!mounted) {
           return;
         }
         setErr(getErrorMessage(error));
         setData(null);
-      })
-      .finally(() => {
+      } finally {
         if (mounted) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    fetchAllRows();
 
     return () => {
       mounted = false;
     };
-  }, [numericDatasetId, currentPage]);
+  }, [numericDatasetId]);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const effectiveRowCount = Math.max(tableRowCount, Math.max(0, data?.row_count || 0));
-  const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
-  const safeCurrentPage = Math.min(currentPage, totalPages);
-  const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
     [data],
@@ -230,37 +262,39 @@ export default function TableView() {
     return { rows: nextRows, rowIndices: nextRowIndices };
   }, [data, normalizedSearch]);
 
-  const displayRows = useMemo(() => {
-    if (!data || dateViewMode === "default" || dateColumns.size === 0) {
-      return filtered.rows;
-    }
+  const filteredCount = filtered.rows.length;
+  const totalPages = Math.max(1, Math.ceil(filteredCount / ROWS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
 
+  const displayRows = filtered.rows;
+  const formatCellValue = useMemo(() => {
+    if (dateViewMode === "default" || dateColumns.size === 0) {
+      return undefined;
+    }
     const monthFormatter = new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "2-digit",
       year: "numeric",
       timeZone: "UTC",
     });
-
-    return filtered.rows.map((row) => {
-      const next = { ...row };
-      for (const col of dateColumns) {
-        const parsed = parseDateToDate(next[col]);
-        if (!parsed) {
-          continue;
-        }
-        if (dateViewMode === "mm-dd-yyyy") {
-          const mm = String(parsed.getUTCMonth() + 1).padStart(2, "0");
-          const dd = String(parsed.getUTCDate()).padStart(2, "0");
-          const yyyy = parsed.getUTCFullYear();
-          next[col] = `${mm}-${dd}-${yyyy}`;
-        } else if (dateViewMode === "mon-dd-yyyy") {
-          next[col] = monthFormatter.format(parsed);
-        }
+    return (column: string, value: unknown): string => {
+      if (!dateColumns.has(column)) {
+        return String(value ?? "");
       }
-      return next;
-    });
-  }, [data, dateColumns, dateViewMode, filtered.rows]);
+      const parsed = parseDateToDate(value);
+      if (!parsed) {
+        return String(value ?? "");
+      }
+      if (dateViewMode === "mm-dd-yyyy") {
+        const mm = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+        const dd = String(parsed.getUTCDate()).padStart(2, "0");
+        const yyyy = parsed.getUTCFullYear();
+        return `${mm}-${dd}-${yyyy}`;
+      }
+      return monthFormatter.format(parsed);
+    };
+  }, [dateColumns, dateViewMode]);
 
   useEffect(() => {
     if (!dateMenu) {
@@ -373,8 +407,8 @@ export default function TableView() {
             <div className="small">
               {loading
                 ? "Loading table page..."
-                : data && data.rows.length > 0
-                  ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
+                : data && filteredCount > 0
+                  ? `Showing rows ${(((safeCurrentPage - 1) * ROWS_PER_PAGE) + 1).toLocaleString()}-${Math.min(safeCurrentPage * ROWS_PER_PAGE, filteredCount).toLocaleString()} of ${filteredCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • filtered from ${effectiveRowCount.toLocaleString()} total rows` : ""}.`
                   : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
             </div>
           </div>
@@ -403,6 +437,9 @@ export default function TableView() {
             rows={displayRows}
             rowIndices={filtered.rowIndices}
             sortable
+            page={safeCurrentPage}
+            pageSize={ROWS_PER_PAGE}
+            formatCellValue={formatCellValue}
             onCellContextMenu={(event, payload) => {
               if (!dateColumns.has(payload.column) || !parseDateToDate(payload.value)) {
                 return;
@@ -424,7 +461,7 @@ export default function TableView() {
           )}
         </div>
       )}
-      {data && effectiveRowCount > 0 && (
+      {data && filteredCount > 0 && (
         <div className="table-view-pagination" aria-label="Full table pagination">
           <div className="table-view-pagination-controls">
             <button

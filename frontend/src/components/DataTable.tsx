@@ -7,6 +7,8 @@ type DataTableProps = {
   rowOffset?: number;
   rowIndices?: number[];
   sortable?: boolean;
+  page?: number;
+  pageSize?: number;
   formatCellValue?: (column: string, value: unknown) => string;
   onCellContextMenu?: (
     event: MouseEvent<HTMLTableCellElement>,
@@ -16,6 +18,7 @@ type DataTableProps = {
 
 type SortDirection = "asc" | "desc";
 type SortKind = "number" | "date" | "text";
+type DateOrder = "dmy" | "mdy";
 
 function parseNumberLike(value: unknown): number | null {
   if (value === null || value === undefined) {
@@ -27,6 +30,13 @@ function parseNumberLike(value: unknown): number | null {
 
   const text = String(value).trim();
   if (!text) {
+    return null;
+  }
+  // Do not treat date-like tokens as numbers (e.g. 04/01/2022).
+  if (
+    /^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(text)
+    || /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(text)
+  ) {
     return null;
   }
 
@@ -45,7 +55,7 @@ function parseNumberLike(value: unknown): number | null {
   return null;
 }
 
-function parseDateToEpoch(value: string): number | null {
+function parseDateToEpoch(value: string, ambiguousOrder: DateOrder = "dmy"): number | null {
   const text = value.trim();
   if (!text) {
     return null;
@@ -81,9 +91,13 @@ function parseDateToEpoch(value: string): number | null {
       month = a;
       day = b;
     } else if (a <= 12 && b <= 12) {
-      // Ambiguous, choose D/M to match common CSV exports in this project.
-      day = a;
-      month = b;
+      if (ambiguousOrder === "mdy") {
+        month = a;
+        day = b;
+      } else {
+        day = a;
+        month = b;
+      }
     }
 
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
@@ -119,7 +133,40 @@ function defaultFormatValue(value: unknown): string {
   return String(value);
 }
 
-function getSortableValue(value: unknown): { kind: "empty" | "number" | "date" | "text"; value: string | number } {
+function inferDateOrderForColumn(rows: Record<string, unknown>[], column: string): DateOrder {
+  const sample = rows.slice(0, 400);
+  let dmy = 0;
+  let mdy = 0;
+  for (const row of sample) {
+    const raw = row[column];
+    const text = raw === null || raw === undefined ? "" : String(raw).trim();
+    if (!text) {
+      continue;
+    }
+    const match = text.match(
+      /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/,
+    );
+    if (!match) {
+      continue;
+    }
+    const a = Number(match[1]);
+    const b = Number(match[2]);
+    if (a > 12 && b <= 12) {
+      dmy += 3;
+    } else if (b > 12 && a <= 12) {
+      mdy += 3;
+    } else if (a <= 12 && b <= 12) {
+      dmy += 1;
+      mdy += 1;
+    }
+  }
+  return mdy > dmy ? "mdy" : "dmy";
+}
+
+function getSortableValue(
+  value: unknown,
+  dateOrder: DateOrder = "dmy",
+): { kind: "empty" | "number" | "date" | "text"; value: string | number } {
   if (value === null || value === undefined) {
     return { kind: "empty", value: "" };
   }
@@ -138,7 +185,7 @@ function getSortableValue(value: unknown): { kind: "empty" | "number" | "date" |
     return { kind: "number", value: numericCandidate };
   }
 
-  const parsedDateEpoch = parseDateToEpoch(text);
+  const parsedDateEpoch = parseDateToEpoch(text, dateOrder);
   if (parsedDateEpoch !== null) {
     return { kind: "date", value: parsedDateEpoch };
   }
@@ -146,7 +193,11 @@ function getSortableValue(value: unknown): { kind: "empty" | "number" | "date" |
   return { kind: "text", value: text.toLowerCase() };
 }
 
-function inferSortKind(rows: Record<string, unknown>[], column: string): SortKind {
+function inferSortKind(
+  rows: Record<string, unknown>[],
+  column: string,
+  dateOrder: DateOrder = "dmy",
+): SortKind {
   const sample = rows.slice(0, 300);
   let nonEmpty = 0;
   let numericHits = 0;
@@ -162,7 +213,7 @@ function inferSortKind(rows: Record<string, unknown>[], column: string): SortKin
       numericHits += 1;
       continue;
     }
-    if (parseDateToEpoch(text) !== null) {
+    if (parseDateToEpoch(text, dateOrder) !== null) {
       dateHits += 1;
     }
   }
@@ -189,6 +240,8 @@ export default function DataTable({
   rowOffset = 0,
   rowIndices,
   sortable = false,
+  page,
+  pageSize,
   formatCellValue,
   onCellContextMenu,
 }: DataTableProps) {
@@ -196,6 +249,13 @@ export default function DataTable({
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const highlightedRows = new Set(highlight?.rows || []);
   const highlightedCols = new Set(highlight?.cols || []);
+  const dateOrderByColumn = useMemo(() => {
+    const out: Record<string, DateOrder> = {};
+    for (const column of columns) {
+      out[column] = inferDateOrderForColumn(rows, column);
+    }
+    return out;
+  }, [columns, rows]);
 
   const displayRows = useMemo(() => {
     const entries = rows.map((row, index) => ({
@@ -207,49 +267,56 @@ export default function DataTable({
       originalIndex: index,
     }));
 
-    if (!sortable || !sortColumn) {
-      return entries;
+    let sorted = entries;
+    if (sortable && sortColumn) {
+      const sign = sortDirection === "asc" ? 1 : -1;
+      const dateOrder = dateOrderByColumn[sortColumn] || "dmy";
+      const sortKind = inferSortKind(rows, sortColumn, dateOrder);
+      sorted = [...entries].sort((left, right) => {
+        const leftValue = getSortableValue(left.row[sortColumn], dateOrder);
+        const rightValue = getSortableValue(right.row[sortColumn], dateOrder);
+
+        if (leftValue.kind === "empty" && rightValue.kind === "empty") {
+          return left.originalIndex - right.originalIndex;
+        }
+        if (leftValue.kind === "empty") {
+          return 1;
+        }
+        if (rightValue.kind === "empty") {
+          return -1;
+        }
+
+        if (sortKind === "number" && leftValue.kind === "number" && rightValue.kind === "number") {
+          const delta = Number(leftValue.value) - Number(rightValue.value);
+          if (delta !== 0) {
+            return delta * sign;
+          }
+        } else if (sortKind === "date" && leftValue.kind === "date" && rightValue.kind === "date") {
+          const delta = Number(leftValue.value) - Number(rightValue.value);
+          if (delta !== 0) {
+            return delta * sign;
+          }
+        } else {
+          const delta = String(leftValue.value).localeCompare(String(rightValue.value), undefined, {
+            sensitivity: "base",
+            numeric: true,
+          });
+          if (delta !== 0) {
+            return delta * sign;
+          }
+        }
+
+        return left.originalIndex - right.originalIndex;
+      });
     }
 
-    const sign = sortDirection === "asc" ? 1 : -1;
-    const sortKind = inferSortKind(rows, sortColumn);
-    return [...entries].sort((left, right) => {
-      const leftValue = getSortableValue(left.row[sortColumn]);
-      const rightValue = getSortableValue(right.row[sortColumn]);
-
-      if (leftValue.kind === "empty" && rightValue.kind === "empty") {
-        return left.originalIndex - right.originalIndex;
-      }
-      if (leftValue.kind === "empty") {
-        return 1;
-      }
-      if (rightValue.kind === "empty") {
-        return -1;
-      }
-
-      if (sortKind === "number" && leftValue.kind === "number" && rightValue.kind === "number") {
-        const delta = Number(leftValue.value) - Number(rightValue.value);
-        if (delta !== 0) {
-          return delta * sign;
-        }
-      } else if (sortKind === "date" && leftValue.kind === "date" && rightValue.kind === "date") {
-        const delta = Number(leftValue.value) - Number(rightValue.value);
-        if (delta !== 0) {
-          return delta * sign;
-        }
-      } else {
-        const delta = String(leftValue.value).localeCompare(String(rightValue.value), undefined, {
-          sensitivity: "base",
-          numeric: true,
-        });
-        if (delta !== 0) {
-          return delta * sign;
-        }
-      }
-
-      return left.originalIndex - right.originalIndex;
-    });
-  }, [rowIndices, rowOffset, rows, sortColumn, sortDirection, sortable]);
+    if (pageSize && pageSize > 0) {
+      const safePage = Math.max(1, page || 1);
+      const start = (safePage - 1) * pageSize;
+      return sorted.slice(start, start + pageSize);
+    }
+    return sorted;
+  }, [dateOrderByColumn, page, pageSize, rowIndices, rowOffset, rows, sortColumn, sortDirection, sortable]);
 
   function toggleSort(column: string) {
     if (sortColumn !== column) {
