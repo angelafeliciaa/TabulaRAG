@@ -495,7 +495,6 @@ export default function TableView() {
               {">>"}
             </button>
           </div>
-          <span className="table-view-pagination-meta">{ROWS_PER_PAGE.toLocaleString()} rows per page</span>
         </div>
       )}
       {dateMenu && (

@@ -15,17 +15,28 @@ import {
 import DataTable from "../components/DataTable";
 import logo from "../images/logo.png";
 import openIcon from "../images/open.png";
+import plusIcon from "../images/plus.png";
 import uploadLogo from "../images/upload.png";
 
 const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
 const PINNED_TABLES_STORAGE_KEY = "tabularag_pinned_table_ids";
 const SUCCESS_TOAST_MS = 2800;
-const MAX_UPLOAD_SIZE_MB = 100;
-const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
+const SAFE_TABLE_NAME_MAX_LENGTH = 64;
 
-type ToastState = { kind: "success"; message: string };
+type ToastState = { id: number; kind: "success"; message: string };
+type UploadQueuePhase = "idle" | UploadProgress["phase"] | "success" | "error";
+type UploadQueueItem = {
+  id: string;
+  file: File;
+  name: string;
+  progress: number;
+  phase: UploadQueuePhase;
+  estimatedRows: number | null;
+  estimatedCols: number | null;
+  error: string | null;
+};
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -56,6 +67,71 @@ function isTableNotFoundError(error: unknown): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function formatFileSize(bytes: number): string {
+  const safeBytes = Math.max(0, bytes);
+  if (safeBytes < 1024) {
+    return `${safeBytes}B`;
+  }
+  if (safeBytes < 1024 * 1024) {
+    return `${Math.round(safeBytes / 1024)}KB`;
+  }
+  return `${(safeBytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function countDelimitedColumns(line: string, delimiter: string): number {
+  if (!line.length) {
+    return 0;
+  }
+
+  let inQuotes = false;
+  let count = 1;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\"") {
+      if (inQuotes && line[i + 1] === "\"") {
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (!inQuotes && ch === delimiter) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function stripSupportedFileExtension(name: string): string {
+  return name.trim().replace(/\.(csv|tsv)$/i, "").trim();
+}
+
+function sanitizeTableNameInput(name: string): string {
+  const withoutExtension = stripSupportedFileExtension(name);
+  const withoutControlChars = withoutExtension.replace(/[\u0000-\u001f\u007f]/g, "");
+  const allowedCharsOnly = withoutControlChars.replace(/[^A-Za-z0-9 _-]/g, "");
+  const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ").trim();
+  return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
+}
+
+function getNameKey(name: string): string {
+  return sanitizeTableNameInput(name).toLocaleLowerCase();
+}
+
+function claimUniqueTableName(baseName: string, occupiedNameKeys: Set<string>): string {
+  const cleanedBaseName = sanitizeTableNameInput(baseName) || "table";
+  let candidate = cleanedBaseName;
+  let suffix = 2;
+
+  while (occupiedNameKeys.has(getNameKey(candidate))) {
+    candidate = `${cleanedBaseName}_${suffix}`;
+    suffix += 1;
+  }
+
+  occupiedNameKeys.add(getNameKey(candidate));
+  return candidate;
 }
 
 function smoothIndexStatus(
@@ -100,15 +176,11 @@ function smoothIndexStatus(
 }
 
 export default function Upload() {
-  const [file, setFile] = useState<File | null>(null);
-  const [name, setName] = useState("Uploaded Table");
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadPhase, setUploadPhase] = useState<"idle" | UploadProgress["phase"]>("idle");
-  const [estimatedRows, setEstimatedRows] = useState<number | null>(null);
   const [preview, setPreview] = useState<TableSlice | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -148,10 +220,9 @@ export default function Upload() {
   >({});
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
-  const uploadNameInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const estimateJobRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -161,12 +232,15 @@ export default function Upload() {
     );
   }, [pinnedTableIds]);
 
-  async function estimateDataRows(nextFile: File): Promise<number | null> {
+  async function estimateFileStats(nextFile: File): Promise<{
+    rows: number | null;
+    cols: number | null;
+  }> {
     try {
       // Keep estimation lightweight: sample only the file head instead of scanning full file.
       const sampleBytes = Math.min(nextFile.size, 512 * 1024);
       if (sampleBytes <= 0) {
-        return null;
+        return { rows: null, cols: null };
       }
 
       const sampleText = await nextFile.slice(0, sampleBytes).text();
@@ -178,17 +252,23 @@ export default function Upload() {
       );
       const avgBytesPerLine = sampleBytes / sampledLineCount;
       if (!Number.isFinite(avgBytesPerLine) || avgBytesPerLine <= 0) {
-        return null;
+        return { rows: null, cols: null };
       }
 
       const estimatedTotalLines = Math.max(
         sampledLineCount,
         Math.round(nextFile.size / avgBytesPerLine),
       );
+      const delimiter = nextFile.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+      const headerLine = lines.find((line) => line.trim().length > 0) || "";
+      const estimatedCols = headerLine ? countDelimitedColumns(headerLine, delimiter) : null;
       // In this UI we always upload with has_header=true.
-      return Math.max(0, estimatedTotalLines - 1);
+      return {
+        rows: Math.max(0, estimatedTotalLines - 1),
+        cols: estimatedCols,
+      };
     } catch {
-      return null;
+      return { rows: null, cols: null };
     }
   }
 
@@ -201,10 +281,11 @@ export default function Upload() {
 
   function showSuccessToast(message: string) {
     clearToastTimer();
-    setToast({ kind: "success", message });
+    const toastId = Date.now() + Math.random();
+    setToast({ id: toastId, kind: "success", message });
     toastTimerRef.current = window.setTimeout(() => {
       setToast((current) =>
-        current?.kind === "success" && current.message === message ? null : current,
+        current?.kind === "success" && current.id === toastId ? null : current,
       );
       toastTimerRef.current = null;
     }, SUCCESS_TOAST_MS);
@@ -328,12 +409,12 @@ export default function Upload() {
   }, [editingId, busy]);
 
   useEffect(() => {
-    if (!file || busy) {
+    if (busy || uploadQueue.length === 0) {
       return;
     }
 
     const rafId = window.requestAnimationFrame(() => {
-      const input = uploadNameInputRef.current;
+      const input = firstQueuedNameInputRef.current;
       if (!input) {
         return;
       }
@@ -345,7 +426,7 @@ export default function Upload() {
     return () => {
       window.cancelAnimationFrame(rafId);
     };
-  }, [file, busy]);
+  }, [uploadQueue.length, busy]);
 
   useEffect(() => {
     return () => {
@@ -469,51 +550,131 @@ export default function Upload() {
   }, [tables, loadPreview]);
 
   async function onUpload() {
-    if (!file) {
+    if (busy) {
+      return;
+    }
+
+    const queuedItems = uploadQueue.filter((item) => item.phase === "idle" || item.phase === "error");
+    if (queuedItems.length === 0) {
       return;
     }
 
     setReloadNotice(null);
-    window.sessionStorage.setItem(
-      PENDING_UPLOAD_SESSION_KEY,
-      JSON.stringify({
-        file_name: file.name,
-        dataset_name: name.trim() || file.name,
-        started_at: new Date().toISOString(),
-      }),
-    );
-
     setBusy(true);
     setErr(null);
-    setStatus("Uploading file...");
-    setUploadPhase("uploading");
-    setUploadProgress(2);
+
+    let successCount = 0;
+    let failureCount = 0;
+    let firstFailureMessage: string | null = null;
+    let lastUploadedDatasetId: number | null = null;
+    const occupiedNameKeys = new Set(
+      tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
+    );
+
+    for (let i = 0; i < queuedItems.length; i += 1) {
+      const item = queuedItems[i];
+      const preferredName =
+        sanitizeTableNameInput(item.name)
+        || sanitizeTableNameInput(item.file.name)
+        || "table";
+      const normalizedName = claimUniqueTableName(preferredName, occupiedNameKeys);
+
+      setStatus(`Uploading ${i + 1} of ${queuedItems.length}: ${item.file.name}`);
+      setUploadQueue((previous) =>
+        previous.map((current) =>
+          current.id === item.id
+            ? {
+              ...current,
+              name: normalizedName,
+              phase: "uploading",
+              progress: 2,
+              error: null,
+            }
+            : current,
+        ),
+      );
+
+      window.sessionStorage.setItem(
+        PENDING_UPLOAD_SESSION_KEY,
+        JSON.stringify({
+          file_name: item.file.name,
+          dataset_name: normalizedName,
+          started_at: new Date().toISOString(),
+        }),
+      );
+
+      try {
+        const result = await uploadTable(item.file, normalizedName, (progress) => {
+          setUploadQueue((previous) =>
+            previous.map((current) =>
+              current.id === item.id
+                ? {
+                  ...current,
+                  phase: progress.phase,
+                  progress: Math.max(current.progress, progress.percent),
+                }
+                : current,
+            ),
+          );
+        });
+
+        successCount += 1;
+        lastUploadedDatasetId = result.dataset_id;
+        setUploadQueue((previous) =>
+          previous.map((current) =>
+            current.id === item.id
+              ? {
+                ...current,
+                phase: "success",
+                progress: 100,
+                error: null,
+              }
+              : current,
+          ),
+        );
+      } catch (error: unknown) {
+        failureCount += 1;
+        const message = getErrorMessage(error);
+        if (!firstFailureMessage) {
+          firstFailureMessage = message;
+        }
+        setUploadQueue((previous) =>
+          previous.map((current) =>
+            current.id === item.id
+              ? { ...current, phase: "error", progress: 0, error: message }
+              : current,
+          ),
+        );
+      } finally {
+        window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
+      }
+    }
 
     try {
-      const result = await uploadTable(file, name, (progress) => {
-        setUploadPhase(progress.phase);
-        setUploadProgress((previous) => Math.max(previous, progress.percent));
-        setStatus(progress.phase === "uploading" ? "Uploading file..." : null);
-      });
-      setUploadProgress(100);
-      setStatus(null);
       await refresh();
-      await loadPreview(result.dataset_id);
-      showSuccessToast(
-        `File Uploaded Successfully`,
-      );
-      setFile(null);
-      setName("Uploaded Table");
-      window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
+      if (lastUploadedDatasetId !== null) {
+        await loadPreview(lastUploadedDatasetId);
+      }
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
-      setStatus(null);
-      setUploadProgress(0);
-      window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
-    } finally {
-      setUploadPhase("idle");
-      setBusy(false);
     }
+
+    if (successCount > 0) {
+      showSuccessToast(
+        successCount === 1
+          ? "1 file uploaded successfully"
+          : `${successCount} files uploaded successfully`,
+      );
+    }
+    if (failureCount > 0 && firstFailureMessage) {
+      setErr(firstFailureMessage);
+    }
+    if (failureCount === 0 && successCount === queuedItems.length) {
+      setUploadQueue([]);
+    }
+
+    setStatus(null);
+    setBusy(false);
   }
 
   async function onDelete(datasetId: number) {
@@ -573,11 +734,22 @@ export default function Upload() {
       return;
     }
 
-    const nextName = editingName.trim();
+    const nextName = sanitizeTableNameInput(editingName);
     if (!nextName) {
       setRenameHintId(datasetId);
       setEditingName("");
       setErr(null);
+      return;
+    }
+
+    const nextNameKey = getNameKey(nextName);
+    const hasDuplicateName = tables.some(
+      (table) =>
+        table.dataset_id !== datasetId
+        && getNameKey(stripSupportedFileExtension(table.name) || "table") === nextNameKey,
+    );
+    if (hasDuplicateName) {
+      setErr("Name already exists, please choose a different name.");
       return;
     }
 
@@ -597,44 +769,145 @@ export default function Upload() {
     if (!(lowerName.endsWith(".csv") || lowerName.endsWith(".tsv"))) {
       return "File must have a .csv or .tsv extension.";
     }
-    if (nextFile.size > MAX_UPLOAD_SIZE_BYTES) {
-      return `File is too large. Maximum size is ${MAX_UPLOAD_SIZE_MB} MB.`;
-    }
     return null;
   }
 
-  function onSelectFile(nextFile: File | null) {
+  function onSelectFiles(nextFiles: FileList | null) {
     if (busy) {
       return;
     }
     setStatus(null);
 
-    if (!nextFile) {
-      setErr(null);
-      setFile(null);
-      setEstimatedRows(null);
+    if (!nextFiles || nextFiles.length === 0) {
       return;
     }
 
-    const validationError = validateSelectedFile(nextFile);
-    if (validationError) {
-      setErr(validationError);
-      return;
-    }
+    const existingFileKeys = new Set(
+      uploadQueue.map((item) => `${item.file.name}:${item.file.size}:${item.file.lastModified}`),
+    );
+    const occupiedNameKeys = new Set<string>([
+      ...tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
+      ...uploadQueue.map((item) => getNameKey(stripSupportedFileExtension(item.name) || "table")),
+    ]);
+    const nextItems: UploadQueueItem[] = [];
+    const rejectedMessages: string[] = [];
 
-    setErr(null);
-    setFile(nextFile);
-    const withoutExt = nextFile.name.replace(/\.[^.]+$/, "");
-    setName(withoutExt || nextFile.name);
-    setEstimatedRows(null);
-    const estimateJobId = estimateJobRef.current + 1;
-    estimateJobRef.current = estimateJobId;
-    estimateDataRows(nextFile).then((rows) => {
-      if (estimateJobRef.current !== estimateJobId) {
-        return;
+    for (const nextFile of Array.from(nextFiles)) {
+      const validationError = validateSelectedFile(nextFile);
+      if (validationError) {
+        rejectedMessages.push(`${nextFile.name}: ${validationError}`);
+        continue;
       }
-      setEstimatedRows(rows);
+
+      const fileKey = `${nextFile.name}:${nextFile.size}:${nextFile.lastModified}`;
+      if (existingFileKeys.has(fileKey)) {
+        rejectedMessages.push(`${nextFile.name}: already selected.`);
+        continue;
+      }
+      existingFileKeys.add(fileKey);
+
+      const withoutExt = sanitizeTableNameInput(nextFile.name) || "table";
+      const uniqueName = claimUniqueTableName(withoutExt, occupiedNameKeys);
+      nextItems.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        file: nextFile,
+        name: uniqueName,
+        progress: 0,
+        phase: "idle",
+        estimatedRows: null,
+        estimatedCols: null,
+        error: null,
+      });
+    }
+
+    if (nextItems.length === 0) {
+      setErr(rejectedMessages[0] || "No valid files selected.");
+      return;
+    }
+
+    setErr(
+      rejectedMessages.length
+        ? `${rejectedMessages[0]}${rejectedMessages.length > 1 ? ` (+${rejectedMessages.length - 1} more)` : ""}`
+        : null,
+    );
+    setUploadQueue((previous) => [...previous, ...nextItems]);
+
+    for (const item of nextItems) {
+      estimateFileStats(item.file).then((stats) => {
+        setUploadQueue((previous) =>
+          previous.map((current) =>
+            current.id === item.id
+              ? { ...current, estimatedRows: stats.rows, estimatedCols: stats.cols }
+              : current,
+          ),
+        );
+      });
+    }
+  }
+
+  function onRemoveQueuedFile(queueItemId: string) {
+    if (busy) {
+      return;
+    }
+    const nextQueue = uploadQueue.filter((item) => item.id !== queueItemId);
+    setUploadQueue(nextQueue);
+    if (nextQueue.length === 0) {
+      setErr(null);
+      setStatus(null);
+    }
+  }
+
+  function onCancelAllQueuedFiles() {
+    if (busy) {
+      return;
+    }
+    setUploadQueue([]);
+    setErr(null);
+    setStatus(null);
+  }
+
+  function isQueuedNameDuplicate(queueItemId: string, candidateName: string): boolean {
+    const normalizedCandidate = sanitizeTableNameInput(candidateName);
+    if (!normalizedCandidate) {
+      return false;
+    }
+    const candidateKey = getNameKey(normalizedCandidate);
+
+    const existsInTables = tables.some(
+      (table) => getNameKey(stripSupportedFileExtension(table.name) || "table") === candidateKey,
+    );
+    if (existsInTables) {
+      return true;
+    }
+
+    return uploadQueue.some((item) => {
+      if (item.id === queueItemId) {
+        return false;
+      }
+      const normalizedItemName = sanitizeTableNameInput(item.name);
+      if (!normalizedItemName) {
+        return false;
+      }
+      return getNameKey(normalizedItemName) === candidateKey;
     });
+  }
+
+  function onChangeQueuedName(queueItemId: string, nextValue: string) {
+    if (busy) {
+      return;
+    }
+
+    const nextName = sanitizeTableNameInput(nextValue);
+    setUploadQueue((previous) =>
+      previous.map((item) =>
+        item.id === queueItemId
+          ? {
+            ...item,
+            name: nextName,
+          }
+          : item,
+      ),
+    );
   }
 
   function onUploadDragEnter(event: React.DragEvent<HTMLLabelElement>) {
@@ -665,25 +938,19 @@ export default function Upload() {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(false);
-    const droppedFile = event.dataTransfer.files?.[0] || null;
-    onSelectFile(droppedFile);
+    onSelectFiles(event.dataTransfer.files);
   }
-
-  const progressLabel =
-    uploadPhase === "uploading"
-      ? "Step 1/2: Uploading file"
-      : "Step 2/2: Parsing + storing rows";
-  const progressPercentLabel =
-    uploadPhase === "processing"
-      ? `${uploadProgress.toFixed(1)}%`
-      : `${Math.round(uploadProgress)}%`;
-  const estimatedProcessedRows =
-    estimatedRows === null
-      ? null
-      : Math.min(
-        estimatedRows,
-        Math.max(0, Math.round((Math.max(0, Math.min(100, uploadProgress)) / 100) * estimatedRows)),
-      );
+  const hasPendingUploads = uploadQueue.some(
+    (item) => item.phase === "idle" || item.phase === "error",
+  );
+  const isQueueInProgress = useMemo(() => {
+    if (busy) {
+      return true;
+    }
+    return uploadQueue.some(
+      (item) => item.phase === "uploading" || item.phase === "processing",
+    );
+  }, [busy, uploadQueue]);
   const activeTableName =
     activeTableId !== null
       ? tables.find((table) => table.dataset_id === activeTableId)?.name || "Table"
@@ -760,7 +1027,7 @@ export default function Upload() {
   return (
     <div className="page page-stack">
       {toast && (
-        <div className="toast success">
+        <div key={toast.id} className="toast success">
           <span>{toast.message}</span>
         </div>
       )}
@@ -815,6 +1082,8 @@ export default function Upload() {
         </div>
       )}
 
+      {uploadQueue.length > 0 && <div className="upload-queue-backdrop" aria-hidden="true" />}
+
       <div className="hero">
         <div className="hero-title-row">
           <img src={logo} alt="TabulaRAG" className="hero-logo" />
@@ -825,8 +1094,10 @@ export default function Upload() {
         </div>
       </div>
 
-      <div className="panel upload-panel">
-        {!file ? (
+      <div
+        className={`panel upload-panel${uploadQueue.length > 0 ? " has-queue in-modal" : ""}`}
+      >
+        {uploadQueue.length === 0 ? (
           <label
             className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
             onDragEnter={onUploadDragEnter}
@@ -836,82 +1107,210 @@ export default function Upload() {
           >
             <input
               type="file"
+              multiple
               accept=".csv,.tsv"
-              onChange={(event) => onSelectFile(event.target.files?.[0] || null)}
+              onChange={(event) => {
+                onSelectFiles(event.target.files);
+                event.currentTarget.value = "";
+              }}
             />
             <div className="upload-icon" aria-hidden="true">
               <img src={uploadLogo} alt="" />
             </div>
-            <div className="upload-title">Choose a file or drag and drop it here</div>
-            <div className="upload-subtitle">Accepts .csv &amp; .tsv formats, up to 100 MB</div>
+            <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Start Uploading</div>
+            <div className="upload-subtitle">Supported file formats: .csv, .tsv</div>
           </label>
         ) : (
           <>
             <h2>Upload CSV/TSV</h2>
-            <div className="row">
+            <div className="row upload-queue-toolbar">
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 accept=".csv,.tsv"
-                onChange={(event) => onSelectFile(event.target.files?.[0] || null)}
+                onChange={(event) => {
+                  onSelectFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
                 className="file-input-hidden"
-              />
-              <input
-                ref={uploadNameInputRef}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                style={{ minWidth: 240 }}
-                disabled={busy}
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
                 type="button"
-                className="glass"
-                disabled={busy}
+                className="glass upload-add-more-button"
+                disabled={busy || isQueueInProgress}
               >
-                Change file
-              </button>
-              <button onClick={onUpload} disabled={!file || busy} className="primary" type="button">
-                {busy ? "Uploading..." : "Upload"}
+                <img src={plusIcon} alt="" aria-hidden="true" className="upload-add-icon" />
+                Add more files
               </button>
             </div>
-            <div className="small">Selected: {file.name}</div>
-            <div className="small">
-              Tip: You can rename the table by clicking on the above field before clicking 'Upload'.
+
+            <ul className="upload-queue-list" aria-label="Selected files for upload">
+              {uploadQueue.map((item, index) => {
+                const progressValue = Math.max(0, Math.min(100, item.progress));
+                const canEditQueuedName = item.phase === "idle" || item.phase === "error";
+                const queueNameIsEmpty = sanitizeTableNameInput(item.name).length === 0;
+                const queueNameIsDuplicate =
+                  !queueNameIsEmpty && isQueuedNameDuplicate(item.id, item.name);
+                const estimatedRowsText =
+                  item.estimatedRows === null ? "..." : item.estimatedRows.toLocaleString();
+                const estimatedColsText =
+                  item.estimatedCols === null ? "..." : item.estimatedCols.toLocaleString();
+                const processedRows =
+                  item.estimatedRows === null
+                    ? null
+                    : item.phase === "success"
+                      ? item.estimatedRows
+                      : Math.max(
+                        0,
+                        Math.min(
+                          item.estimatedRows,
+                          Math.round((progressValue / 100) * item.estimatedRows),
+                        ),
+                      );
+                const stateLabel =
+                  item.phase === "success"
+                    ? "Uploaded"
+                    : item.phase === "error"
+                      ? "Failed"
+                      : item.phase === "processing"
+                        ? "Processing"
+                        : item.phase === "uploading"
+                          ? "Uploading"
+                          : "In Queue";
+                const progressLabel =
+                  item.phase === "idle"
+                    ? null
+                    : item.phase === "error"
+                      ? "Failed"
+                      : item.phase === "success"
+                        ? "100%"
+                      : item.phase === "processing"
+                        ? `${progressValue.toFixed(1)}%`
+                        : `${Math.round(progressValue)}%`;
+                const rowsLabel =
+                  item.estimatedRows === null
+                    ? "Rows: estimating..."
+                    : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
+                const progressFillWidth =
+                  item.phase === "error" ? 100 : progressValue;
+                const progressFillClassName = `upload-progress-fill ${
+                  item.phase === "processing"
+                    ? "processing"
+                    : ""
+                } ${
+                  item.phase === "success"
+                    ? "success"
+                    : ""
+                } ${item.phase === "error" ? "error" : ""}`;
+
+                return (
+                  <li key={item.id} className={`upload-queue-item ${item.phase}`}>
+                    <div className="upload-queue-head compact">
+                      <span className="upload-queue-file-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" role="presentation">
+                          <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
+                        </svg>
+                      </span>
+                      <div className="upload-queue-file-text">
+                        <input
+                          ref={index === 0 && canEditQueuedName ? firstQueuedNameInputRef : null}
+                          type="text"
+                          className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
+                          value={item.name}
+                          onChange={(event) => {
+                            onChangeQueuedName(item.id, event.target.value);
+                          }}
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          placeholder="Enter table name"
+                          maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                          disabled={busy || !canEditQueuedName}
+                        />
+                        <div className="upload-queue-file-subtitle">
+                          {item.file.name} - {formatFileSize(item.file.size)} (
+                          {estimatedRowsText} rows, {estimatedColsText} cols){" "}
+                          <span className={`upload-queue-state ${item.phase}`}>{stateLabel}</span>
+                        </div>
+                      </div>
+                      <div className="upload-queue-right">
+                        {progressLabel && (
+                          <span className="upload-progress-percent upload-queue-percent">
+                            {progressLabel}
+                          </span>
+                        )}
+                      </div>
+                      {!isQueueInProgress && (
+                        <button
+                          type="button"
+                          className="upload-queue-remove"
+                          onClick={() => onRemoveQueuedFile(item.id)}
+                          aria-label={`Remove ${item.file.name}`}
+                          title="Remove file"
+                          disabled={busy}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                    {item.phase !== "idle" && (
+                      <div className="upload-progress-track upload-queue-track compact">
+                        <div
+                          className={progressFillClassName}
+                          style={{
+                            width: `${progressFillWidth}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                    {item.phase !== "idle" && (
+                      <div className="upload-queue-rows">{rowsLabel}</div>
+                    )}
+                    {queueNameIsEmpty && canEditQueuedName && (
+                      <p className="small error upload-queue-error">Table name cannot be empty.</p>
+                    )}
+                    {queueNameIsDuplicate && canEditQueuedName && (
+                      <p className="small error upload-queue-error">
+                        Name already exists, please choose a different name.
+                      </p>
+                    )}
+                    {item.error && <p className="small error upload-queue-error">{item.error}</p>}
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="upload-queue-footer">
+              <div className="small">
+                Tip: You can rename each table before clicking 'Upload all files'.
+              </div>
+              {!isQueueInProgress && (
+                <div className="upload-queue-footer-actions">
+                  <button
+                    type="button"
+                    className="glass upload-cancel-all-button"
+                    onClick={onCancelAllQueuedFiles}
+                    disabled={busy}
+                  >
+                    Cancel all
+                  </button>
+                  <button
+                    onClick={onUpload}
+                    disabled={!hasPendingUploads || busy}
+                    className="primary"
+                    type="button"
+                  >
+                    {busy ? "Uploading..." : "Upload all files"}
+                  </button>
+                </div>
+              )}
             </div>
           </>
         )}
 
         {err && <p className="error">{err}</p>}
         {reloadNotice && <p className="small status-info">{reloadNotice}</p>}
-        {busy && (
-          <div className="upload-progress" role="status" aria-live="polite">
-            <div className="upload-progress-head">
-              <span className="upload-progress-label">{progressLabel}</span>
-              <span className="upload-progress-percent">{progressPercentLabel}</span>
-            </div>
-            <div className="upload-progress-track">
-              <div
-                className={`upload-progress-fill ${uploadPhase === "processing" ? "processing" : ""
-                  }`}
-                style={{ width: `${Math.max(0, Math.min(100, uploadProgress))}%` }}
-              />
-            </div>
-            <div className="upload-progress-meta">
-              {uploadPhase === "uploading"
-                ? "Transferring file to backend..."
-                : "Normalizing cells and writing rows..."}
-            </div>
-            <div className="upload-progress-rows">
-              {estimatedRows === null || estimatedProcessedRows === null
-                ? "Rows: estimating..."
-                : `Rows: ${estimatedProcessedRows.toLocaleString()} / ${estimatedRows.toLocaleString()}`}
-            </div>
-          </div>
-        )}
         {status && !err && <p className="small status-info">{status}</p>}
       </div>
 
@@ -980,16 +1379,15 @@ export default function Upload() {
                     </button>
 
                     <div
-                      className={`list-item ${
-                        activeTableId === table.dataset_id ? "selected" : ""
-                      }`}
+                      className={`list-item ${activeTableId === table.dataset_id ? "selected" : ""
+                        }`}
                     >
                       {editingId === table.dataset_id ? (
                         <input
                           ref={renameInputRef}
                           value={editingName}
                           onChange={(event) => {
-                            setEditingName(event.target.value);
+                            setEditingName(sanitizeTableNameInput(event.target.value));
                             if (renameHintId === table.dataset_id) {
                               setRenameHintId(null);
                             }
@@ -999,12 +1397,12 @@ export default function Upload() {
                               void onRename(table.dataset_id);
                             }
                           }}
-                          className={`rename-input ${
-                            renameHintId === table.dataset_id ? "invalid" : ""
-                          }`}
+                          className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
+                            }`}
                           autoCapitalize="none"
                           autoCorrect="off"
                           spellCheck={false}
+                          maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
                           placeholder={
                             renameHintId === table.dataset_id
                               ? "Name cannot be empty."

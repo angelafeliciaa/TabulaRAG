@@ -224,6 +224,52 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  height: 460px;
+  overflow: hidden;
+}
+
+.upload-queue-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(6, 12, 22, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.upload-panel.in-modal {
+  position: fixed;
+  z-index: 21;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(980px, calc(100vw - 36px));
+  height: min(78vh, 760px);
+}
+
+.upload-queue-toolbar {
+  justify-content: flex-start;
+}
+
+.upload-add-more-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  line-height: 1;
+}
+
+.upload-add-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: 0 0 15px;
+  object-fit: contain;
+}
+
+:root[data-theme="dark"] .upload-add-icon {
+  filter: brightness(0) invert(1);
 }
 
 .upload-drop {
@@ -255,6 +301,11 @@ h3 {
 
 .upload-drop input {
   display: none;
+}
+
+.upload-panel:not(.has-queue) .upload-drop {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .upload-icon {
@@ -345,6 +396,18 @@ h3 {
   animation: uploadProgressFlow 1.3s linear infinite;
 }
 
+.upload-progress-fill.success {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.upload-progress-fill.queued {
+  background: linear-gradient(90deg, #94a3b8, #64748b);
+}
+
+.upload-progress-fill.error {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+}
+
 @keyframes uploadProgressFlow {
   from {
     background-position: 0 0;
@@ -364,6 +427,212 @@ h3 {
   font-size: 12px;
   color: var(--text);
   font-weight: 600;
+}
+
+.upload-queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-panel.has-queue .upload-queue-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.upload-queue-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev-2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.upload-queue-item.success {
+  border-color: rgba(34, 197, 94, 0.42);
+}
+
+.upload-queue-item.error {
+  border-color: rgba(239, 68, 68, 0.44);
+}
+
+.upload-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.upload-queue-head.compact {
+  min-height: 32px;
+}
+
+.upload-queue-file-icon {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+:root[data-theme="dark"] .upload-queue-file-icon {
+  color: #9aa3b2;
+}
+
+.upload-queue-file-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+.upload-queue-file-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.upload-queue-name-input {
+  width: 100%;
+  height: 32px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.upload-queue-name-input.invalid {
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.upload-queue-file-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-queue-right {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 44px;
+  gap: 8px;
+}
+
+.upload-queue-remove {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.04);
+  color: #dc2626;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 0.9;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+}
+
+.upload-queue-remove:hover,
+.upload-queue-remove:focus {
+  transform: none;
+  box-shadow: none;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(220, 38, 38, 0.75);
+  color: #b91c1c;
+}
+
+.upload-queue-state {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.upload-queue-state.uploading,
+.upload-queue-state.processing {
+  color: #2563eb;
+}
+
+.upload-queue-state.success {
+  color: #16a34a;
+}
+
+.upload-queue-state.error {
+  color: #dc2626;
+}
+
+.upload-queue-track {
+  height: 8px;
+}
+
+.upload-queue-track.compact {
+  height: 5px;
+}
+
+.upload-queue-percent {
+  font-size: 11px;
+}
+
+.upload-queue-rows {
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.upload-queue-error {
+  margin: 0;
+  font-size: 11px;
+}
+
+.upload-queue-footer {
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-queue-footer .small {
+  margin: 0;
+}
+
+.upload-queue-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.upload-cancel-all-button {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #dc2626;
+}
+
+.upload-cancel-all-button:hover,
+.upload-cancel-all-button:focus {
+  border-color: rgba(220, 38, 38, 0.65);
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.08);
 }
 
 .toast {
@@ -398,6 +667,8 @@ h3 {
   justify-content: center;
   padding: 18px;
   background: rgba(6, 12, 22, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .confirm-modal {
@@ -838,10 +1109,10 @@ ul {
 }
 
 .tables-scroll {
-    /* Keep exactly about 3 rows visible; rest is scrollable. */
-    max-height: 116px;
-    overflow: auto;
-    padding: 6px 4px 2px 2px;
+  /* Keep about 2 rows visible; rest is scrollable. */
+  max-height: 88px;
+  overflow: auto;
+  padding: 6px 4px 2px 2px;
 }
 
 .tables-header-row {
@@ -1781,6 +2052,21 @@ tr:hover td {
 }
 
 @media (max-width: 720px) {
+  .upload-panel.in-modal {
+    width: calc(100vw - 20px);
+    height: min(84vh, 680px);
+  }
+
+  .upload-queue-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .upload-queue-footer-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .page {
     padding-top: 72px;
   }
