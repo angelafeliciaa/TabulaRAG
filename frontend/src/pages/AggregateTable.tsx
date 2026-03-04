@@ -12,7 +12,6 @@ export default function VirtualTableView() {
   const location = useLocation();
   const [data, setData] = useState<AggregateResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [highlightIndex, setHighlightIndex] = useState<number>(0);
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
 
@@ -20,7 +19,7 @@ export default function VirtualTableView() {
     const params = new URLSearchParams(location.search);
     const encoded = params.get("q");
     if (!encoded) {
-      setErr("Missing query parameter.");
+      setErr("This URL is not valid or no longer valid");
       return;
     }
 
@@ -30,34 +29,43 @@ export default function VirtualTableView() {
       metric_column?: string;
       group_by?: string;
       filters?: unknown[];
-      highlight_index?: number;
       limit?: number;
     };
 
     try {
       payload = JSON.parse(atob(encoded));
     } catch {
-      setErr("Invalid query parameter.");
+      setErr("This URL is not valid or no longer valid");
       return;
     }
-
-    setHighlightIndex(payload.highlight_index ?? 0);
 
     aggregate(payload)
       .then((result: AggregateResponse) => {
         setData(result);
 
-        // Build columns
+        const operationLabel = payload.operation.charAt(0).toUpperCase() + payload.operation.slice(1);
+        const metricCol = result.metric_column ?? "aggregate_value";
+        
+        // build filter suffix e.g. "where Country = India"
+        const filterParts = payload.filters
+          ? (payload.filters as { column: string; operator: string; value: string }[])
+              .map((f) => `${f.column} ${f.operator} ${f.value}`)
+              .join(", ")
+          : null;
+        
+        const metricColLabel = filterParts
+          ? `${operationLabel} of ${metricCol} (${filterParts})`
+          : `${operationLabel} of ${metricCol}`;
+
         const cols: string[] = [];
         if (result.group_by_column) cols.push(result.group_by_column);
-        cols.push(result.metric_column ?? "aggregate_value");
+        cols.push(metricColLabel);
         setColumns(cols);
 
-        // Build rows — remap group_value/aggregate_value to real column names
         const remapped = result.rowsResult.map((row) => {
           const r: Record<string, unknown> = {};
           if (result.group_by_column) r[result.group_by_column] = row.group_value;
-          r[result.metric_column ?? "aggregate_value"] = row.aggregate_value;
+          r[metricColLabel] = row.aggregate_value;
           return r;
         });
         setRows(remapped);
@@ -89,7 +97,6 @@ export default function VirtualTableView() {
           <DataTable
             columns={columns}
             rows={rows}
-            highlight={{ rows: [highlightIndex], cols: columns }}
           />
         </div>
       )}

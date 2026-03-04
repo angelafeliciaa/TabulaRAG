@@ -161,8 +161,15 @@ class HighlightResponse(BaseModel):
     value: Any
     row_context: Dict[str, Any]
 
+
 PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
-def build_virtual_table_url(body: AggregateRequest, highlight_index: int = 0) -> str:
+def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) -> str:
+    if body.operation == "max":
+        highlight_index = 0
+    elif body.operation == "min":
+        highlight_index = len(rows) - 1
+    else:
+        highlight_index = 0
     payload = {
         "dataset_id": body.dataset_id,
         "operation": body.operation,
@@ -374,8 +381,8 @@ def aggregate_dataset(body: AggregateRequest):
             item["group_value"] = None
         rows.append(item)
 
-    url = build_virtual_table_url(body, highlight_index=0) if rows else None
-
+    url = build_virtual_table_url(body, rows) if rows else None
+    
     return AggregateResponse(
         dataset_id=body.dataset_id,
         metric_column=body.metric_column,
