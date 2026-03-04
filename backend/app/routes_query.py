@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context, smart_query
 from app.routes_tables import list_tables,get_cols_for_dataset
