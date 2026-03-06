@@ -8,6 +8,7 @@ export type TableRow = Record<string, unknown>;
 export interface TableSummary {
   dataset_id: number;
   name: string;
+  description: string | null;
   source_filename: string | null;
   row_count: number;
   column_count: number;
@@ -103,6 +104,7 @@ export async function uploadTable(
   file: File,
   name: string,
   onProgress?: (progress: UploadProgress) => void,
+  description?: string,
 ): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
@@ -111,6 +113,11 @@ export async function uploadTable(
   const trimmed = name.trim();
   if (trimmed) {
     form.append("dataset_name", trimmed);
+  }
+
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    form.append("description", trimmedDescription);
   }
 
   return await new Promise<IngestResponse>((resolve, reject) => {
@@ -277,7 +284,7 @@ export async function deleteTable(
 export async function renameTable(
   datasetId: number,
   name: string,
-): Promise<{ name: string }> {
+): Promise<{ name: string; description: string | null }> {
   const res = await fetch(`${API_BASE}/tables/${datasetId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -286,7 +293,22 @@ export async function renameTable(
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return (await res.json()) as { name: string };
+  return (await res.json()) as { name: string; description: string | null };
+}
+
+export async function updateTableDescription(
+  datasetId: number,
+  description: string,
+): Promise<{ name: string; description: string | null }> {
+  const res = await fetch(`${API_BASE}/tables/${datasetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as { name: string; description: string | null };
 }
 
 export async function getServerStatus(): Promise<{ status: ServerStatus }> {

@@ -15,7 +15,8 @@ router = APIRouter()
 
 
 class RenameRequest(BaseModel):
-    name: str
+    name: str | None = None
+    description: str | None = None
 
 
 def _normalize_row_data(raw: Any) -> Dict[str, Any]:
@@ -55,6 +56,7 @@ def list_tables():
             {
                 "dataset_id": d.id,
                 "name": d.name,
+                "description": d.description,
                 "source_filename": d.source_filename,
                 "row_count": d.row_count,
                 "column_count": d.column_count,
@@ -235,11 +237,14 @@ def delete_table(dataset_id: int, background_tasks: BackgroundTasks):
 
 
 @router.patch("/tables/{dataset_id}", include_in_schema=False)
-def rename_table(dataset_id: int, body: RenameRequest):
+def update_table(dataset_id: int, body: RenameRequest):
     with SessionLocal() as db:
         dataset = db.get(Dataset, dataset_id)
         if not dataset:
             raise HTTPException(status_code=404, detail="Table not found")
-        dataset.name = normalize_dataset_name_or_raise(body.name)
+        if body.name is not None:
+            dataset.name = normalize_dataset_name_or_raise(body.name)
+        if body.description is not None:
+            dataset.description = body.description.strip() if body.description.strip() else None
         db.commit()
-        return {"name": dataset.name}
+        return {"name": dataset.name, "description": dataset.description}

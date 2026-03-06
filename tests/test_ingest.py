@@ -121,6 +121,111 @@ def test_db_rows_stored(client, test_engine):
     assert data == {"name": "Alice", "age": "30"}
 
 
+# ── Description field ────────────────────────────────────────────────────────
+
+def test_ingest_with_description(client):
+    response = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "described_table", "description": "Sales data for Q1 2024"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "described_table"
+
+
+def test_ingest_without_description(client):
+    response = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "no_desc_table"},
+    )
+    assert response.status_code == 200
+
+
+def test_description_stored_in_db(client, test_engine):
+    client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "desc_db_test", "description": "Test description"},
+    )
+    with test_engine.connect() as conn:
+        row = conn.execute(text("SELECT description FROM datasets WHERE name = 'desc_db_test'")).fetchone()
+    assert row is not None
+    assert row.description == "Test description"
+
+
+def test_description_null_when_omitted(client, test_engine):
+    client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "no_desc_db_test"},
+    )
+    with test_engine.connect() as conn:
+        row = conn.execute(text("SELECT description FROM datasets WHERE name = 'no_desc_db_test'")).fetchone()
+    assert row is not None
+    assert row.description is None
+
+
+def test_description_in_list_tables(client):
+    client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "list_desc_test", "description": "A test table"},
+    )
+    response = client.get("/tables")
+    assert response.status_code == 200
+    tables = response.json()
+    table = next(t for t in tables if t["name"] == "list_desc_test")
+    assert table["description"] == "A test table"
+
+
+def test_update_description_via_patch(client):
+    resp = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "patch_desc_test"},
+    )
+    dataset_id = resp.json()["dataset_id"]
+    patch_resp = client.patch(
+        f"/tables/{dataset_id}",
+        json={"description": "Updated description"},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["description"] == "Updated description"
+
+
+def test_clear_description_via_patch(client):
+    resp = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "clear_desc_test", "description": "Initial desc"},
+    )
+    dataset_id = resp.json()["dataset_id"]
+    patch_resp = client.patch(
+        f"/tables/{dataset_id}",
+        json={"description": "  "},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["description"] is None
+
+
+def test_patch_name_only_preserves_description(client):
+    resp = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "preserve_desc", "description": "Keep me"},
+    )
+    dataset_id = resp.json()["dataset_id"]
+    patch_resp = client.patch(
+        f"/tables/{dataset_id}",
+        json={"name": "renamed_preserve"},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["name"] == "renamed_preserve"
+    assert patch_resp.json()["description"] == "Keep me"
+
+
 # ── Error cases ───────────────────────────────────────────────────────────────
 
 def test_empty_file(client):

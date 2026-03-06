@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, Index
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -10,6 +10,7 @@ class Dataset(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True, default=None)
     source_filename = Column(String(512), nullable=True)
     delimiter = Column(String(8), nullable=False, default=",")
     has_header = Column(Boolean, nullable=False, default=True)

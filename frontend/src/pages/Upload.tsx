@@ -6,6 +6,7 @@ import {
   listIndexStatus,
   listTables,
   renameTable,
+  updateTableDescription,
   type TableIndexStatus,
   type UploadProgress,
   type TableSlice,
@@ -32,6 +33,7 @@ type UploadQueueItem = {
   id: string;
   file: File;
   name: string;
+  description: string;
   progress: number;
   phase: UploadQueuePhase;
   estimatedRows: number | null;
@@ -195,6 +197,8 @@ export default function Upload() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
+  const [editingDescriptionId, setEditingDescriptionId] = useState<number | null>(null);
+  const [editingDescription, setEditingDescription] = useState("");
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -650,7 +654,7 @@ export default function Upload() {
                   : current,
               ),
             );
-          });
+          }, item.description);
 
           successCount += 1;
           lastUploadedDatasetId = result.dataset_id;
@@ -804,6 +808,27 @@ export default function Upload() {
     }
   }
 
+  async function onSaveDescription(datasetId: number) {
+    const trimmed = editingDescription.trim();
+    const currentTable = tables.find((t) => t.dataset_id === datasetId);
+    const currentDescription = currentTable?.description || "";
+
+    if (trimmed === currentDescription) {
+      setEditingDescriptionId(null);
+      setEditingDescription("");
+      return;
+    }
+
+    try {
+      await updateTableDescription(datasetId, trimmed);
+      setEditingDescriptionId(null);
+      setEditingDescription("");
+      await refresh();
+    } catch (error: unknown) {
+      setErr(getErrorMessage(error));
+    }
+  }
+
   function validateSelectedFile(nextFile: File): string | null {
     const lowerName = nextFile.name.toLowerCase();
     if (!(lowerName.endsWith(".csv") || lowerName.endsWith(".tsv"))) {
@@ -852,6 +877,7 @@ export default function Upload() {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         file: nextFile,
         name: uniqueName,
+        description: "",
         progress: 0,
         phase: "idle",
         estimatedRows: null,
@@ -1283,6 +1309,24 @@ export default function Upload() {
                           maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
                           disabled={busy || !canEditQueuedName}
                         />
+                        <input
+                          type="text"
+                          className="upload-queue-description-input"
+                          value={item.description}
+                          onChange={(event) => {
+                            const nextDescription = event.target.value;
+                            setUploadQueue((previous) =>
+                              previous.map((current) =>
+                                current.id === item.id
+                                  ? { ...current, description: nextDescription }
+                                  : current,
+                              ),
+                            );
+                          }}
+                          placeholder="Add a description (optional)"
+                          maxLength={500}
+                          disabled={busy || !canEditQueuedName}
+                        />
                         <div className="upload-queue-file-subtitle">
                           {item.file.name} - {formatFileSize(item.file.size)} (
                           {estimatedRowsText} rows, {estimatedColsText} cols){" "}
@@ -1525,6 +1569,47 @@ export default function Upload() {
                           <span className="uploaded-table-name">{table.name}</span>{" "}
                           <span className="small uploaded-table-meta">
                             ({table.row_count} rows, {table.column_count} cols)
+                          </span>
+                        </button>
+                      )}
+                      {editingDescriptionId === table.dataset_id ? (
+                        <input
+                          type="text"
+                          className="description-input"
+                          value={editingDescription}
+                          onChange={(event) => {
+                            setEditingDescription(event.target.value);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              void onSaveDescription(table.dataset_id);
+                            }
+                            if (event.key === "Escape") {
+                              setEditingDescriptionId(null);
+                              setEditingDescription("");
+                            }
+                          }}
+                          onBlur={() => {
+                            void onSaveDescription(table.dataset_id);
+                          }}
+                          placeholder="Add a description (optional)"
+                          maxLength={500}
+                          disabled={busy}
+                          autoFocus
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="description-display"
+                          onClick={() => {
+                            setEditingDescriptionId(table.dataset_id);
+                            setEditingDescription(table.description || "");
+                          }}
+                          disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
+                          title={table.description || "Click to add a description"}
+                        >
+                          <span className={`description-text ${table.description ? "" : "placeholder"}`}>
+                            {table.description || "Add description..."}
                           </span>
                         </button>
                       )}

@@ -296,6 +296,7 @@ def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     has_header: bool = Form(True),
+    description: str | None = Form(None),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
@@ -310,6 +311,7 @@ def ingest_table(
     with SessionLocal() as db:
         dataset = Dataset(
             name=dataset_display_name,
+            description=description.strip() if description and description.strip() else None,
             source_filename=file.filename,
             delimiter=detected_delimiter,
             has_header=has_header,
