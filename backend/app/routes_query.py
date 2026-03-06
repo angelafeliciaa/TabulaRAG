@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context, smart_query
 from app.routes_tables import list_tables,get_cols_for_dataset
 from app.db import SessionLocal
+from app.typed_values import strip_internal_fields
 
 router = APIRouter()
 
@@ -21,6 +22,7 @@ FilterOperator = Literal[
     "<",
     "<=",
     "LIKE",
+    "NOT LIKE",
     "IN",
     "BETWEEN",
     "IS NULL",
@@ -59,6 +61,9 @@ def _build_where_clauses(
     if not filters:
         return where_clauses
 
+    filter_expressions: List[str] = []
+    filter_joiners: List[str] = []
+
     for i, f in enumerate(filters):
         if f.column not in valid_columns:
             raise HTTPException(400, detail=f"Invalid filter column: {f.column}")
@@ -67,12 +72,11 @@ def _build_where_clauses(
         vp = f"fval_{i}"
         params[kp] = f.column
         col = col_expr(kp)
+        current_expr = ""
 
         if f.operator in ("IS NULL", "IS NOT NULL"):
-            where_clauses.append(f"{col} {f.operator}")
-            continue
-
-        if f.operator == "IN":
+            current_expr = f"{col} {f.operator}"
+        elif f.operator == "IN":
             if not f.value:
                 raise HTTPException(
                     status_code=400,
@@ -87,10 +91,8 @@ def _build_where_clauses(
             in_params = {f"fval_{i}_{j}": v for j, v in enumerate(values)}
             params.update(in_params)
             placeholders = ", ".join(f":{k}" for k in in_params)
-            where_clauses.append(f"{col} IN ({placeholders})")
-            continue
-
-        if f.operator == "BETWEEN":
+            current_expr = f"{col} IN ({placeholders})"
+        elif f.operator == "BETWEEN":
             if not f.value:
                 raise HTTPException(
                     status_code=400,
@@ -113,28 +115,39 @@ def _build_where_clauses(
             high_key = f"fval_{i}_high"
             params[low_key] = parts[0]
             params[high_key] = parts[1]
-            where_clauses.append(
-                f"NULLIF(TRIM({col}), '')::double precision BETWEEN :{low_key}::double precision AND :{high_key}::double precision"
-            )
-            continue
-
-        if f.value is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
-            )
-
-        if f.operator == "LIKE":
-            params[vp] = f.value
-            where_clauses.append(f"{col} LIKE :{vp}")
-        elif f.operator in (">", ">=", "<", "<="):
-            params[vp] = f.value
-            where_clauses.append(
-                f"NULLIF(TRIM({col}), '')::double precision {f.operator} :{vp}::double precision"
+            current_expr = (
+                f"NULLIF(TRIM({col}), '')::double precision BETWEEN "
+                f"CAST(:{low_key} AS double precision) AND CAST(:{high_key} AS double precision)"
             )
         else:
-            params[vp] = f.value
-            where_clauses.append(f"{col} {f.operator} :{vp}")
+            if f.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
+                )
+
+            if f.operator in ("LIKE", "NOT LIKE"):
+                params[vp] = f.value
+                current_expr = f"{col} {f.operator} :{vp}"
+            elif f.operator in (">", ">=", "<", "<="):
+                params[vp] = f.value
+                current_expr = (
+                    f"NULLIF(TRIM({col}), '')::double precision {f.operator} CAST(:{vp} AS double precision)"
+                )
+            else:
+                params[vp] = f.value
+                current_expr = f"{col} {f.operator} :{vp}"
+
+        filter_expressions.append(current_expr)
+        if i > 0:
+            filter_joiners.append(f.logical_operator.upper())
+
+    if filter_expressions:
+        combined = filter_expressions[0]
+        for i in range(1, len(filter_expressions)):
+            joiner = filter_joiners[i - 1]
+            combined = f"({combined} {joiner} {filter_expressions[i]})"
+        where_clauses.append(combined)
 
     return where_clauses
 
@@ -147,6 +160,7 @@ class FilterCondition(BaseModel):
     column: str
     operator: FilterOperator
     value: Optional[str] = None  # None for IS NULL / IS NOT NULL
+    logical_operator: Literal["AND", "OR"] = "AND"
 
 
 class HighlightItem(BaseModel):
@@ -556,7 +570,13 @@ def filter_dataset(body: FilterRequest):
         rows_raw = db.execute(text(sql), params).mappings().all()
         row_count_raw = db.execute(text(count_sql), params).scalar_one()
 
-    rows = [dict(r) for r in rows_raw]
+    rows: List[Dict[str, Any]] = []
+    for r in rows_raw:
+        item = dict(r)
+        row_data = item.get("row_data")
+        if isinstance(row_data, dict):
+            item["row_data"] = strip_internal_fields(row_data)
+        rows.append(item)
     url = build_filter_virtual_table_url(body) if row_count_raw else None
 
     return FilterResponse(

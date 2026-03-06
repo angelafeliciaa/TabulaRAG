@@ -437,6 +437,66 @@ def test_filter_between_numeric(client):
     assert names == ["B", "C"]
 
 
+def test_filter_not_like(client):
+    csv_content = (
+        b"city\n"
+        b"Paris\n"
+        b"Tokyo\n"
+        b"Berlin\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("cities.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/filter",
+        json={
+            "dataset_id": dataset_id,
+            "filters": [{"column": "city", "operator": "NOT LIKE", "value": "%is"}],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    cities = [row["row_data"]["city"] for row in data["rowsResult"]]
+    assert cities == ["Tokyo", "Berlin"]
+
+
+def test_filter_or_conditions(client):
+    csv_content = (
+        b"city,year_listed\n"
+        b"Paris,2010\n"
+        b"London,2014\n"
+        b"Rome,2008\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("listings.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/filter",
+        json={
+            "dataset_id": dataset_id,
+            "filters": [
+                {"column": "city", "operator": "=", "value": "Paris"},
+                {
+                    "column": "year_listed",
+                    "operator": ">",
+                    "value": "2012",
+                    "logical_operator": "OR",
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    cities = [row["row_data"]["city"] for row in data["rowsResult"]]
+    assert cities == ["Paris", "London"]
+
+
 def test_filter_dataset_not_found(client):
     resp = client.post(
         "/filter",
