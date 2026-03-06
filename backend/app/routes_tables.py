@@ -89,7 +89,14 @@ def get_cols_for_dataset(dataset_id: int):
 
     return {
         "dataset_id": dataset_id,
-        "columns": [{"column_index": c.column_index, "name": c.name} for c in columns],
+        "columns": [
+            {
+                "column_index": c.column_index,
+                "name": c.name,
+                "normalized_name": c.normalized_name,
+            }
+            for c in columns
+        ],
     }
 
 

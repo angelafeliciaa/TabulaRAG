@@ -3,7 +3,7 @@ import io
 import json
 import logging
 import os
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Tuple
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,7 @@ from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
-from app.typed_values import normalize_row_obj
+from app.typed_values import normalize_row_obj, normalize_column_name
 from app.name_guard import normalize_dataset_name_or_raise
 
 
@@ -109,9 +109,10 @@ def validate_filename(filename: str) -> None:
 
 
 # normalizes header names by stripping whitespace, replacing empty names with col_{index}, and ensuring uniqueness by appending _{count} to duplicates
-def _normalize_headers(headers: List[str]) -> List[str]:
+def _normalize_headers(headers: List[str]) -> Tuple[List[str], List[str]]:
+    """Return (display_headers, normalized_headers)."""
     seen = {}
-    normalized = []
+    display = []
     for idx, header in enumerate(headers):
         base = (header or "").strip()
         if not base:
@@ -122,8 +123,21 @@ def _normalize_headers(headers: List[str]) -> List[str]:
             key = f"{base}_{seen[base]}"
         else:
             seen[key] = 1
-        normalized.append(key)
-    return normalized
+        display.append(key)
+
+    normalized = [normalize_column_name(h) for h in display]
+    # Ensure normalized names are unique by appending _N for duplicates
+    norm_seen: dict[str, int] = {}
+    unique_normalized = []
+    for n in normalized:
+        if n in norm_seen:
+            norm_seen[n] += 1
+            unique_normalized.append(f"{n}_{norm_seen[n]}")
+        else:
+            norm_seen[n] = 1
+            unique_normalized.append(n)
+
+    return display, unique_normalized
 
 
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
@@ -140,7 +154,8 @@ def _detect_delimiter(filename: str | None) -> str:
 def _iter_rows(
     upload: UploadFile,
     has_header: bool,
-) -> Tuple[List[str], Iterable[List[str]], str]:
+) -> Tuple[List[str], List[str], Iterable[List[str]], str]:
+    """Return (display_headers, normalized_headers, rows_iter, delimiter)."""
     validate_filename(upload.filename or "")
     detected_delimiter = _detect_delimiter(upload.filename)
     if detected_delimiter not in [",", "\t"]:
@@ -158,10 +173,12 @@ def _iter_rows(
         raise HTTPException(status_code=400, detail="Empty file.")
 
     if has_header:
-        headers = _normalize_headers(first_row)
+        headers, normalized_headers = _normalize_headers(first_row)
         rows_iter = reader
     else:
-        headers = _normalize_headers([f"col_{i + 1}" for i in range(len(first_row))])
+        headers, normalized_headers = _normalize_headers(
+            [f"col_{i + 1}" for i in range(len(first_row))]
+        )
 
         def row_iter() -> Iterable[List[str]]:
             yield first_row
@@ -169,17 +186,18 @@ def _iter_rows(
 
         rows_iter = row_iter()
 
-    return headers, rows_iter, detected_delimiter
+    return headers, normalized_headers, rows_iter, detected_delimiter
 
 
-def _build_row_obj(headers: List[str], row: List[str]) -> dict:
-    return normalize_row_obj(headers, row)
+def _build_row_obj(headers: List[str], row: List[str], normalized_headers: Optional[List[str]] = None) -> dict:
+    return normalize_row_obj(headers, row, normalized_headers=normalized_headers)
 
 
 def _insert_rows_postgres_copy(
     dataset_id: int,
     headers: List[str],
     rows_iter: Iterable[List[str]],
+    normalized_headers: Optional[List[str]] = None,
 ) -> int:
     """Fast path for PostgreSQL ingestion using COPY."""
     row_count = 0
@@ -190,7 +208,7 @@ def _insert_rows_postgres_copy(
                 "COPY dataset_rows (dataset_id, row_index, row_data) FROM STDIN"
             ) as copy:
                 for row_index, row in enumerate(rows_iter):
-                    row_obj = _build_row_obj(headers, row)
+                    row_obj = _build_row_obj(headers, row, normalized_headers=normalized_headers)
                     copy.write_row(
                         (
                             dataset_id,
@@ -212,13 +230,14 @@ def _insert_rows_batched(
     dataset_id: int,
     headers: List[str],
     rows_iter: Iterable[List[str]],
+    normalized_headers: Optional[List[str]] = None,
 ) -> int:
     """Fallback ingestion path (works for SQLite and non-Postgres)."""
     row_count = 0
     with SessionLocal() as db:
         batch_rows = []
         for row_index, row in enumerate(rows_iter):
-            row_obj = _build_row_obj(headers, row)
+            row_obj = _build_row_obj(headers, row, normalized_headers=normalized_headers)
             batch_rows.append(
                 {
                     "dataset_id": dataset_id,
@@ -301,7 +320,7 @@ def ingest_table(
         raise HTTPException(status_code=400, detail="Missing filename.")
     validate_filename(file.filename)
 
-    headers, rows_iter, detected_delimiter = _iter_rows(file, has_header)
+    headers, normalized_headers, rows_iter, detected_delimiter = _iter_rows(file, has_header)
 
     dataset_display_name = normalize_dataset_name_or_raise(
         dataset_name or os.path.splitext(file.filename)[0]
@@ -322,7 +341,12 @@ def ingest_table(
 
         db.add_all(
             [
-                DatasetColumn(dataset_id=dataset.id, column_index=i, name=col_name)
+                DatasetColumn(
+                    dataset_id=dataset.id,
+                    column_index=i,
+                    name=col_name,
+                    normalized_name=normalized_headers[i],
+                )
                 for i, col_name in enumerate(headers)
             ]
         )  # creates a DatasetColumn object for each header and adds them to the session, associating them with the dataset by dataset_id
@@ -335,9 +359,9 @@ def ingest_table(
     row_count = 0
     try:
         if engine.dialect.name == "postgresql":
-            row_count = _insert_rows_postgres_copy(dataset_id, headers, rows_iter)
+            row_count = _insert_rows_postgres_copy(dataset_id, headers, rows_iter, normalized_headers=normalized_headers)
         else:
-            row_count = _insert_rows_batched(dataset_id, headers, rows_iter)
+            row_count = _insert_rows_batched(dataset_id, headers, rows_iter, normalized_headers=normalized_headers)
     except Exception as exc:
         with SessionLocal() as db:
             db.execute(text("DELETE FROM datasets WHERE id = :id"), {"id": dataset_id})
