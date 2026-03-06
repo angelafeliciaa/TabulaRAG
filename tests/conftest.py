@@ -57,3 +57,7 @@ def clean_tables(test_engine):
         conn.execute(text("DELETE FROM dataset_columns"))
         conn.execute(text("DELETE FROM datasets"))
         conn.commit()
+    # Also clear in-memory index job tracking between tests.
+    from app.index_jobs import _jobs, _lock
+    with _lock:
+        _jobs.clear()

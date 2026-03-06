@@ -51,6 +51,10 @@ def list_tables():
         datasets = (
             db.execute(select(Dataset).order_by(Dataset.id.desc())).scalars().all()
         )
+
+        dataset_ids = [d.id for d in datasets]
+        tracked_statuses = get_index_jobs(dataset_ids)
+
         return [
             {
                 "dataset_id": d.id,
@@ -61,6 +65,8 @@ def list_tables():
                 "created_at": d.created_at.isoformat(),
             }
             for d in datasets
+            if tracked_statuses.get(d.id, {}).get("state", "ready")
+            not in ("queued", "indexing")
         ]
 
 

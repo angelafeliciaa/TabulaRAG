@@ -1,5 +1,7 @@
 import io
 import json
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import text
 
@@ -144,3 +146,73 @@ def test_invalid_extension(client):
     )
     assert response.status_code == 400
     assert ".csv or .tsv" in response.json()["detail"]
+
+
+# ── GET /tables filtering ────────────────────────────────────────────────────
+
+def test_list_tables_excludes_indexing_datasets(client):
+    """GET /tables should not return datasets that are still being indexed."""
+    with patch("app.main._enqueue_index_job"):
+        response = client.post(
+            "/ingest",
+            files=make_csv("a,b\n1,2\n"),
+            data={"dataset_name": "pending_test"},
+        )
+    assert response.status_code == 200
+    dataset_id = response.json()["dataset_id"]
+
+    # Index job is queued but not processing, so it should be hidden
+    tables_response = client.get("/tables")
+    dataset_ids = [t["dataset_id"] for t in tables_response.json()]
+    assert dataset_id not in dataset_ids
+
+
+def test_list_tables_includes_ready_datasets(client):
+    """GET /tables should include datasets after indexing completes."""
+    from app.index_jobs import mark_index_job_ready
+
+    with patch("app.main._enqueue_index_job"):
+        response = client.post(
+            "/ingest",
+            files=make_csv("a,b\n1,2\n"),
+            data={"dataset_name": "ready_test"},
+        )
+    assert response.status_code == 200
+    dataset_id = response.json()["dataset_id"]
+    row_count = response.json()["rows"]
+
+    # Not visible while queued
+    tables_response = client.get("/tables")
+    dataset_ids = [t["dataset_id"] for t in tables_response.json()]
+    assert dataset_id not in dataset_ids
+
+    # Mark as ready
+    mark_index_job_ready(dataset_id, row_count)
+
+    # Now visible
+    tables_response = client.get("/tables")
+    dataset_ids = [t["dataset_id"] for t in tables_response.json()]
+    assert dataset_id in dataset_ids
+
+
+def test_list_tables_includes_error_datasets(client):
+    """GET /tables should include datasets with indexing errors so users can manage them."""
+    from app.index_jobs import mark_index_job_error
+
+    with patch("app.main._enqueue_index_job"):
+        response = client.post(
+            "/ingest",
+            files=make_csv("a,b\n1,2\n"),
+            data={"dataset_name": "error_test"},
+        )
+    assert response.status_code == 200
+    dataset_id = response.json()["dataset_id"]
+    row_count = response.json()["rows"]
+
+    # Mark as error
+    mark_index_job_error(dataset_id, row_count, "Indexing failed")
+
+    # Should be visible (so user can see/delete it)
+    tables_response = client.get("/tables")
+    dataset_ids = [t["dataset_id"] for t in tables_response.json()]
+    assert dataset_id in dataset_ids
