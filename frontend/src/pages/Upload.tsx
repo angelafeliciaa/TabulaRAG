@@ -1231,7 +1231,7 @@ export default function Upload() {
             <ul className="upload-queue-list" aria-label="Selected files for upload">
               {uploadQueue.map((item, index) => {
                 const progressValue = Math.max(0, Math.min(100, item.progress));
-                const canEditQueuedName = item.phase === "idle" || item.phase === "error";
+                const canEditQueuedFields = item.phase === "idle" || item.phase === "error";
                 const queueNameIsEmpty = sanitizeTableNameInput(item.name).length === 0;
                 const queueNameIsDuplicate =
                   !queueNameIsEmpty && isQueuedNameDuplicate(item.id, item.name);
@@ -1295,9 +1295,9 @@ export default function Upload() {
                       </span>
                       <div className="upload-queue-file-text">
                         <input
-                          ref={index === 0 && canEditQueuedName ? firstQueuedNameInputRef : null}
+                          ref={index === 0 && canEditQueuedFields ? firstQueuedNameInputRef : null}
                           type="text"
-                          className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
+                          className={`upload-queue-name-input ${canEditQueuedFields && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
                           value={item.name}
                           onChange={(event) => {
                             onChangeQueuedName(item.id, event.target.value);
@@ -1307,7 +1307,7 @@ export default function Upload() {
                           spellCheck={false}
                           placeholder="Enter table name"
                           maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                          disabled={busy || !canEditQueuedName}
+                          disabled={busy || !canEditQueuedFields}
                         />
                         <input
                           type="text"
@@ -1325,7 +1325,7 @@ export default function Upload() {
                           }}
                           placeholder="Add a description (optional)"
                           maxLength={500}
-                          disabled={busy || !canEditQueuedName}
+                          disabled={busy || !canEditQueuedFields}
                         />
                         <div className="upload-queue-file-subtitle">
                           {item.file.name} - {formatFileSize(item.file.size)} (
@@ -1366,10 +1366,10 @@ export default function Upload() {
                     {item.phase !== "idle" && (
                       <div className="upload-queue-rows">{rowsLabel}</div>
                     )}
-                    {queueNameIsEmpty && canEditQueuedName && (
+                    {queueNameIsEmpty && canEditQueuedFields && (
                       <p className="small error upload-queue-error">Table name cannot be empty.</p>
                     )}
-                    {queueNameIsDuplicate && canEditQueuedName && (
+                    {queueNameIsDuplicate && canEditQueuedFields && (
                       <p className="small error upload-queue-error">
                         Name already exists, please choose a different name.
                       </p>

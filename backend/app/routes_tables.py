@@ -14,7 +14,7 @@ from app.name_guard import normalize_dataset_name_or_raise
 router = APIRouter()
 
 
-class RenameRequest(BaseModel):
+class UpdateTableRequest(BaseModel):
     name: str | None = None
     description: str | None = None
 
@@ -237,7 +237,7 @@ def delete_table(dataset_id: int, background_tasks: BackgroundTasks):
 
 
 @router.patch("/tables/{dataset_id}", include_in_schema=False)
-def update_table(dataset_id: int, body: RenameRequest):
+def update_table(dataset_id: int, body: UpdateTableRequest):
     with SessionLocal() as db:
         dataset = db.get(Dataset, dataset_id)
         if not dataset:
