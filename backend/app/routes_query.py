@@ -30,6 +30,17 @@ FilterOperator = Literal[
 ]
 
 
+def _strip_money(value: str) -> str:
+    """Strip currency symbols and thousands separators from a user-supplied value, keeping numeric characters."""
+    import re
+    return re.sub(r"[^0-9.\-]", "", value)
+
+
+def _numeric_sql_expr(col: str) -> str:
+    """SQL expression that casts a text column to double precision after stripping currency/formatting chars."""
+    return f"NULLIF(REGEXP_REPLACE(TRIM({col}), '[^0-9.\\-]', '', 'g'), '')::double precision"
+
+
 def _sql_literal(value: Any) -> str:
     if value is None:
         return "NULL"
@@ -57,6 +68,12 @@ def _build_where_clauses(
 
     def col_expr(param_name: str) -> str:
         return f"(row_data::jsonb ->> :{param_name})"
+
+    def num_col_expr(param_name: str) -> str:
+        """Two-layer numeric expression: pre-parsed row_data_num first, then strip-and-cast fallback."""
+        from_num = f"NULLIF(TRIM((row_data_num::jsonb ->> :{param_name})), '')::double precision"
+        from_text = _numeric_sql_expr(col_expr(param_name))
+        return f"COALESCE({from_num}, {from_text})"
 
     if not filters:
         return where_clauses
@@ -113,10 +130,10 @@ def _build_where_clauses(
                 )
             low_key = f"fval_{i}_low"
             high_key = f"fval_{i}_high"
-            params[low_key] = parts[0]
-            params[high_key] = parts[1]
+            params[low_key] = _strip_money(parts[0])
+            params[high_key] = _strip_money(parts[1])
             current_expr = (
-                f"NULLIF(TRIM({col}), '')::double precision BETWEEN "
+                f"{num_col_expr(kp)} BETWEEN "
                 f"CAST(:{low_key} AS double precision) AND CAST(:{high_key} AS double precision)"
             )
         else:
@@ -130,9 +147,9 @@ def _build_where_clauses(
                 params[vp] = f.value
                 current_expr = f"{col} {f.operator} :{vp}"
             elif f.operator in (">", ">=", "<", "<="):
-                params[vp] = f.value
+                params[vp] = _strip_money(f.value)
                 current_expr = (
-                    f"NULLIF(TRIM({col}), '')::double precision {f.operator} CAST(:{vp} AS double precision)"
+                    f"{num_col_expr(kp)} {f.operator} CAST(:{vp} AS double precision)"
                 )
             else:
                 params[vp] = f.value
@@ -372,10 +389,10 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
 # ── Endpoints ──────────────────────────────────────────────────────
 
 @router.post(
-    "/query",
+    "/semantic_query",
     response_model=QueryResponse,
-    summary="Answer natural-language table queries",
-    description="Primary analytics endpoint. Use this instead of row-slice tools for sums/counts/top-N and precise citations.",
+    summary="Answer natural-language semantic table queries",
+    description="Use this when you need to answer a question with a semantic search.",
 )
 def query_dataset(body: QueryRequest):
     if _enforce_list_tables_first() and body.dataset_id is None:
@@ -457,11 +474,7 @@ def aggregate_dataset(body: AggregateRequest):
     else:
         params["metric_column"] = body.metric_column
         numeric_from_num_json = f"NULLIF(TRIM((row_data_num::jsonb ->> :metric_column)), '')::double precision"
-        numeric_from_text_json = (
-            "NULLIF("
-            f"REGEXP_REPLACE(TRIM({col_expr('metric_column')}), '[^0-9.\\-]', '', 'g')"
-            ", '')::double precision"
-        )
+        numeric_from_text_json = _numeric_sql_expr(col_expr("metric_column"))
         numeric_expr = f"COALESCE({numeric_from_num_json}, {numeric_from_text_json})"
         metric_sql = f"{body.operation.upper()}({numeric_expr})::double precision AS aggregate_value"
 
