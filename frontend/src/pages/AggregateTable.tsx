@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { aggregate, type AggregateResponse } from "../api";
+import {
+  aggregate,
+  filterRows,
+  type AggregateResponse,
+  type FilterResponse,
+} from "../api";
 import DataTable from "../components/DataTable";
 
 function getErrorMessage(error: unknown): string {
@@ -10,10 +15,36 @@ function getErrorMessage(error: unknown): string {
 
 export default function VirtualTableView() {
   const location = useLocation();
-  const [data, setData] = useState<AggregateResponse | null>(null);
+  const [aggregateData, setAggregateData] = useState<AggregateResponse | null>(null);
+  const [filterData, setFilterData] = useState<FilterResponse | null>(null);
+  const [mode, setMode] = useState<"aggregate" | "filter" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+
+  type AggregatePayload = {
+    dataset_id: number;
+    operation: string;
+    metric_column?: string;
+    group_by?: string;
+    filters?: unknown[];
+    limit?: number;
+  };
+
+  type FilterPayload = {
+    mode: "filter";
+    dataset_id: number;
+    filters?: unknown[];
+    limit?: number;
+    offset?: number;
+  };
+
+  function decodePayload(encoded: string): AggregatePayload | FilterPayload {
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = normalized.length % 4;
+    const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+    return JSON.parse(atob(padded));
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -23,36 +54,57 @@ export default function VirtualTableView() {
       return;
     }
 
-    let payload: {
-      dataset_id: number;
-      operation: string;
-      metric_column?: string;
-      group_by?: string;
-      filters?: unknown[];
-      limit?: number;
-    };
+    let payload: AggregatePayload | FilterPayload;
 
     try {
-      payload = JSON.parse(atob(encoded));
+      payload = decodePayload(encoded);
     } catch {
       setErr("This URL is not valid or no longer valid");
       return;
     }
 
+    if ("mode" in payload && payload.mode === "filter") {
+      filterRows(payload)
+        .then((result: FilterResponse) => {
+          setMode("filter");
+          setFilterData(result);
+          setAggregateData(null);
+
+          const columnSet = new Set<string>(["row_index"]);
+          for (const item of result.rowsResult) {
+            for (const key of Object.keys(item.row_data || {})) {
+              columnSet.add(key);
+            }
+          }
+          const cols = Array.from(columnSet);
+          setColumns(cols);
+
+          const mappedRows = result.rowsResult.map((item) => ({
+            row_index: item.row_index,
+            ...(item.row_data || {}),
+          }));
+          setRows(mappedRows);
+        })
+        .catch((error: unknown) => setErr(getErrorMessage(error)));
+      return;
+    }
+
     aggregate(payload)
       .then((result: AggregateResponse) => {
-        setData(result);
+        const aggregatePayload = payload as AggregatePayload;
+        setMode("aggregate");
+        setAggregateData(result);
+        setFilterData(null);
 
-        const operationLabel = payload.operation.charAt(0).toUpperCase() + payload.operation.slice(1);
+        const operationLabel = aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
         const metricCol = result.metric_column ?? "aggregate_value";
-        
-        // build filter suffix e.g. "where Country = India"
-        const filterParts = payload.filters
-          ? (payload.filters as { column: string; operator: string; value: string }[])
+
+        const filterParts = aggregatePayload.filters
+          ? (aggregatePayload.filters as { column: string; operator: string; value: string }[])
               .map((f) => `${f.column} ${f.operator} ${f.value}`)
               .join(", ")
           : null;
-        
+
         const metricColLabel = filterParts
           ? `${operationLabel} of ${metricCol} (${filterParts})`
           : `${operationLabel} of ${metricCol}`;
@@ -84,11 +136,13 @@ export default function VirtualTableView() {
   return (
     <div className="page-stack">
       <div className="card" style={{ marginBottom: 12 }}>
-        <div className="mono">Aggregate Result</div>
+        <div className="mono">{mode === "filter" ? "Filter Result" : "Aggregate Result"}</div>
         <div className="small">
-          {data?.group_by_column
-            ? `${data.metric_column} by ${data.group_by_column}`
-            : data?.metric_column}
+          {mode === "filter"
+            ? `${filterData?.row_count ?? 0} matching rows`
+            : aggregateData?.group_by_column
+              ? `${aggregateData.metric_column} by ${aggregateData.group_by_column}`
+              : aggregateData?.metric_column}
         </div>
       </div>
 

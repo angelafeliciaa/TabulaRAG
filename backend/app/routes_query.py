@@ -13,7 +13,19 @@ from app.db import SessionLocal
 
 router = APIRouter()
 
-FilterOperator = Literal["=", "!=", ">", ">=", "<", "<=", "LIKE", "IN", "IS NULL", "IS NOT NULL"]
+FilterOperator = Literal[
+    "=",
+    "!=",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "LIKE",
+    "IN",
+    "BETWEEN",
+    "IS NULL",
+    "IS NOT NULL",
+]
 
 
 def _sql_literal(value: Any) -> str:
@@ -32,6 +44,99 @@ def _render_sql(sql_template: str, params: Dict[str, Any]) -> str:
     for key in sorted(params.keys(), key=len, reverse=True):
         rendered = rendered.replace(f":{key}", _sql_literal(params[key]))
     return "\n".join(line.rstrip() for line in rendered.strip().splitlines())
+
+
+def _build_where_clauses(
+    filters: Optional[List["FilterCondition"]],
+    valid_columns: set[str],
+    params: Dict[str, Any],
+) -> List[str]:
+    where_clauses = ["dataset_id = :dataset_id"]
+
+    def col_expr(param_name: str) -> str:
+        return f"(row_data::jsonb ->> :{param_name})"
+
+    if not filters:
+        return where_clauses
+
+    for i, f in enumerate(filters):
+        if f.column not in valid_columns:
+            raise HTTPException(400, detail=f"Invalid filter column: {f.column}")
+
+        kp = f"fcol_{i}"
+        vp = f"fval_{i}"
+        params[kp] = f.column
+        col = col_expr(kp)
+
+        if f.operator in ("IS NULL", "IS NOT NULL"):
+            where_clauses.append(f"{col} {f.operator}")
+            continue
+
+        if f.operator == "IN":
+            if not f.value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter value is required for operator IN on column {f.column}.",
+                )
+            values = [v.strip() for v in f.value.split(",") if v.strip()]
+            if not values:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter value is required for operator IN on column {f.column}.",
+                )
+            in_params = {f"fval_{i}_{j}": v for j, v in enumerate(values)}
+            params.update(in_params)
+            placeholders = ", ".join(f":{k}" for k in in_params)
+            where_clauses.append(f"{col} IN ({placeholders})")
+            continue
+
+        if f.operator == "BETWEEN":
+            if not f.value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter value is required for operator BETWEEN on column {f.column}.",
+                )
+            if "," in f.value:
+                parts = [v.strip() for v in f.value.split(",", maxsplit=1)]
+            else:
+                parts = [v.strip() for v in f.value.split("AND", maxsplit=1)]
+
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"BETWEEN filter on column {f.column} must provide two bounds, "
+                        "for example '3,6' or '3 AND 6'."
+                    ),
+                )
+            low_key = f"fval_{i}_low"
+            high_key = f"fval_{i}_high"
+            params[low_key] = parts[0]
+            params[high_key] = parts[1]
+            where_clauses.append(
+                f"NULLIF(TRIM({col}), '')::double precision BETWEEN :{low_key}::double precision AND :{high_key}::double precision"
+            )
+            continue
+
+        if f.value is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
+            )
+
+        if f.operator == "LIKE":
+            params[vp] = f.value
+            where_clauses.append(f"{col} LIKE :{vp}")
+        elif f.operator in (">", ">=", "<", "<="):
+            params[vp] = f.value
+            where_clauses.append(
+                f"NULLIF(TRIM({col}), '')::double precision {f.operator} :{vp}::double precision"
+            )
+        else:
+            params[vp] = f.value
+            where_clauses.append(f"{col} {f.operator} :{vp}")
+
+    return where_clauses
 
 
 
@@ -202,6 +307,18 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}"
 
+
+def build_filter_virtual_table_url(body: FilterRequest) -> str:
+    payload = {
+        "mode": "filter",
+        "dataset_id": body.dataset_id,
+        "filters": [f.dict() for f in body.filters] if body.filters else None,
+        "limit": 500,
+        "offset": 0,
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}"
+
 def _enforce_list_tables_first() -> bool:
     return os.getenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "false").strip().lower() in {
         "1",
@@ -348,38 +465,11 @@ def aggregate_dataset(body: AggregateRequest):
 
     select_parts.append(metric_sql)
 
-    where_clauses = ["dataset_id = :dataset_id"]
-    if body.filters:
-        for i, f in enumerate(body.filters):
-            if f.column not in valid_columns:
-                raise HTTPException(400, detail=f"Invalid filter column: {f.column}")
-    
-            kp = f"fcol_{i}"
-            vp = f"fval_{i}"
-            params[kp] = f.column
-            col = col_expr(kp)
-
-            if f.operator in ("IS NULL", "IS NOT NULL"):
-                where_clauses.append(f"{col} {f.operator}")
-            elif f.operator == "IN":
-                # expect value to be comma-separated
-                values = [v.strip() for v in f.value.split(",")]
-                in_params = {f"fval_{i}_{j}": v for j, v in enumerate(values)}
-                params.update(in_params)
-                placeholders = ", ".join(f":{k}" for k in in_params)
-                where_clauses.append(f"{col} IN ({placeholders})")
-            elif f.operator == "LIKE":
-                params[vp] = f.value
-                where_clauses.append(f"{col} LIKE :{vp}")
-            elif f.operator in (">", ">=", "<", "<="):
-                params[vp] = f.value
-                # cast to numeric for amount-style columns
-                where_clauses.append(
-                    f"NULLIF(TRIM({col}), '')::double precision {f.operator} :{vp}::double precision"
-                )
-            else:  # "=" and "!="
-                params[vp] = f.value
-                where_clauses.append(f"{col} {f.operator} :{vp}")
+    where_clauses = _build_where_clauses(
+        filters=body.filters,
+        valid_columns=valid_columns,
+        params=params,
+    )
 
     sql = f"""
         SELECT {", ".join(select_parts)}
@@ -441,64 +531,11 @@ def filter_dataset(body: FilterRequest):
         "offset": offset,
     }
 
-    def col_expr(param_name: str) -> str:
-        return f"(row_data::jsonb ->> :{param_name})"
-
-    where_clauses = ["dataset_id = :dataset_id"]
-    if body.filters:
-        for i, f in enumerate(body.filters):
-            if f.column not in valid_columns:
-                raise HTTPException(400, detail=f"Invalid filter column: {f.column}")
-
-            kp = f"fcol_{i}"
-            vp = f"fval_{i}"
-            params[kp] = f.column
-            col = col_expr(kp)
-
-            if f.operator in ("IS NULL", "IS NOT NULL"):
-                where_clauses.append(f"{col} {f.operator}")
-            elif f.operator == "IN":
-                if not f.value:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Filter value is required for operator IN on column {f.column}.",
-                    )
-                values = [v.strip() for v in f.value.split(",") if v.strip()]
-                if not values:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Filter value is required for operator IN on column {f.column}.",
-                    )
-                in_params = {f"fval_{i}_{j}": v for j, v in enumerate(values)}
-                params.update(in_params)
-                placeholders = ", ".join(f":{k}" for k in in_params)
-                where_clauses.append(f"{col} IN ({placeholders})")
-            elif f.operator == "LIKE":
-                if f.value is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Filter value is required for operator LIKE on column {f.column}.",
-                    )
-                params[vp] = f.value
-                where_clauses.append(f"{col} LIKE :{vp}")
-            elif f.operator in (">", ">=", "<", "<="):
-                if f.value is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
-                    )
-                params[vp] = f.value
-                where_clauses.append(
-                    f"NULLIF(TRIM({col}), '')::double precision {f.operator} :{vp}::double precision"
-                )
-            else:
-                if f.value is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
-                    )
-                params[vp] = f.value
-                where_clauses.append(f"{col} {f.operator} :{vp}")
+    where_clauses = _build_where_clauses(
+        filters=body.filters,
+        valid_columns=valid_columns,
+        params=params,
+    )
 
     sql = """
         SELECT row_index, row_data
@@ -520,7 +557,7 @@ def filter_dataset(body: FilterRequest):
         row_count_raw = db.execute(text(count_sql), params).scalar_one()
 
     rows = [dict(r) for r in rows_raw]
-    url = f"{PUBLIC_UI_BASE_URL}/tables/{body.dataset_id}" if row_count_raw else None
+    url = build_filter_virtual_table_url(body) if row_count_raw else None
 
     return FilterResponse(
         dataset_id=body.dataset_id,

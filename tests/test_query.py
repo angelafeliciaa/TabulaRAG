@@ -406,7 +406,35 @@ def test_filter_rows_success(client):
     assert data["row_count"] == 1
     assert len(data["rowsResult"]) == 1
     assert data["rowsResult"][0]["row_data"]["city"] == "London"
-    assert "/tables/" in data["url"]
+    assert data["url"].startswith("http://localhost:5173/tables/virtual?q=")
+
+
+def test_filter_between_numeric(client):
+    csv_content = (
+        b"name,number_of_rooms\n"
+        b"A,2\n"
+        b"B,3\n"
+        b"C,5\n"
+        b"D,7\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("rooms.csv", csv_content, "text/csv")},
+    )
+    dataset_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/filter",
+        json={
+            "dataset_id": dataset_id,
+            "filters": [{"column": "number_of_rooms", "operator": "BETWEEN", "value": "3,6"}],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["row_count"] == 2
+    names = [row["row_data"]["name"] for row in data["rowsResult"]]
+    assert names == ["B", "C"]
 
 
 def test_filter_dataset_not_found(client):
