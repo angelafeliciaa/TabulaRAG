@@ -298,7 +298,7 @@ export async function renameTable(
 
 export async function updateTableDescription(
   datasetId: number,
-  description: string,
+  description: string | null,
 ): Promise<{ name: string; description: string | null }> {
   const res = await fetch(`${API_BASE}/tables/${datasetId}`, {
     method: "PATCH",
