@@ -15,51 +15,6 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-type AggregatePayload = {
-  dataset_id: number;
-  operation: string;
-  metric_column?: string;
-  group_by?: string;
-  filters?: FilterConditionPayload[];
-  limit?: number;
-};
-
-type FilterConditionPayload = {
-  column: string;
-  operator: string;
-  value?: string;
-  logical_operator?: "AND" | "OR";
-};
-
-type FilterPayload = {
-  mode: "filter";
-  dataset_id: number;
-  filters?: FilterConditionPayload[];
-  limit?: number;
-  offset?: number;
-};
-
-function decodePayload(encoded: string): AggregatePayload | FilterPayload {
-  const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = normalized.length % 4;
-  const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
-  return JSON.parse(atob(padded));
-}
-
-function formatFilterSummary(filters?: FilterConditionPayload[]): string {
-  if (!filters || filters.length === 0) return "no filters";
-  return filters
-    .map((f, idx) => {
-      const clause =
-        f.operator === "IS NULL" || f.operator === "IS NOT NULL"
-          ? `${f.column} ${f.operator}`
-          : `${f.column} ${f.operator} ${f.value ?? ""}`.trim();
-      if (idx === 0) return clause;
-      return `${(f.logical_operator || "AND").toUpperCase()} ${clause}`;
-    })
-    .join(" ");
-}
-
 export default function VirtualTableView() {
   const location = useLocation();
   const [err, setErr] = useState<string | null>(null);
@@ -73,6 +28,51 @@ export default function VirtualTableView() {
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
+
+  type AggregatePayload = {
+    dataset_id: number;
+    operation: string;
+    metric_column?: string;
+    group_by?: string;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+  };
+
+  type FilterConditionPayload = {
+    column: string;
+    operator: string;
+    value?: string;
+    logical_operator?: "AND" | "OR";
+  };
+
+  type FilterPayload = {
+    mode: "filter";
+    dataset_id: number;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+    offset?: number;
+  };
+
+  function decodePayload(encoded: string): AggregatePayload | FilterPayload {
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = normalized.length % 4;
+    const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+    return JSON.parse(atob(padded));
+  }
+
+  function formatFilterSummary(filters?: FilterConditionPayload[]): string {
+    if (!filters || filters.length === 0) return "no filters";
+    return filters
+      .map((f, idx) => {
+        const clause =
+          f.operator === "IS NULL" || f.operator === "IS NOT NULL"
+            ? `${f.column} ${f.operator}`
+            : `${f.column} ${f.operator} ${f.value ?? ""}`.trim();
+        if (idx === 0) return clause;
+        return `${(f.logical_operator || "AND").toUpperCase()} ${clause}`;
+      })
+      .join(" ");
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
