@@ -43,6 +43,7 @@ def _migrate_add_description_column() -> None:
                 )).fetchall()
                 col_names = [row[1] for row in cols]
                 if "description" not in col_names:
+                    conn.rollback()
                     conn.execute(text(
                         "ALTER TABLE datasets ADD COLUMN description TEXT"
                     ))
