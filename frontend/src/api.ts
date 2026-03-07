@@ -8,6 +8,7 @@ export type TableRow = Record<string, unknown>;
 export interface TableSummary {
   dataset_id: number;
   name: string;
+  description: string | null;
   source_filename: string | null;
   row_count: number;
   column_count: number;
@@ -88,6 +89,7 @@ export interface HighlightResponse {
 interface IngestResponse {
   dataset_id: number;
   name: string;
+  description: string | null;
   rows: number;
   columns: number;
   delimiter: string;
@@ -102,6 +104,7 @@ export interface UploadProgress {
 export async function uploadTable(
   file: File,
   name: string,
+  description?: string | null,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<IngestResponse> {
   const form = new FormData();
@@ -111,6 +114,11 @@ export async function uploadTable(
   const trimmed = name.trim();
   if (trimmed) {
     form.append("dataset_name", trimmed);
+  }
+
+  const trimmedDescription = (description || "").trim();
+  if (trimmedDescription) {
+    form.append("dataset_description", trimmedDescription);
   }
 
   return await new Promise<IngestResponse>((resolve, reject) => {
@@ -252,7 +260,9 @@ export async function getSlice(
   };
 }
 
-export async function getHighlight(highlightId: string): Promise<HighlightResponse> {
+export async function getHighlight(
+  highlightId: string,
+): Promise<HighlightResponse> {
   const res = await fetch(`${API_BASE}/highlights/${highlightId}`);
   if (!res.ok) {
     throw new Error(await res.text());

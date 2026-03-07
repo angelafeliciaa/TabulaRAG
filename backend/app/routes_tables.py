@@ -55,6 +55,7 @@ def list_tables():
             {
                 "dataset_id": d.id,
                 "name": d.name,
+                "description": d.description,
                 "source_filename": d.source_filename,
                 "row_count": d.row_count,
                 "column_count": d.column_count,

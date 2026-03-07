@@ -10,6 +10,7 @@ class Dataset(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
+    description = Column(String(1024), nullable=True)
     source_filename = Column(String(512), nullable=True)
     delimiter = Column(String(8), nullable=False, default=",")
     has_header = Column(Boolean, nullable=False, default=True)

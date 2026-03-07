@@ -308,7 +308,7 @@ def _list_dataset_summaries() -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         rows = db.execute(
             text(
-                "SELECT id, name, source_filename, row_count, column_count, created_at "
+                "SELECT id, name, description, source_filename, row_count, column_count, created_at "
                 "FROM datasets ORDER BY id DESC"
             )
         ).fetchall()
@@ -316,14 +316,15 @@ def _list_dataset_summaries() -> List[Dict[str, Any]]:
     summaries: List[Dict[str, Any]] = []
     for row in rows:
         dataset_id = int(row[0])
-        created_at = row[5]
+        created_at = row[6]
         summaries.append(
             {
                 "dataset_id": dataset_id,
                 "name": row[1],
-                "source_filename": row[2],
-                "row_count": int(row[3] or 0),
-                "column_count": int(row[4] or 0),
+                "description": row[2],
+                "source_filename": row[3],
+                "row_count": int(row[4] or 0),
+                "column_count": int(row[5] or 0),
                 "created_at": (
                     created_at.isoformat()
                     if hasattr(created_at, "isoformat")

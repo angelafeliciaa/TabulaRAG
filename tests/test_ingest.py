@@ -2,6 +2,7 @@ import io
 import json
 import pytest
 from sqlalchemy import text
+from app.typed_values import strip_internal_fields
 
 
 def make_csv(content: str, filename: str = "test.csv"):
@@ -105,6 +106,23 @@ def test_db_dataset_record(client, test_engine):
     assert row.column_count == 2
 
 
+def test_dataset_description_persisted(client, test_engine):
+    client.post(
+        "/ingest",
+        files=make_csv("name,age\nAlice,30\nBob,25\n"),
+        data={
+            "dataset_name": "desc_test",
+            "dataset_description": "Annual revenue summary table",
+        },
+    )
+    with test_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT description FROM datasets WHERE name = 'desc_test'")
+        ).fetchone()
+    assert row is not None
+    assert row.description == "Annual revenue summary table"
+
+
 def test_db_columns_stored(client, test_engine):
     client.post("/ingest", files=make_csv("foo,bar,baz\n1,2,3\n"))
     with test_engine.connect() as conn:
@@ -118,7 +136,7 @@ def test_db_rows_stored(client, test_engine):
         rows = conn.execute(text("SELECT row_data FROM dataset_rows")).fetchall()
     assert len(rows) == 1
     data = json.loads(rows[0].row_data)
-    assert data == {"name": "Alice", "age": "30"}
+    assert strip_internal_fields(data) == {"name": "Alice", "age": "30"}
 
 
 # ── Error cases ───────────────────────────────────────────────────────────────
