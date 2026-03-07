@@ -37,28 +37,30 @@ def _migrate_add_description_column() -> None:
     """Add ``description`` column to existing ``datasets`` table if missing."""
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='datasets'"
-            )).fetchone()
-            if result is not None:
-                if "description" not in (result[0] or "").lower():
+            if engine.dialect.name == "sqlite":
+                cols = conn.execute(text(
+                    "PRAGMA table_info(datasets)"
+                )).fetchall()
+                col_names = [row[1] for row in cols]
+                if "description" not in col_names:
                     conn.execute(text(
                         "ALTER TABLE datasets ADD COLUMN description TEXT"
                     ))
                     conn.commit()
-                return
-
-            try:
-                conn.execute(text(
-                    "SELECT description FROM datasets LIMIT 0"
-                ))
-            except Exception:
-                conn.execute(text(
-                    "ALTER TABLE datasets ADD COLUMN description TEXT"
-                ))
-                conn.commit()
+            else:
+                try:
+                    conn.execute(text(
+                        "SELECT description FROM datasets LIMIT 0"
+                    ))
+                except Exception:
+                    conn.execute(text(
+                        "ALTER TABLE datasets ADD COLUMN description TEXT"
+                    ))
+                    conn.commit()
     except Exception:
-        logger.debug("Skipping description column migration", exc_info=True)
+        logger.warning(
+            "Failed to run description column migration", exc_info=True
+        )
 
 
 @asynccontextmanager
