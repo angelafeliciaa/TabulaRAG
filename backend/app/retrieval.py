@@ -1841,3 +1841,111 @@ def get_highlight(highlight_id: str) -> Optional[Dict[str, Any]]:
         "value": public_row_data[column],
         "row_context": public_row_data,
     }
+
+
+# ── Multi-table JOIN support ──────────────────────────────────────
+
+
+def find_common_columns(left_dataset_id: int, right_dataset_id: int) -> List[str]:
+    """Return column names that appear in both datasets."""
+    left_rows = _load_dataset_rows(left_dataset_id)
+    right_rows = _load_dataset_rows(right_dataset_id)
+    left_cols = set(_collect_columns(left_rows))
+    right_cols = set(_collect_columns(right_rows))
+    return sorted(left_cols & right_cols)
+
+
+def join_datasets(
+    left_dataset_id: int,
+    right_dataset_id: int,
+    left_column: str,
+    right_column: str,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """Perform an inner JOIN between two datasets on the specified columns.
+
+    Returns a dict with ``columns``, ``rows``, and ``row_count``.
+    Each result row is a merged dict with columns prefixed by the dataset name
+    when there would be a collision (excluding the join key itself).
+    """
+    left_rows = _load_dataset_rows(left_dataset_id)
+    right_rows = _load_dataset_rows(right_dataset_id)
+
+    left_cols = _collect_columns(left_rows)
+    right_cols = _collect_columns(right_rows)
+
+    if left_column not in left_cols:
+        raise ValueError(
+            f"Column '{left_column}' not found in dataset {left_dataset_id}."
+        )
+    if right_column not in right_cols:
+        raise ValueError(
+            f"Column '{right_column}' not found in dataset {right_dataset_id}."
+        )
+
+    # Fetch dataset names for prefixing colliding columns
+    left_name = _dataset_display_name(left_dataset_id)
+    right_name = _dataset_display_name(right_dataset_id)
+
+    # Build lookup from the right side keyed by normalized join value
+    right_index: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for _ri, row_data in right_rows:
+        key = _normalize_text(row_data.get(right_column))
+        if key:
+            right_index[key].append(strip_internal_fields(row_data))
+
+    # Determine colliding column names (excluding the join key itself)
+    left_col_set = set(left_cols)
+    right_col_set = set(right_cols)
+    colliding = (left_col_set & right_col_set) - {left_column, right_column}
+
+    # Perform the join
+    joined_rows: List[Dict[str, Any]] = []
+    for _li, left_data in left_rows:
+        key = _normalize_text(left_data.get(left_column))
+        if not key or key not in right_index:
+            continue
+        clean_left = strip_internal_fields(left_data)
+        for right_data in right_index[key]:
+            merged: Dict[str, Any] = {}
+            for col, val in clean_left.items():
+                col_name = f"{left_name}.{col}" if col in colliding else col
+                merged[col_name] = val
+            for col, val in right_data.items():
+                if col == right_column and left_column == right_column:
+                    continue  # already included from left side
+                col_name = f"{right_name}.{col}" if col in colliding else col
+                merged[col_name] = val
+            joined_rows.append(merged)
+            if len(joined_rows) >= limit:
+                break
+        if len(joined_rows) >= limit:
+            break
+
+    # Collect output column order
+    output_columns: List[str] = []
+    seen: Set[str] = set()
+    for row in joined_rows[:50]:
+        for col in row:
+            if col not in seen:
+                seen.add(col)
+                output_columns.append(col)
+
+    return {
+        "columns": output_columns,
+        "rows": joined_rows,
+        "row_count": len(joined_rows),
+    }
+
+
+def _dataset_display_name(dataset_id: int) -> str:
+    """Return the user-visible name for a dataset, falling back to its ID."""
+    with SessionLocal() as db:
+        result = db.execute(
+            text("SELECT name FROM datasets WHERE id = :id"),
+            {"id": dataset_id},
+        )
+        row = result.fetchone()
+    if row and row[0]:
+        return str(row[0])
+    return f"dataset_{dataset_id}"

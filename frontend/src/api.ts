@@ -324,3 +324,34 @@ export async function aggregate(params: unknown): Promise<AggregateResponse> {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export interface JoinQueryRequest {
+  dataset_ids: [number, number];
+  join_column?: string;
+  left_column?: string;
+  right_column?: string;
+  limit?: number;
+}
+
+export interface JoinQueryResponse {
+  left_dataset_id: number;
+  right_dataset_id: number;
+  left_column: string;
+  right_column: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  common_columns: string[];
+}
+
+export async function joinQuery(
+  params: JoinQueryRequest,
+): Promise<JoinQueryResponse> {
+  const res = await fetch(`${API_BASE}/query/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

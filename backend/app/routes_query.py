@@ -7,7 +7,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context, smart_query
+from app.retrieval import (
+    find_common_columns,
+    get_highlight,
+    hybrid_search,
+    join_datasets,
+    resolve_dataset_context,
+    smart_query,
+)
 from app.routes_tables import list_tables,get_cols_for_dataset
 from app.db import SessionLocal
 
@@ -160,6 +167,43 @@ class HighlightResponse(BaseModel):
     column: str
     value: Any
     row_context: Dict[str, Any]
+
+
+class JoinQueryRequest(BaseModel):
+    dataset_ids: List[int] = Field(
+        description="Exactly two dataset IDs to join.",
+        min_length=2,
+        max_length=2,
+    )
+    join_column: Optional[str] = Field(
+        default=None,
+        description=(
+            "Column name to join on when both datasets share the same column name. "
+            "Mutually exclusive with left_column / right_column."
+        ),
+    )
+    left_column: Optional[str] = Field(
+        default=None,
+        description="Join column from the first (left) dataset.",
+    )
+    right_column: Optional[str] = Field(
+        default=None,
+        description="Join column from the second (right) dataset.",
+    )
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class JoinQueryResponse(BaseModel):
+    left_dataset_id: int
+    right_dataset_id: int
+    left_column: str
+    right_column: str
+    columns: List[str]
+    rows: List[Dict[str, Any]]
+    row_count: int
+    common_columns: List[str] = Field(
+        description="Columns that appear in both datasets (auto-detected)."
+    )
 
 
 PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
@@ -403,3 +447,77 @@ def highlight_endpoint(highlight_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Highlight not found.")
     return result
+
+
+@router.post(
+    "/query/join",
+    response_model=JoinQueryResponse,
+    summary="Join two tables and return combined rows",
+    description=(
+        "Perform an inner JOIN between two datasets on a shared or specified column. "
+        "Use GET /tables first to discover dataset IDs and GET /tables/{id}/columns "
+        "to inspect column names."
+    ),
+)
+def join_query(body: JoinQueryRequest):
+    left_id, right_id = body.dataset_ids
+
+    # Verify both datasets exist
+    with SessionLocal() as db:
+        for did in (left_id, right_id):
+            row = db.execute(
+                text("SELECT id FROM datasets WHERE id = :id"),
+                {"id": did},
+            ).fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Dataset {did} not found."
+                )
+
+    # Determine join columns
+    common = find_common_columns(left_id, right_id)
+
+    if body.join_column:
+        if body.left_column or body.right_column:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either join_column OR left_column/right_column, not both.",
+            )
+        left_col = body.join_column
+        right_col = body.join_column
+    elif body.left_column and body.right_column:
+        left_col = body.left_column
+        right_col = body.right_column
+    elif common:
+        left_col = common[0]
+        right_col = common[0]
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No common columns detected between the two datasets. "
+                "Specify join_column or left_column and right_column explicitly."
+            ),
+        )
+
+    try:
+        result = join_datasets(
+            left_dataset_id=left_id,
+            right_dataset_id=right_id,
+            left_column=left_col,
+            right_column=right_col,
+            limit=body.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return JoinQueryResponse(
+        left_dataset_id=left_id,
+        right_dataset_id=right_id,
+        left_column=left_col,
+        right_column=right_col,
+        columns=result["columns"],
+        rows=result["rows"],
+        row_count=result["row_count"],
+        common_columns=common,
+    )

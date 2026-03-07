@@ -2,7 +2,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from app.retrieval import extract_keywords
+from app.retrieval import extract_keywords, find_common_columns, join_datasets
 
 
 # ── Helper: ingest a small CSV so the dataset + rows exist in PG ──
@@ -502,3 +502,204 @@ def test_two_pass_search_filtered_results_first(client):
     assert results[0]["row_data"]["city"] == "London"
     # Fallback result (Bob/Paris) should come second (deduplicated)
     assert results[1]["row_data"]["city"] == "Paris"
+
+
+# ── POST /query/join ──────────────────────────────────────────────
+
+
+def _ingest_two_related_tables(client):
+    """Ingest two tables that share a 'Country' column for join tests."""
+    sales_csv = b"Product,Revenue,Country\nWidget,100,UK\nGadget,200,US\nDoohickey,50,UK\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("sales.csv", sales_csv, "text/csv")},
+        data={"dataset_name": "Sales"},
+    )
+    sales_id = resp.json()["dataset_id"]
+
+    countries_csv = b"Country,Population,Capital\nUK,67000000,London\nUS,331000000,Washington\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("countries.csv", countries_csv, "text/csv")},
+        data={"dataset_name": "Countries"},
+    )
+    countries_id = resp.json()["dataset_id"]
+    return sales_id, countries_id
+
+
+def test_join_auto_detect_common_column(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [sales_id, countries_id]},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["left_dataset_id"] == sales_id
+    assert data["right_dataset_id"] == countries_id
+    assert data["left_column"] == "Country"
+    assert data["right_column"] == "Country"
+    assert "Country" in data["common_columns"]
+    assert data["row_count"] == 3  # Widget+UK, Doohickey+UK, Gadget+US
+    # Verify merged data contains columns from both tables
+    for row in data["rows"]:
+        assert "Product" in row
+        assert "Revenue" in row
+        assert "Capital" in row
+        assert "Population" in row
+        assert "Country" in row
+
+
+def test_join_explicit_join_column(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [sales_id, countries_id], "join_column": "Country"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["row_count"] == 3
+
+
+def test_join_explicit_left_right_columns(client):
+    """Left and right join columns can have different names."""
+    left_csv = b"item,region\nA,UK\nB,US\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("left.csv", left_csv, "text/csv")},
+    )
+    left_id = resp.json()["dataset_id"]
+
+    right_csv = b"country,population\nUK,67000000\nUS,331000000\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("right.csv", right_csv, "text/csv")},
+    )
+    right_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/query/join",
+        json={
+            "dataset_ids": [left_id, right_id],
+            "left_column": "region",
+            "right_column": "country",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["row_count"] == 2
+    assert data["left_column"] == "region"
+    assert data["right_column"] == "country"
+    for row in data["rows"]:
+        assert "item" in row
+        assert "region" in row
+        assert "country" in row
+        assert "population" in row
+
+
+def test_join_dataset_not_found(client):
+    sales_id, _ = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [sales_id, 99999]},
+    )
+    assert resp.status_code == 404
+    assert "99999" in resp.json()["detail"]
+
+
+def test_join_no_common_columns(client):
+    left_csv = b"alpha,beta\n1,2\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("left.csv", left_csv, "text/csv")},
+    )
+    left_id = resp.json()["dataset_id"]
+
+    right_csv = b"gamma,delta\n3,4\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("right.csv", right_csv, "text/csv")},
+    )
+    right_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [left_id, right_id]},
+    )
+    assert resp.status_code == 400
+    assert "common columns" in resp.json()["detail"].lower()
+
+
+def test_join_invalid_column_name(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [sales_id, countries_id], "join_column": "nonexistent"},
+    )
+    assert resp.status_code == 400
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_join_conflict_join_column_and_left_right(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={
+            "dataset_ids": [sales_id, countries_id],
+            "join_column": "Country",
+            "left_column": "Country",
+            "right_column": "Country",
+        },
+    )
+    assert resp.status_code == 400
+    assert "not both" in resp.json()["detail"].lower()
+
+
+def test_join_respects_limit(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [sales_id, countries_id], "limit": 2},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["row_count"] <= 2
+
+
+def test_join_no_matching_rows(client):
+    left_csv = b"key,val\nX,1\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("left.csv", left_csv, "text/csv")},
+    )
+    left_id = resp.json()["dataset_id"]
+
+    right_csv = b"key,val2\nY,2\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("right.csv", right_csv, "text/csv")},
+    )
+    right_id = resp.json()["dataset_id"]
+
+    resp = client.post(
+        "/query/join",
+        json={"dataset_ids": [left_id, right_id], "join_column": "key"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["row_count"] == 0
+    assert data["rows"] == []
+
+
+# ── find_common_columns unit test ─────────────────────────────────
+
+
+def test_find_common_columns(client):
+    sales_id, countries_id = _ingest_two_related_tables(client)
+    common = find_common_columns(sales_id, countries_id)
+    assert "Country" in common
