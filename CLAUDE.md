@@ -82,7 +82,7 @@ pytest tests/                # Run tests from project root
 
 | Service | URL |
 |---------|-----|
-| Frontend | `localhost:5174` |
+| Frontend | `localhost:5173` |
 | Backend API | `localhost:8000` |
 | Health check | `localhost:8000/health` |
 | Dependency health | `localhost:8000/health/deps` |
