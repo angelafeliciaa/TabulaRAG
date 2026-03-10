@@ -156,4 +156,4 @@ def test_ingest_requires_auth():
             files={"file": ("data.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")},
         )
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or missing API key"
+    assert response.json()["detail"] == "Missing authentication"

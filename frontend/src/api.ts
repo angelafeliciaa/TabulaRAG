@@ -1,28 +1,66 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-export function getApiKey(): string | null {
-  return localStorage.getItem("tabularag_api_key");
+const TOKEN_KEY = "tabularag_token";
+const USER_KEY = "tabularag_user";
+
+export interface AuthUser {
+  login: string;
+  name: string;
+  avatar_url: string;
+}
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getUser(): AuthUser | null {
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    return null;
+  }
+}
+
+export function isAuthenticated(): boolean {
+  return getToken() !== null;
 }
 
 export function authHeaders(): Record<string, string> {
-  const key = getApiKey();
-  if (!key) return {};
-  return { Authorization: `Bearer ${key}` };
+  const token = getToken();
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
 }
 
 export function logout(): void {
-  localStorage.removeItem("tabularag_api_key");
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
 }
 
-export async function verifyApiKey(key: string): Promise<{ valid: boolean }> {
-  const res = await fetch(`${API_BASE}/auth/verify`, {
+export async function getGithubClientId(): Promise<string> {
+  const res = await fetch(`${API_BASE}/auth/github`);
+  if (!res.ok) throw new Error("GitHub OAuth not configured");
+  const data = (await res.json()) as { client_id: string };
+  return data.client_id;
+}
+
+export async function exchangeGithubCode(
+  code: string,
+): Promise<{ token: string; user: AuthUser }> {
+  const res = await fetch(`${API_BASE}/auth/github/callback`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}` },
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
   });
   if (!res.ok) {
-    return { valid: false };
+    const err = await res.text();
+    throw new Error(err || "GitHub authentication failed");
   }
-  return (await res.json()) as { valid: boolean };
+  const data = (await res.json()) as { token: string; user: AuthUser };
+  localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+  return data;
 }
 
 export type ServerStatus = "Online" | "Offline" | "Unknown";
@@ -158,9 +196,9 @@ export async function uploadTable(
 
     xhr.open("POST", `${API_BASE}/ingest`);
 
-    const key = getApiKey();
-    if (key) {
-      xhr.setRequestHeader("Authorization", `Bearer ${key}`);
+    const token = getToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
 
     xhr.upload.onloadstart = () => {

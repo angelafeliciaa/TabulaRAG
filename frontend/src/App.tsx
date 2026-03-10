@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { getApiKey, logout, getServerStatus, type ServerStatus } from "./api";
+import { isAuthenticated, logout, getUser, getServerStatus, type ServerStatus } from "./api";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";
@@ -8,6 +8,7 @@ import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
 import AggregateTableView from "./pages/AggregateTable";
 import Login from "./pages/Login";
+import AuthCallback from "./pages/AuthCallback";
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -18,9 +19,7 @@ export default function App() {
     return "light";
   });
   const [serverStatus, setServerStatus] = useState<ServerStatus>("Unknown");
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(
-    () => getApiKey() !== null,
-  );
+  const [authed, setAuthed] = useState<boolean>(() => isAuthenticated());
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -46,17 +45,23 @@ export default function App() {
     };
   }, []);
 
-  if (!isAuthenticated) {
+  if (!authed) {
     return (
-      <Login
-        onLogin={() => setIsAuthenticated(true)}
-      />
+      <Routes>
+        <Route
+          path="/auth/callback"
+          element={<AuthCallback onLogin={() => setAuthed(true)} />}
+        />
+        <Route path="*" element={<Login onLogin={() => setAuthed(true)} />} />
+      </Routes>
     );
   }
 
+  const user = getUser();
+
   function handleLogout() {
     logout();
-    setIsAuthenticated(false);
+    setAuthed(false);
   }
 
   return (
@@ -85,13 +90,19 @@ export default function App() {
         </div>
       </div>
 
-      <button
-        className="logout-btn"
-        onClick={handleLogout}
-        type="button"
-      >
-        Sign out
-      </button>
+      <div className="user-menu">
+        {user?.avatar_url && (
+          <img src={user.avatar_url} alt="" className="user-avatar" />
+        )}
+        <span className="user-name">{user?.name || user?.login}</span>
+        <button
+          className="logout-btn"
+          onClick={handleLogout}
+          type="button"
+        >
+          Sign out
+        </button>
+      </div>
 
       <div className="content">
         <Routes>
@@ -99,6 +110,7 @@ export default function App() {
           <Route path="/tables/virtual" element={<AggregateTableView />} />
           <Route path="/tables/:datasetId" element={<TableView />} />
           <Route path="/highlight/:highlightId" element={<HighlightView />} />
+          <Route path="/auth/callback" element={<AuthCallback onLogin={() => setAuthed(true)} />} />
         </Routes>
       </div>
     </div>

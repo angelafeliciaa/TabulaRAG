@@ -26,7 +26,7 @@ from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
 from app.typed_values import normalize_row_obj
 from app.name_guard import normalize_dataset_name_or_raise
-from app.auth import require_api_key
+from app.auth import require_auth, exchange_github_code, create_jwt, GITHUB_CLIENT_ID
 
 
 logger = logging.getLogger(__name__)
@@ -65,8 +65,8 @@ app.add_middleware(
 )
 
 
-app.include_router(tables_router, dependencies=[Depends(require_api_key)])
-app.include_router(query_router, dependencies=[Depends(require_api_key)])
+app.include_router(tables_router, dependencies=[Depends(require_auth)])
+app.include_router(query_router, dependencies=[Depends(require_auth)])
 
 
 @app.get("/health", include_in_schema=False)
@@ -293,8 +293,32 @@ def _resume_incomplete_index_jobs() -> None:
 
 
 @app.post("/auth/verify")
-def auth_verify(credentials: None = Depends(require_api_key)) -> dict:
+def auth_verify(credentials: None = Depends(require_auth)) -> dict:
     return {"valid": True}
+
+
+@app.get("/auth/github")
+def auth_github_redirect():
+    if not GITHUB_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GitHub OAuth not configured")
+    return {"client_id": GITHUB_CLIENT_ID}
+
+
+@app.post("/auth/github/callback")
+async def auth_github_callback(body: dict):
+    code = body.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing code parameter")
+    github_user = await exchange_github_code(code)
+    token = create_jwt(github_user)
+    return {
+        "token": token,
+        "user": {
+            "login": github_user["login"],
+            "name": github_user.get("name") or github_user["login"],
+            "avatar_url": github_user.get("avatar_url", ""),
+        },
+    }
 
 
 @app.post("/ingest", include_in_schema=False)
@@ -302,7 +326,7 @@ def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     has_header: bool = Form(True),
-    _auth: None = Depends(require_api_key),
+    _auth: None = Depends(require_auth),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
