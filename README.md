@@ -1,6 +1,6 @@
 <div align="center">
   <img src="frontend/src/images/logo.png" alt="TabulaRAG logo" width="64" height="64" />
-  <h1>TabulaRAG</h1>
+  <h1>tabulaRAG</h1>
   A fast-ingesting tabular data MCP RAG tool backed with cell citations.
 </div>
 
@@ -19,7 +19,7 @@
 Services:
 - Frontend: `localhost:5173`
 - Backend: `localhost:8000`
-- Postgres: `localhost:5432`
+- Postgres: `localhost:5433`
 - Qdrant: `localhost:6333`
 
 ## Ingestion (CSV/TSV)
