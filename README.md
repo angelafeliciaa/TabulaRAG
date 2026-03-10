@@ -19,7 +19,7 @@
 Services:
 - Frontend: `localhost:5173`
 - Backend: `localhost:8000`
-- Postgres: `localhost:5432`
+- Postgres: `localhost:5433`
 - Qdrant: `localhost:6333`
 
 ## Ingestion (CSV/TSV)
