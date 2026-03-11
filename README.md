@@ -45,6 +45,6 @@ TabulaRAG exposes two endpoints for integration with AI assistants and tool runn
 | Type | URL |
 |---|---|
 | OpenAPI | `http://localhost:8000/openapi.json` |
-| MCP (Streamable HTTP) | `http://localhost:8000/mcp/mcp` |
+| MCP (Streamable HTTP) | `http://localhost:8000/mcp` |
 
 > **Note:** If your client is running outside the browser (e.g. inside Docker or a desktop app), replace `localhost` with your machine's local IP address. Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) to find it.
