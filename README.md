@@ -1,8 +1,17 @@
-<div align="center">
-  <img src="frontend/src/images/logo.png" alt="TabulaRAG logo" width="64" height="64" />
-  <h1>tabulaRAG</h1>
-  A fast-ingesting tabular data MCP RAG tool backed with cell citations.
-</div>
+<h1 align="center">
+  <img src="frontend/src/images/logo.png" alt="TabulaRAG logo" width="64" height="64" /></br>
+  tabulaRAG
+</h1>
+
+<p align="center">
+  <strong>A fast-ingesting tabular data MCP RAG tool backed with cell citations.</strong><br/>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen" alt="Node >= 18" />
+  <img src="https://img.shields.io/badge/typescript-strict-blue" alt="TypeScript Strict" />
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License" />
+</p> <br> <br>
 
 ## Quick start (infra)
 
