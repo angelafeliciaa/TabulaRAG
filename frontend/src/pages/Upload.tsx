@@ -6,11 +6,11 @@ import {
   listIndexStatus,
   listTables,
   renameTable,
+  uploadTable,
   type TableIndexStatus,
   type TableSlice,
   type TableSummary,
   type UploadProgress,
-  uploadTable,
 } from "../api";
 import DataTable from "../components/DataTable";
 import logo from "../images/logo.png";
@@ -1356,8 +1356,8 @@ export default function Upload() {
             <div className="upload-icon" aria-hidden="true">
               <img src={uploadLogo} alt="" />
             </div>
-            <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Start Uploading</div>
-            <div className="upload-subtitle">Supported file formats: .csv, .tsv (folders supported)</div>
+            <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Upload</div>
+            <div className="upload-subtitle">Supported file formats: .csv, .tsv, folders</div>
           </label>
         ) : (
           <>
