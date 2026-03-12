@@ -63,12 +63,12 @@ type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => FileSystemEntryLike | null;
 };
 
-type FolderCapableInputProps = InputHTMLAttributes<HTMLInputElement> & {
+type FolderInputProps = InputHTMLAttributes<HTMLInputElement> & {
   webkitdirectory?: string;
   directory?: string;
 };
 
-const FOLDER_UPLOAD_INPUT_PROPS: FolderCapableInputProps = {
+const FOLDER_INPUT_PROPS: FolderInputProps = {
   webkitdirectory: "",
   directory: "",
 };
@@ -354,6 +354,7 @@ export default function Upload() {
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1344,7 +1345,6 @@ export default function Upload() {
             onDrop={onUploadDrop}
           >
             <input
-              {...FOLDER_UPLOAD_INPUT_PROPS}
               type="file"
               multiple
               accept=".csv,.tsv"
@@ -1365,7 +1365,18 @@ export default function Upload() {
             <div className="row upload-queue-toolbar">
               <input
                 ref={fileInputRef}
-                {...FOLDER_UPLOAD_INPUT_PROPS}
+                type="file"
+                multiple
+                accept=".csv,.tsv"
+                onChange={(event) => {
+                  onSelectFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                className="file-input-hidden"
+              />
+              <input
+                ref={folderInputRef}
+                {...FOLDER_INPUT_PROPS}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
@@ -1383,6 +1394,15 @@ export default function Upload() {
               >
                 <img src={plusIcon} alt="" aria-hidden="true" className="upload-add-icon" />
                 Add more files
+              </button>
+              <button
+                onClick={() => folderInputRef.current?.click()}
+                type="button"
+                className="glass upload-add-more-button"
+                disabled={busy || isQueueInProgress}
+              >
+                <img src={plusIcon} alt="" aria-hidden="true" className="upload-add-icon" />
+                Add folder
               </button>
             </div>
 
