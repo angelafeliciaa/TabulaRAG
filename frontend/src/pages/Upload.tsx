@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { Link } from "react-router-dom";
 import {
   deleteTable,
@@ -37,6 +37,40 @@ type UploadQueueItem = {
   estimatedRows: number | null;
   estimatedCols: number | null;
   error: string | null;
+};
+
+type FileSystemEntryLike = {
+  isFile: boolean;
+  isDirectory: boolean;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+};
+
+type FileSystemDirectoryReaderLike = {
+  readEntries: (
+    successCallback: (entries: FileSystemEntryLike[]) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+  createReader: () => FileSystemDirectoryReaderLike;
+};
+
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+type FolderCapableInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory?: string;
+  directory?: string;
+};
+
+const FOLDER_UPLOAD_INPUT_PROPS: FolderCapableInputProps = {
+  webkitdirectory: "",
+  directory: "",
 };
 
 function getErrorMessage(error: unknown): string {
@@ -91,6 +125,88 @@ function formatFileSize(bytes: number): string {
     return `${Math.round(safeBytes / 1024)}KB`;
   }
   return `${(safeBytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function getFileIdentity(file: File): string {
+  const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  return `${relativePath}:${file.size}:${file.lastModified}`;
+}
+
+function hasSupportedExtension(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return lowerName.endsWith(".csv") || lowerName.endsWith(".tsv");
+}
+
+function isLikelyDirectoryPlaceholder(file: File): boolean {
+  if (hasSupportedExtension(file.name)) {
+    return false;
+  }
+  const noExtension = !/\.[^./\\]+$/.test(file.name);
+  return noExtension && file.size === 0 && file.type === "";
+}
+
+function fileFromEntry(entry: FileSystemFileEntryLike): Promise<File> {
+  return new Promise<File>((resolve, reject) => {
+    entry.file(resolve, reject);
+  });
+}
+
+function readAllDirectoryEntries(
+  reader: FileSystemDirectoryReaderLike,
+): Promise<FileSystemEntryLike[]> {
+  return new Promise<FileSystemEntryLike[]>((resolve, reject) => {
+    const allEntries: FileSystemEntryLike[] = [];
+    const readBatch = () => {
+      reader.readEntries(
+        (entries) => {
+          if (entries.length === 0) {
+            resolve(allEntries);
+            return;
+          }
+          allEntries.push(...entries);
+          readBatch();
+        },
+        reject,
+      );
+    };
+    readBatch();
+  });
+}
+
+async function collectFilesFromEntry(entry: FileSystemEntryLike): Promise<File[]> {
+  if (entry.isFile) {
+    const file = await fileFromEntry(entry as FileSystemFileEntryLike);
+    return [file];
+  }
+  if (!entry.isDirectory) {
+    return [];
+  }
+  const dirReader = (entry as FileSystemDirectoryEntryLike).createReader();
+  const childEntries = await readAllDirectoryEntries(dirReader);
+  const files = await Promise.all(childEntries.map((child) => collectFilesFromEntry(child)));
+  return files.flat();
+}
+
+async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+  const itemFiles = await Promise.all(
+    Array.from(dataTransfer.items || []).map(async (item) => {
+      if (item.kind !== "file") {
+        return [] as File[];
+      }
+      const itemWithEntry = item as DataTransferItemWithEntry;
+      const entry = itemWithEntry.webkitGetAsEntry?.();
+      if (entry) {
+        return await collectFilesFromEntry(entry);
+      }
+      const fallbackFile = item.getAsFile();
+      return fallbackFile ? [fallbackFile] : [];
+    }),
+  );
+  const flattened = itemFiles.flat();
+  if (flattened.length > 0) {
+    return flattened.filter((file) => !isLikelyDirectoryPlaceholder(file));
+  }
+  return Array.from(dataTransfer.files || []).filter((file) => !isLikelyDirectoryPlaceholder(file));
 }
 
 function countDelimitedColumns(line: string, delimiter: string): number {
@@ -820,14 +936,13 @@ export default function Upload() {
   }
 
   function validateSelectedFile(nextFile: File): string | null {
-    const lowerName = nextFile.name.toLowerCase();
-    if (!(lowerName.endsWith(".csv") || lowerName.endsWith(".tsv"))) {
+    if (!hasSupportedExtension(nextFile.name)) {
       return "File must have a .csv or .tsv extension.";
     }
     return null;
   }
 
-  function onSelectFiles(nextFiles: FileList | null) {
+  function onSelectFiles(nextFiles: FileList | File[] | null) {
     if (busy) {
       return;
     }
@@ -837,9 +952,7 @@ export default function Upload() {
       return;
     }
 
-    const existingFileKeys = new Set(
-      uploadQueue.map((item) => `${item.file.name}:${item.file.size}:${item.file.lastModified}`),
-    );
+    const existingFileKeys = new Set(uploadQueue.map((item) => getFileIdentity(item.file)));
     const occupiedNameKeys = new Set<string>([
       ...tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
       ...uploadQueue.map((item) => getNameKey(stripSupportedFileExtension(item.name) || "table")),
@@ -848,13 +961,16 @@ export default function Upload() {
     const rejectedMessages: string[] = [];
 
     for (const nextFile of Array.from(nextFiles)) {
+      if (isLikelyDirectoryPlaceholder(nextFile)) {
+        continue;
+      }
       const validationError = validateSelectedFile(nextFile);
       if (validationError) {
         rejectedMessages.push(`${nextFile.name}: ${validationError}`);
         continue;
       }
 
-      const fileKey = `${nextFile.name}:${nextFile.size}:${nextFile.lastModified}`;
+      const fileKey = getFileIdentity(nextFile);
       if (existingFileKeys.has(fileKey)) {
         rejectedMessages.push(`${nextFile.name}: already selected.`);
         continue;
@@ -991,7 +1107,7 @@ export default function Upload() {
     }
   }
 
-  function onUploadDrop(event: React.DragEvent<HTMLElement>) {
+  async function onUploadDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(false);
@@ -1010,7 +1126,8 @@ export default function Upload() {
       setErr("Unsupported file type. Please upload a .csv or .tsv file.");
       return;
     }
-    onSelectFiles(event.dataTransfer.files);
+    const droppedFiles = await collectDroppedFiles(event.dataTransfer);
+    onSelectFiles(droppedFiles);
   }
   const hasPendingUploads = uploadQueue.some(
     (item) => item.phase === "idle" || item.phase === "error",
@@ -1227,6 +1344,7 @@ export default function Upload() {
             onDrop={onUploadDrop}
           >
             <input
+              {...FOLDER_UPLOAD_INPUT_PROPS}
               type="file"
               multiple
               accept=".csv,.tsv"
@@ -1239,7 +1357,7 @@ export default function Upload() {
               <img src={uploadLogo} alt="" />
             </div>
             <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Start Uploading</div>
-            <div className="upload-subtitle">Supported file formats: .csv, .tsv</div>
+            <div className="upload-subtitle">Supported file formats: .csv, .tsv (folders supported)</div>
           </label>
         ) : (
           <>
@@ -1247,6 +1365,7 @@ export default function Upload() {
             <div className="row upload-queue-toolbar">
               <input
                 ref={fileInputRef}
+                {...FOLDER_UPLOAD_INPUT_PROPS}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
