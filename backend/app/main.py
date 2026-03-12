@@ -135,6 +135,16 @@ def _normalize_headers(headers: List[str]) -> List[str]:
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
 FILE_SNIFF_BYTES = int(os.getenv("FILE_SNIFF_BYTES", "65536"))
+BLOCKED_UPLOAD_CONTENT_TYPE_PREFIXES = (
+    "application/pdf",
+    "application/zip",
+    "application/x-zip",
+    "application/x-rar",
+    "application/octet-stream",
+    "image/",
+    "audio/",
+    "video/",
+)
 
 
 def _detect_delimiter(filename: str | None) -> str:
@@ -146,6 +156,13 @@ def _detect_delimiter(filename: str | None) -> str:
 
 
 def _validate_upload_content(upload: UploadFile) -> None:
+    content_type = (upload.content_type or "").strip().lower()
+    if any(content_type.startswith(prefix) for prefix in BLOCKED_UPLOAD_CONTENT_TYPE_PREFIXES):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type '{content_type}' for CSV/TSV upload.",
+        )
+
     # Enforce a hard file-size cap to reduce parser/DB abuse.
     upload.file.seek(0, io.SEEK_END)
     size = upload.file.tell()
