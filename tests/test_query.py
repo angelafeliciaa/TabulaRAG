@@ -406,6 +406,7 @@ def test_filter_rows_success(client):
     assert data["row_count"] == 1
     assert len(data["rowsResult"]) == 1
     assert data["rowsResult"][0]["row_data"]["city"] == "London"
+    assert data["rowsResult"][0]["highlight_id"] == f"d{dataset_id}_r0_city"
     assert data["url"].startswith("http://localhost:5173/tables/virtual?q=")
 
 

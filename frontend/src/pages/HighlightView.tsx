@@ -52,6 +52,26 @@ function parseRequestedHighlightIds(primaryId: string, search: string): string[]
   return ordered;
 }
 
+function resolveReturnPath(search: string): string {
+  const params = new URLSearchParams(search);
+  const returnTo = (params.get("return_to") || "").trim();
+  if (!returnTo) {
+    return "/";
+  }
+  if (returnTo.startsWith("/")) {
+    return returnTo;
+  }
+  try {
+    const parsed = new URL(returnTo);
+    if (parsed.origin === window.location.origin) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    return "/";
+  }
+  return "/";
+}
+
 export default function HighlightView() {
   const { highlightId } = useParams();
   const location = useLocation();
@@ -62,6 +82,7 @@ export default function HighlightView() {
   const [tableName, setTableName] = useState<string | null>(null);
   const [targets, setTargets] = useState<HighlightTarget[]>([]);
   const [targetIndex, setTargetIndex] = useState(0);
+  const returnPath = resolveReturnPath(location.search);
   const queryText = new URLSearchParams(location.search).get("q");
 
   useEffect(() => {
@@ -255,9 +276,9 @@ export default function HighlightView() {
               </button>
             </div>
 
-            <Link className="return-link" to="/">
+            <Link className="return-link" to={returnPath}>
               <img src={returnIcon} alt="" />
-              Back to Upload
+              {returnPath === "/" ? "Back to Upload" : "Back to Results"}
             </Link>
           </div>
         </>

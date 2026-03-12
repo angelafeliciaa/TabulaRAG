@@ -566,7 +566,8 @@ def filter_dataset(body: FilterRequest):
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
-    valid_columns = {col["name"] for col in cols_payload["columns"]}
+    ordered_columns = [str(col["name"]) for col in cols_payload["columns"] if col.get("name")]
+    valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
@@ -603,6 +604,16 @@ def filter_dataset(body: FilterRequest):
         rows_raw = db.execute(text(sql), params).mappings().all()
         row_count_raw = db.execute(text(count_sql), params).scalar_one()
 
+    highlight_column = None
+    if body.filters:
+        for item in body.filters:
+            candidate = item.column
+            if candidate in valid_columns:
+                highlight_column = candidate
+                break
+    if highlight_column is None:
+        highlight_column = ordered_columns[0]
+
     rows: List[Dict[str, Any]] = []
     for r in rows_raw:
         item = dict(r)
@@ -619,6 +630,8 @@ def filter_dataset(body: FilterRequest):
                 )
             except Exception:
                 item["row_data"] = {}
+        row_index = int(item.get("row_index", 0))
+        item["highlight_id"] = f"d{body.dataset_id}_r{row_index}_{highlight_column}"
         rows.append(item)
     url = build_filter_virtual_table_url(body) if row_count_raw else None
 

@@ -426,7 +426,7 @@ export async function aggregate(params: unknown): Promise<AggregateResponse> {
 
 export type FilterResponse = {
   dataset_id: number;
-  rowsResult: { row_index: number; row_data: Record<string, unknown> }[];
+  rowsResult: { row_index: number; row_data: Record<string, unknown>; highlight_id: string }[];
   row_count: number;
   sql_query: string;
   url: string | null;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   aggregate,
   filterRows,
@@ -7,6 +7,7 @@ import {
   type FilterResponse,
 } from "../api";
 import DataTable from "../components/DataTable";
+import openIcon from "../images/open.png";
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -17,9 +18,10 @@ export default function VirtualTableView() {
   const location = useLocation();
   const [err, setErr] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rows, setRows] = useState<(Record<string, unknown> & { __highlight_id?: string })[]>([]);
   const [resultTitle, setResultTitle] = useState<string>("Result");
   const [resultSubtitle, setResultSubtitle] = useState<string>("");
+  const [isFilterResult, setIsFilterResult] = useState(false);
 
   type AggregatePayload = {
     dataset_id: number;
@@ -84,6 +86,7 @@ export default function VirtualTableView() {
     if ("mode" in payload && payload.mode === "filter") {
       filterRows(payload)
         .then((result: FilterResponse) => {
+          setIsFilterResult(true);
           setResultTitle(`Filter result: ${formatFilterSummary(payload.filters)}`);
           setResultSubtitle(`${result.row_count} matching rows`);
 
@@ -98,6 +101,7 @@ export default function VirtualTableView() {
 
           const mappedRows = result.rowsResult.map((item) => ({
             row_index: item.row_index,
+            __highlight_id: item.highlight_id,
             ...(item.row_data || {}),
           }));
           setRows(mappedRows);
@@ -108,6 +112,7 @@ export default function VirtualTableView() {
 
     aggregate(payload)
       .then((result: AggregateResponse) => {
+        setIsFilterResult(false);
         const aggregatePayload = payload as AggregatePayload;
 
         const operationLabel = aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
@@ -163,6 +168,27 @@ export default function VirtualTableView() {
           <DataTable
             columns={columns}
             rows={rows}
+            rowAction={
+              isFilterResult
+                ? ({ row }) => {
+                    const highlightId = row.__highlight_id;
+                    if (!highlightId || typeof highlightId !== "string") {
+                      return null;
+                    }
+                    return (
+                      <Link
+                        className="result-row-open-link"
+                        to={`/highlight/${encodeURIComponent(highlightId)}?return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
+                        aria-label={`Show source row ${String(row.row_index ?? "")}`}
+                        title="Show in original table"
+                      >
+                        <img src={openIcon} alt="" aria-hidden="true" />
+                      </Link>
+                    );
+                  }
+                : undefined
+            }
+            rowActionLabel=""
           />
         </div>
       )}

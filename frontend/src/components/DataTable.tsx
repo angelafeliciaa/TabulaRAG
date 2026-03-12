@@ -1,4 +1,4 @@
-import { type MouseEvent, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, useMemo, useState } from "react";
 
 type DataTableProps = {
   columns: string[];
@@ -12,6 +12,8 @@ type DataTableProps = {
     event: MouseEvent<HTMLTableCellElement>,
     payload: { column: string; value: unknown; rowIndex: number },
   ) => void;
+  rowAction?: (payload: { row: Record<string, unknown>; rowIndex: number }) => ReactNode;
+  rowActionLabel?: string;
 };
 
 type SortDirection = "asc" | "desc";
@@ -191,6 +193,8 @@ export default function DataTable({
   sortable = false,
   formatCellValue,
   onCellContextMenu,
+  rowAction,
+  rowActionLabel = "",
 }: DataTableProps) {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -301,6 +305,7 @@ export default function DataTable({
                   </th>
                 );
               })}
+              {rowAction && <th className="table-row-action-header">{rowActionLabel}</th>}
             </tr>
           </thead>
           <tbody>
@@ -332,6 +337,11 @@ export default function DataTable({
                       </td>
                     );
                   })}
+                  {rowAction && (
+                    <td className="table-row-action-cell">
+                      {rowAction({ row, rowIndex: absoluteRowIndex })}
+                    </td>
+                  )}
                 </tr>
               );
             })}
