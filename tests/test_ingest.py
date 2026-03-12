@@ -181,6 +181,33 @@ def test_invalid_extension(client):
     assert response.status_code == 400
     assert ".csv or .tsv" in response.json()["detail"]
 
+
+def test_rejects_pdf_content_type_even_with_csv_extension(client):
+    response = client.post(
+        "/ingest",
+        files={"file": ("looks_like_csv.csv", io.BytesIO(b"%PDF-1.7\nfake\n"), "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "Unsupported content type" in response.json()["detail"]
+
+
+def test_rejects_binary_payload_with_csv_extension(client):
+    response = client.post(
+        "/ingest",
+        files={"file": ("binary.csv", io.BytesIO(b"\x00\x01\x02not-csv"), "text/csv")},
+    )
+    assert response.status_code == 400
+    assert "appears to be binary" in response.json()["detail"]
+
+
+def test_rejects_non_utf8_payload_with_csv_extension(client):
+    response = client.post(
+        "/ingest",
+        files={"file": ("latin1.csv", io.BytesIO(b"\xff\xfe\xfa"), "text/csv")},
+    )
+    assert response.status_code == 400
+    assert "UTF-8 encoded text" in response.json()["detail"]
+
 def test_ingest_does_not_require_auth_temporarily():
     from fastapi.testclient import TestClient
     import app.main as app_main
