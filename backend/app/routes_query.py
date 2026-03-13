@@ -51,6 +51,27 @@ def _column_json_text_expr(column_name: str) -> str:
     return f"COALESCE((row_data::jsonb -> '{escaped}') ->> 'normalized', row_data::jsonb ->> '{escaped}')"
 
 
+def _group_by_date_part_expr(
+    col_expr: str, part: Literal["month", "quarter", "year"]
+) -> str:
+    """SQL expression that groups an ISO date column by month (YYYY-MM), quarter (YYYY-QN), or year (YYYY)."""
+    if _is_sqlite():
+        if part == "month":
+            return f"strftime('%Y-%m', {col_expr})"
+        if part == "year":
+            return f"strftime('%Y', {col_expr})"
+        # quarter: YYYY-Q1..Q4
+        return (
+            f"strftime('%Y', {col_expr}) || '-Q' || ((cast(strftime('%m', {col_expr}) as integer) + 2) / 3)"
+        )
+    # PostgreSQL
+    if part == "month":
+        return f"SUBSTRING({col_expr} FROM 1 FOR 7)"
+    if part == "year":
+        return f"SUBSTRING({col_expr} FROM 1 FOR 4)"
+    return f"to_char(({col_expr})::date, 'YYYY-\"Q\"Q')"
+
+
 def _numeric_sql_expr(col: str) -> str:
     """SQL expression that casts a text column to double precision after stripping currency/formatting chars."""
     if _is_sqlite():
@@ -293,6 +314,10 @@ class AggregateRequest(BaseModel):
         default=None, description="Required for sum/avg/min/max"
     )
     group_by: Optional[str] = None
+    group_by_date_part: Optional[Literal["month", "quarter", "year"]] = Field(
+        default=None,
+        description="When group_by is a date column (ISO YYYY-MM-DD), group by this part instead of full date: month (YYYY-MM), quarter (YYYY-QN), or year (YYYY).",
+    )
     limit: int = 50
 
 
@@ -300,6 +325,7 @@ class AggregateResponse(BaseModel):
     dataset_id: int
     metric_column: Optional[str]
     group_by_column: Optional[str]
+    group_by_date_part: Optional[str] = None
     rowsResult: List[Dict[str, Any]] = Field(
         description="Result of the aggregate query. In your response, mention both the group_value and aggregate_value."
     )
@@ -352,6 +378,7 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
         "operation": body.operation,
         "metric_column": body.metric_column,
         "group_by": body.group_by,
+        "group_by_date_part": body.group_by_date_part,
         "filters": [f.dict() for f in body.filters] if body.filters else None,
         "highlight_index": highlight_index,
         "limit": 500,
@@ -500,7 +527,11 @@ def aggregate_dataset(body: AggregateRequest):
     group_by_sql = ""
     order_by_sql = ""
     if body.group_by:
-        group_expr = col_expr(body.group_by)
+        base_col_expr = col_expr(body.group_by)
+        if body.group_by_date_part:
+            group_expr = _group_by_date_part_expr(base_col_expr, body.group_by_date_part)
+        else:
+            group_expr = base_col_expr
         select_parts.append(f"{group_expr} AS group_value")
         group_by_sql = f" GROUP BY {group_expr}"
         order_by_sql = (
@@ -545,6 +576,7 @@ def aggregate_dataset(body: AggregateRequest):
         dataset_id=body.dataset_id,
         metric_column=body.metric_column,
         group_by_column=body.group_by,
+        group_by_date_part=body.group_by_date_part,
         rowsResult=rows,
         sql_query=_render_sql(sql, params),
         url=url,
