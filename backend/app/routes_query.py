@@ -12,7 +12,11 @@ from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context,
 from app.routes_tables import list_tables, get_cols_for_dataset
 import app.db as app_db
 from app.db import SessionLocal
-from app.normalization import flatten_row_data_to_normalized, strip_internal_fields
+from app.normalization import (
+    flatten_row_data_to_normalized,
+    get_column_currency,
+    strip_internal_fields,
+)
 
 router = APIRouter()
 
@@ -326,6 +330,10 @@ class AggregateResponse(BaseModel):
     metric_column: Optional[str]
     group_by_column: Optional[str]
     group_by_date_part: Optional[str] = None
+    metric_currency: Optional[str] = Field(
+        default=None,
+        description="Currency code for the metric column when it is money (e.g. USD, EUR). Use when phrasing the answer.",
+    )
     rowsResult: List[Dict[str, Any]] = Field(
         description="Result of the aggregate query. In your response, mention both the group_value and aggregate_value."
     )
@@ -559,8 +567,21 @@ def aggregate_dataset(body: AggregateRequest):
         LIMIT :limit
     """
 
+    metric_currency: Optional[str] = None
     with SessionLocal() as db:
         rows_raw = db.execute(text(sql), params).mappings().all()
+
+        if body.metric_column:
+            sample = db.execute(
+                text("SELECT row_data FROM dataset_rows WHERE dataset_id = :dataset_id LIMIT 1"),
+                {"dataset_id": body.dataset_id},
+            ).fetchone()
+            if sample and sample[0]:
+                row_data = sample[0]
+                if isinstance(row_data, str):
+                    row_data = json.loads(row_data)
+                if isinstance(row_data, dict):
+                    metric_currency = get_column_currency(row_data, body.metric_column)
 
     rows: List[Dict[str, Any]] = []
     for r in rows_raw:
@@ -571,12 +592,13 @@ def aggregate_dataset(body: AggregateRequest):
         rows.append(item)
 
     url = build_virtual_table_url(body, rows) if rows else None
-    
+
     return AggregateResponse(
         dataset_id=body.dataset_id,
         metric_column=body.metric_column,
         group_by_column=body.group_by,
         group_by_date_part=body.group_by_date_part,
+        metric_currency=metric_currency,
         rowsResult=rows,
         sql_query=_render_sql(sql, params),
         url=url,

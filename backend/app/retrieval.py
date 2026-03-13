@@ -13,6 +13,7 @@ from app.embeddings import embed_texts
 from app.qdrant_client import search_vectors
 from app.normalization import (
     flatten_row_data_to_normalized,
+    get_column_currency,
     get_numeric_value,
     get_normalized_value,
     is_internal_key,
@@ -1549,6 +1550,10 @@ def _infer_aggregate_answer(
             top_n=1,
         ),
     }
+    if metric_for_mode and source_row_data is not None:
+        currency = get_column_currency(source_row_data, metric_for_mode)
+        if currency is not None:
+            answer_details["metric_currency"] = currency
     if source_result:
         answer_details.update(
             {

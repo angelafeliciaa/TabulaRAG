@@ -5,6 +5,8 @@ type DataTableProps = {
   /** Optional display labels for column headers (same order as columns). Use when showing original vs normalized names. */
   columnLabels?: string[];
   rows: Record<string, unknown>[];
+  /** When set, sorting uses these values (e.g. normalized) instead of rows. Must match rows in length and order. */
+  sortRows?: Record<string, unknown>[];
   highlight?: { rows: number[]; cols: string[] };
   rowOffset?: number;
   rowIndices?: number[];
@@ -188,6 +190,7 @@ export default function DataTable({
   columns,
   columnLabels,
   rows,
+  sortRows,
   highlight,
   rowOffset = 0,
   rowIndices,
@@ -200,6 +203,8 @@ export default function DataTable({
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const highlightedRows = new Set(highlight?.rows || []);
   const highlightedCols = new Set(highlight?.cols || []);
+
+  const rowsForSort = sortRows != null && sortRows.length === rows.length ? sortRows : rows;
 
   const displayRows = useMemo(() => {
     const entries = rows.map((row, index) => ({
@@ -216,10 +221,10 @@ export default function DataTable({
     }
 
     const sign = sortDirection === "asc" ? 1 : -1;
-    const sortKind = inferSortKind(rows, sortColumn);
+    const sortKind = inferSortKind(rowsForSort, sortColumn);
     return [...entries].sort((left, right) => {
-      const leftValue = getSortableValue(left.row[sortColumn]);
-      const rightValue = getSortableValue(right.row[sortColumn]);
+      const leftValue = getSortableValue(rowsForSort[left.originalIndex][sortColumn]);
+      const rightValue = getSortableValue(rowsForSort[right.originalIndex][sortColumn]);
 
       if (leftValue.kind === "empty" && rightValue.kind === "empty") {
         return left.originalIndex - right.originalIndex;
@@ -253,7 +258,7 @@ export default function DataTable({
 
       return left.originalIndex - right.originalIndex;
     });
-  }, [rowIndices, rowOffset, rows, sortColumn, sortDirection, sortable]);
+  }, [rowIndices, rowOffset, rows, rowsForSort, sortColumn, sortDirection, sortable]);
 
   function toggleSort(column: string) {
     if (sortColumn !== column) {

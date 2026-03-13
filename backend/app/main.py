@@ -31,6 +31,7 @@ from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
 from app.normalization import (
     infer_date_formats_for_columns,
+    infer_money_columns,
     normalize_headers,
     normalize_row_obj,
 )
@@ -223,12 +224,14 @@ def _build_row_obj(
     normalized_headers: List[str],
     row: List[str],
     date_format_by_column: Optional[dict] = None,
+    money_columns: Optional[set] = None,
 ) -> dict:
     return normalize_row_obj(
         normalized_headers,
         row,
         store_original=True,
         date_format_by_column=date_format_by_column,
+        money_columns=money_columns,
     )
 
 
@@ -237,6 +240,7 @@ def _insert_rows_postgres_copy(
     headers: List[str],
     rows_iter: Iterable[List[str]],
     date_format_by_column: Optional[dict] = None,
+    money_columns: Optional[set] = None,
 ) -> int:
     """Fast path for PostgreSQL ingestion using COPY."""
     row_count = 0
@@ -247,7 +251,9 @@ def _insert_rows_postgres_copy(
                 "COPY dataset_rows (dataset_id, row_index, row_data) FROM STDIN"
             ) as copy:
                 for row_index, row in enumerate(rows_iter):
-                    row_obj = _build_row_obj(headers, row, date_format_by_column)
+                    row_obj = _build_row_obj(
+                        headers, row, date_format_by_column, money_columns
+                    )
                     copy.write_row(
                         (
                             dataset_id,
@@ -270,13 +276,16 @@ def _insert_rows_batched(
     headers: List[str],
     rows_iter: Iterable[List[str]],
     date_format_by_column: Optional[dict] = None,
+    money_columns: Optional[set] = None,
 ) -> int:
     """Fallback ingestion path (works for SQLite and non-Postgres)."""
     row_count = 0
     with SessionLocal() as db:
         batch_rows = []
         for row_index, row in enumerate(rows_iter):
-            row_obj = _build_row_obj(headers, row, date_format_by_column)
+            row_obj = _build_row_obj(
+                headers, row, date_format_by_column, money_columns
+            )
             batch_rows.append(
                 {
                     "dataset_id": dataset_id,
@@ -436,15 +445,24 @@ def ingest_table(
 
     rows_list = list(rows_iter)
     date_format_by_column = infer_date_formats_for_columns(normalized_headers, rows_list)
+    money_columns = infer_money_columns(normalized_headers, rows_list)
     row_count = 0
     try:
         if engine.dialect.name == "postgresql":
             row_count = _insert_rows_postgres_copy(
-                dataset_id, normalized_headers, rows_list, date_format_by_column
+                dataset_id,
+                normalized_headers,
+                rows_list,
+                date_format_by_column,
+                money_columns,
             )
         else:
             row_count = _insert_rows_batched(
-                dataset_id, normalized_headers, rows_list, date_format_by_column
+                dataset_id,
+                normalized_headers,
+                rows_list,
+                date_format_by_column,
+                money_columns,
             )
     except Exception as exc:
         with SessionLocal() as db:

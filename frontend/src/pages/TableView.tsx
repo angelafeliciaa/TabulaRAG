@@ -236,6 +236,10 @@ export default function TableView() {
     () => (data ? flattenRowsByValueMode(data.rows, valueMode) : []),
     [data, valueMode],
   );
+  const normalizedRows = useMemo(
+    () => (data ? flattenRowsByValueMode(data.rows, "normalized") : []),
+    [data],
+  );
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(resolvedRows, data.columns) : new Set<string>()),
     [data, resolvedRows],
@@ -297,6 +301,13 @@ export default function TableView() {
       return next;
     });
   }, [data, dateColumns, dateViewMode, filtered.rows]);
+
+  const sortRows = useMemo(() => {
+    if (!data || normalizedRows.length === 0) {
+      return undefined;
+    }
+    return filtered.rowIndices.map((ri) => normalizedRows[ri - data.offset]);
+  }, [data, filtered.rowIndices, normalizedRows]);
 
   useEffect(() => {
     if (!dateMenu) {
@@ -457,6 +468,7 @@ export default function TableView() {
                 : undefined
             }
             rows={displayRows}
+            sortRows={sortRows}
             rowIndices={filtered.rowIndices}
             sortable
             onCellContextMenu={(event, payload) => {

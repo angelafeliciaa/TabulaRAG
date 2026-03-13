@@ -2,7 +2,7 @@
 import re
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # "dmy" = day/month/year, "mdy" = month/day/year, "ymd" = year/month/day
 DateFormatHint = str
@@ -22,6 +22,10 @@ _SYMBOL_TO_CURRENCY: Dict[str, str] = {
     "¥": "JPY",
     "₹": "INR",
 }
+
+# For value-based "looks like money" detection: symbol/code at front or code at end + rest parses as number (commas stripped).
+CURRENCY_SYMBOLS = set("$€£¥₩₹฿₺₽")
+CURRENCY_CODES = frozenset({"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "KRW", "THB", "TRY", "RUB"})
 _ISO_DATE_RE = re.compile(
     r"^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$"
 )
@@ -147,6 +151,74 @@ def parse_money(value: Any) -> Optional[Tuple[str, float, Optional[str]]]:
         return None
     currency = _infer_currency(raw)
     return (_format_money_canonical(num), float(num), currency)
+
+
+# Fraction of non-empty values that must look like money to treat column as money.
+MONEY_COLUMN_THRESHOLD = 0.8
+# Cap rows scanned for money-column inference (avoids scanning huge datasets).
+MAX_ROWS_FOR_MONEY_INFERENCE = 2000
+
+
+def _looks_like_money(value: str) -> bool:
+    """True if currency symbol at front, or currency code at front/end, and the rest (commas stripped) parses as a number."""
+    v = value.strip()
+    if not v:
+        return False
+    # Symbol at front + rest is number (e.g. "$100", "€ 1,000")
+    if v[0] in CURRENCY_SYMBOLS:
+        rest = v[1:].strip().replace(",", "")
+        return parse_number(rest) is not None
+    # Currency code at front (e.g. "USD 100", "EUR 1,000") — longest match first
+    vu = v.upper()
+    for code in sorted(CURRENCY_CODES, key=len, reverse=True):
+        if vu.startswith(code):
+            rest = v[len(code):].strip().replace(",", "")
+            if parse_number(rest) is not None:
+                return True
+            break
+    # Currency code at end (e.g. "100 USD", "1,000 EUR")
+    for code in sorted(CURRENCY_CODES, key=len, reverse=True):
+        if vu.endswith(code):
+            rest = v[:-len(code)].strip().replace(",", "")
+            if parse_number(rest) is not None:
+                return True
+            break
+    return False
+
+
+def is_money_column(values: List[str], threshold: float = MONEY_COLUMN_THRESHOLD) -> bool:
+    """Returns True if majority of non-empty values look like money."""
+    non_empty = [v.strip() for v in values if v and str(v).strip()]
+    if not non_empty:
+        return False
+    hits = sum(1 for v in non_empty if _looks_like_money(v))
+    return hits / len(non_empty) >= threshold
+
+
+def infer_money_columns(
+    normalized_headers: List[str],
+    rows: List[List[str]],
+    *,
+    max_samples_per_column: int = 500,
+) -> Set[int]:
+    """
+    Infer which column indices are money columns by scanning up to MAX_ROWS_FOR_MONEY_INFERENCE rows.
+    A column is money if at least MONEY_COLUMN_THRESHOLD of its non-empty values look like money
+    (currency symbol, currency code prefix/suffix, or comma-thousands pattern like 1,000.00).
+    """
+    ncols = len(normalized_headers)
+    rows_to_scan = rows[:MAX_ROWS_FOR_MONEY_INFERENCE]
+    out: Set[int] = set()
+    for i in range(ncols):
+        values = []
+        for row in rows_to_scan:
+            if len(values) >= max_samples_per_column:
+                break
+            cell = row[i] if i < len(row) else ""
+            values.append(str(cell) if cell is not None else "")
+        if is_money_column(values):
+            out.add(i)
+    return out
 
 
 def parse_date(value: Any) -> Optional[Dict[str, Any]]:
@@ -351,9 +423,11 @@ def normalize_row_obj(
     *,
     store_original: bool = True,
     date_format_by_column: Optional[Dict[int, Optional[DateFormatHint]]] = None,
+    money_columns: Optional[Set[int]] = None,
 ) -> Dict[str, Any]:
     """Build row_data: keys are normalized column names; values are { original, normalized } or legacy plain normalized.
     When date_format_by_column is set, dates are parsed with that format and normalized value becomes ISO (YYYY-MM-DD).
+    When money_columns is set, a cell is only typed as money if its column index is in the set (avoids false positives).
     """
     result: Dict[str, Any] = {}
     typed: Dict[str, Dict[str, Any]] = {}
@@ -373,8 +447,9 @@ def normalize_row_obj(
             typed[key] = {"type": "date", **date_value}
             continue
 
+        is_money_column = money_columns is not None and i in money_columns
         money_value = parse_money(raw) if raw is not None else None
-        if money_value is not None:
+        if money_value is not None and (money_columns is None or is_money_column):
             canonical_str, num, currency = money_value
             if store_original:
                 result[key] = {"original": raw, "normalized": canonical_str}
@@ -386,6 +461,22 @@ def normalize_row_obj(
                 "currency": currency,
             }
             continue
+
+        # In a money column, treat plain numbers as money too (no symbol → currency None)
+        if is_money_column and raw is not None:
+            plain_num = parse_number(normalize_text_value(raw) or "")
+            if plain_num is not None:
+                canonical_str = _format_money_canonical(plain_num)
+                if store_original:
+                    result[key] = {"original": raw, "normalized": canonical_str}
+                else:
+                    result[key] = canonical_str
+                typed[key] = {
+                    "type": "money",
+                    "number": float(plain_num),
+                    "currency": None,
+                }
+                continue
 
         normalized = text_normalized
         if store_original:
@@ -413,6 +504,14 @@ def get_typed_value(row_data: Dict[str, Any], column: str) -> Optional[Dict[str,
     if not isinstance(item, dict):
         return None
     return item
+
+
+def get_column_currency(row_data: Dict[str, Any], column: str) -> Optional[str]:
+    """If the column is typed as money, return its currency code (e.g. USD); else None."""
+    item = get_typed_value(row_data, column)
+    if not item or item.get("type") != "money":
+        return None
+    return item.get("currency")
 
 
 def get_numeric_value(row_data: Dict[str, Any], column: str) -> Optional[float]:
