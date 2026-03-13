@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { logout, getUser, getServerStatus, type ServerStatus } from "./api";
+import logo from "./images/logo.png";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";
@@ -50,40 +51,46 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <Link className="app-brand" to="/" aria-label="Go to home">
+        <img src={logo} alt="" aria-hidden="true" />
+      </Link>
+
       <div className={`server-status ${serverStatus}`}>
         <span className="status-dot" />
         <span>Server Connection: {serverStatus}</span>
       </div>
 
       <div className="top-bar">
-        <div className="user-menu">
-          {user?.avatar_url && (
-            <img src={user.avatar_url} alt="" className="user-avatar" />
-          )}
-          <span className="user-name">{user?.name || user?.login}</span>
+        <div className="top-bar-actions">
+          <div className="user-menu">
+            {user?.avatar_url && (
+              <img src={user.avatar_url} alt="" className="user-avatar" />
+            )}
+            <span className="user-name">{user?.name || user?.login}</span>
+            <button
+              className="logout-btn"
+              onClick={handleLogout}
+              hidden
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+
           <button
-            className="logout-btn"
-            onClick={handleLogout}
-            hidden
+            className="theme-toggle"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label="Toggle theme"
+            aria-pressed={theme === "light"}
             type="button"
           >
-            Sign out
+            <span className="toggle-track">
+              <span className="toggle-thumb">
+                <img src={theme === "dark" ? moonIcon : sunIcon} alt="" />
+              </span>
+            </span>
           </button>
         </div>
-
-        <button
-          className="theme-toggle"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          aria-label="Toggle theme"
-          aria-pressed={theme === "light"}
-          type="button"
-        >
-          <span className="toggle-track">
-            <span className="toggle-thumb">
-              <img src={theme === "dark" ? moonIcon : sunIcon} alt="" />
-            </span>
-          </span>
-        </button>
       </div>
 
       <div className="content">

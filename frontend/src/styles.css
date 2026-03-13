@@ -171,7 +171,7 @@ h3 {
 .server-status {
   position: absolute;
   top: 22px;
-  left: 24px;
+  left: 66px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -785,6 +785,44 @@ h3 {
   align-items: center;
   gap: 12px;
   z-index: 100;
+}
+
+.top-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-brand {
+  position: absolute;
+  top: 22px;
+  left: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: none;
+  text-decoration: none;
+  z-index: 101;
+}
+
+.app-brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.app-brand:hover {
+  color: var(--text);
+  opacity: 0.9;
 }
 
 .theme-toggle {
@@ -2339,6 +2377,23 @@ tr:hover td {
     gap: 8px;
   }
 
+  .top-bar-actions {
+    gap: 8px;
+  }
+
+  .app-brand {
+    top: 8px;
+    left: 12px;
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+  }
+
+  .app-brand img {
+    width: 26px;
+    height: 26px;
+  }
+
   .hero-logo {
     width: 36px;
     height: 36px;
@@ -2356,7 +2411,7 @@ tr:hover td {
   }
 
   .server-status {
-    left: 12px;
+    left: 50px;
     top: 8px;
   }
 
