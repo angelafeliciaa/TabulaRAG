@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { Link } from "react-router-dom";
 import {
   deleteTable,
@@ -6,11 +6,11 @@ import {
   listIndexStatus,
   listTables,
   renameTable,
+  uploadTable,
   type TableIndexStatus,
-  type UploadProgress,
   type TableSlice,
   type TableSummary,
-  uploadTable,
+  type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
 import logo from "../images/logo.png";
@@ -37,6 +37,40 @@ type UploadQueueItem = {
   estimatedRows: number | null;
   estimatedCols: number | null;
   error: string | null;
+};
+
+type FileSystemEntryLike = {
+  isFile: boolean;
+  isDirectory: boolean;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+};
+
+type FileSystemDirectoryReaderLike = {
+  readEntries: (
+    successCallback: (entries: FileSystemEntryLike[]) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+  createReader: () => FileSystemDirectoryReaderLike;
+};
+
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+type FolderCapableInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory?: string;
+  directory?: string;
+};
+
+const FOLDER_UPLOAD_INPUT_PROPS: FolderCapableInputProps = {
+  webkitdirectory: "",
+  directory: "",
 };
 
 function getErrorMessage(error: unknown): string {
@@ -66,6 +100,18 @@ function isTableNotFoundError(error: unknown): boolean {
   return /table not found/i.test(getErrorMessage(error));
 }
 
+function isOfflineConnectionError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("failed to fetch")
+    || normalized.includes("networkerror")
+    || normalized.includes("network error")
+    || normalized.includes("load failed")
+    || normalized.includes("network request failed")
+    || normalized.includes("err_network")
+  );
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -79,6 +125,88 @@ function formatFileSize(bytes: number): string {
     return `${Math.round(safeBytes / 1024)}KB`;
   }
   return `${(safeBytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function getFileIdentity(file: File): string {
+  const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  return `${relativePath}:${file.size}:${file.lastModified}`;
+}
+
+function hasSupportedExtension(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return lowerName.endsWith(".csv") || lowerName.endsWith(".tsv");
+}
+
+function isLikelyDirectoryPlaceholder(file: File): boolean {
+  if (hasSupportedExtension(file.name)) {
+    return false;
+  }
+  const noExtension = !/\.[^./\\]+$/.test(file.name);
+  return noExtension && file.size === 0 && file.type === "";
+}
+
+function fileFromEntry(entry: FileSystemFileEntryLike): Promise<File> {
+  return new Promise<File>((resolve, reject) => {
+    entry.file(resolve, reject);
+  });
+}
+
+function readAllDirectoryEntries(
+  reader: FileSystemDirectoryReaderLike,
+): Promise<FileSystemEntryLike[]> {
+  return new Promise<FileSystemEntryLike[]>((resolve, reject) => {
+    const allEntries: FileSystemEntryLike[] = [];
+    const readBatch = () => {
+      reader.readEntries(
+        (entries) => {
+          if (entries.length === 0) {
+            resolve(allEntries);
+            return;
+          }
+          allEntries.push(...entries);
+          readBatch();
+        },
+        reject,
+      );
+    };
+    readBatch();
+  });
+}
+
+async function collectFilesFromEntry(entry: FileSystemEntryLike): Promise<File[]> {
+  if (entry.isFile) {
+    const file = await fileFromEntry(entry as FileSystemFileEntryLike);
+    return [file];
+  }
+  if (!entry.isDirectory) {
+    return [];
+  }
+  const dirReader = (entry as FileSystemDirectoryEntryLike).createReader();
+  const childEntries = await readAllDirectoryEntries(dirReader);
+  const files = await Promise.all(childEntries.map((child) => collectFilesFromEntry(child)));
+  return files.flat();
+}
+
+async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+  const itemFiles = await Promise.all(
+    Array.from(dataTransfer.items || []).map(async (item) => {
+      if (item.kind !== "file") {
+        return [] as File[];
+      }
+      const itemWithEntry = item as DataTransferItemWithEntry;
+      const entry = itemWithEntry.webkitGetAsEntry?.();
+      if (entry) {
+        return await collectFilesFromEntry(entry);
+      }
+      const fallbackFile = item.getAsFile();
+      return fallbackFile ? [fallbackFile] : [];
+    }),
+  );
+  const flattened = itemFiles.flat();
+  if (flattened.length > 0) {
+    return flattened.filter((file) => !isLikelyDirectoryPlaceholder(file));
+  }
+  return Array.from(dataTransfer.files || []).filter((file) => !isLikelyDirectoryPlaceholder(file));
 }
 
 function countDelimitedColumns(line: string, delimiter: string): number {
@@ -179,6 +307,7 @@ function smoothIndexStatus(
 
 export default function Upload() {
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [showUploadQueue, setShowUploadQueue] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -712,6 +841,7 @@ export default function Upload() {
     }
     if (failureCount === 0 && successCount === queuedItems.length) {
       setUploadQueue([]);
+      setShowUploadQueue(false);
     }
 
     setStatus(null);
@@ -806,14 +936,13 @@ export default function Upload() {
   }
 
   function validateSelectedFile(nextFile: File): string | null {
-    const lowerName = nextFile.name.toLowerCase();
-    if (!(lowerName.endsWith(".csv") || lowerName.endsWith(".tsv"))) {
+    if (!hasSupportedExtension(nextFile.name)) {
       return "File must have a .csv or .tsv extension.";
     }
     return null;
   }
 
-  function onSelectFiles(nextFiles: FileList | null) {
+  function onSelectFiles(nextFiles: FileList | File[] | null) {
     if (busy) {
       return;
     }
@@ -823,9 +952,7 @@ export default function Upload() {
       return;
     }
 
-    const existingFileKeys = new Set(
-      uploadQueue.map((item) => `${item.file.name}:${item.file.size}:${item.file.lastModified}`),
-    );
+    const existingFileKeys = new Set(uploadQueue.map((item) => getFileIdentity(item.file)));
     const occupiedNameKeys = new Set<string>([
       ...tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
       ...uploadQueue.map((item) => getNameKey(stripSupportedFileExtension(item.name) || "table")),
@@ -834,13 +961,16 @@ export default function Upload() {
     const rejectedMessages: string[] = [];
 
     for (const nextFile of Array.from(nextFiles)) {
+      if (isLikelyDirectoryPlaceholder(nextFile)) {
+        continue;
+      }
       const validationError = validateSelectedFile(nextFile);
       if (validationError) {
         rejectedMessages.push(`${nextFile.name}: ${validationError}`);
         continue;
       }
 
-      const fileKey = `${nextFile.name}:${nextFile.size}:${nextFile.lastModified}`;
+      const fileKey = getFileIdentity(nextFile);
       if (existingFileKeys.has(fileKey)) {
         rejectedMessages.push(`${nextFile.name}: already selected.`);
         continue;
@@ -893,6 +1023,7 @@ export default function Upload() {
     const nextQueue = uploadQueue.filter((item) => item.id !== queueItemId);
     setUploadQueue(nextQueue);
     if (nextQueue.length === 0) {
+      setShowUploadQueue(false);
       setErr(null);
       setStatus(null);
     }
@@ -903,6 +1034,7 @@ export default function Upload() {
       return;
     }
     setUploadQueue([]);
+    setShowUploadQueue(false);
     setErr(null);
     setStatus(null);
   }
@@ -951,13 +1083,13 @@ export default function Upload() {
     );
   }
 
-  function onUploadDragEnter(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragEnter(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(true);
   }
 
-  function onUploadDragOver(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragOver(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
@@ -966,7 +1098,7 @@ export default function Upload() {
     }
   }
 
-  function onUploadDragLeave(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragLeave(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     const relatedTarget = event.relatedTarget as Node | null;
@@ -975,15 +1107,32 @@ export default function Upload() {
     }
   }
 
-  function onUploadDrop(event: React.DragEvent<HTMLLabelElement>) {
+  async function onUploadDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(false);
-    onSelectFiles(event.dataTransfer.files);
+    const transferTypes = Array.from(event.dataTransfer.types || []);
+    const hasFileTransferType = transferTypes.some((type) =>
+      type.toLowerCase().includes("file")
+    );
+    const hasDroppedFileItem = Array.from(event.dataTransfer.items || []).some(
+      (item) => item.kind === "file",
+    );
+    if (event.dataTransfer.files.length > 0 || hasDroppedFileItem || hasFileTransferType) {
+      setShowUploadQueue(true);
+    }
+    if (event.dataTransfer.files.length === 0 && (hasDroppedFileItem || hasFileTransferType)) {
+      setStatus(null);
+      setErr("Unsupported file type. Please upload a .csv or .tsv file.");
+      return;
+    }
+    const droppedFiles = await collectDroppedFiles(event.dataTransfer);
+    onSelectFiles(droppedFiles);
   }
   const hasPendingUploads = uploadQueue.some(
     (item) => item.phase === "idle" || item.phase === "error",
   );
+  const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
   const isQueueInProgress = useMemo(() => {
     if (busy) {
       return true;
@@ -999,6 +1148,15 @@ export default function Upload() {
   const deleteConfirmBusy = deleteConfirmTable
     ? Boolean(deletingTableIds[deleteConfirmTable.dataset_id])
     : false;
+  const showOfflineView = useMemo(() => {
+    if (tables.length > 0 || busy) {
+      return false;
+    }
+    if (typeof window !== "undefined" && window.navigator && window.navigator.onLine === false) {
+      return true;
+    }
+    return Boolean(err && isOfflineConnectionError(err));
+  }, [tables.length, busy, err]);
   const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
   const sortedTables = useMemo(() => {
     const sortByMode = (a: TableSummary, b: TableSummary): number => {
@@ -1081,6 +1239,25 @@ export default function Upload() {
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  if (showOfflineView) {
+    return (
+      <div className="page page-stack">
+        <div className="hero">
+          <div className="hero-title-row">
+            <img src={logo} alt="TabulaRAG" className="hero-logo" />
+            <div className="hero-title">TabulaRAG</div>
+          </div>
+          <div className="hero-subtitle">
+            A fast-ingesting tabular data RAG tool backed with cell citations.
+          </div>
+        </div>
+        <div className="panel">
+          <p className="error">Connection Error: Server is currently offline.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page page-stack">
       {toast && (
@@ -1139,7 +1316,7 @@ export default function Upload() {
         </div>
       )}
 
-      {uploadQueue.length > 0 && <div className="upload-queue-backdrop" aria-hidden="true" />}
+      {isUploadQueueVisible && <div className="upload-queue-backdrop" aria-hidden="true" />}
 
       <div className="hero">
         <div className="hero-title-row">
@@ -1152,9 +1329,13 @@ export default function Upload() {
       </div>
 
       <div
-        className={`panel upload-panel${uploadQueue.length > 0 ? " has-queue in-modal" : ""}`}
+        className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
+        onDragEnter={onUploadDragEnter}
+        onDragOver={onUploadDragOver}
+        onDragLeave={onUploadDragLeave}
+        onDrop={onUploadDrop}
       >
-        {uploadQueue.length === 0 ? (
+        {!isUploadQueueVisible ? (
           <label
             className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
             onDragEnter={onUploadDragEnter}
@@ -1163,6 +1344,7 @@ export default function Upload() {
             onDrop={onUploadDrop}
           >
             <input
+              {...FOLDER_UPLOAD_INPUT_PROPS}
               type="file"
               multiple
               accept=".csv,.tsv"
@@ -1174,8 +1356,8 @@ export default function Upload() {
             <div className="upload-icon" aria-hidden="true">
               <img src={uploadLogo} alt="" />
             </div>
-            <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Start Uploading</div>
-            <div className="upload-subtitle">Supported file formats: .csv, .tsv</div>
+            <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Upload</div>
+            <div className="upload-subtitle">Supported file formats: .csv, .tsv, folders</div>
           </label>
         ) : (
           <>
@@ -1183,6 +1365,7 @@ export default function Upload() {
             <div className="row upload-queue-toolbar">
               <input
                 ref={fileInputRef}
+                {...FOLDER_UPLOAD_INPUT_PROPS}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
