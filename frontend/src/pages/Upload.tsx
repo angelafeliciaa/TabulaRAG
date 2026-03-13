@@ -63,12 +63,12 @@ type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => FileSystemEntryLike | null;
 };
 
-type FolderCapableInputProps = InputHTMLAttributes<HTMLInputElement> & {
+type FolderInputProps = InputHTMLAttributes<HTMLInputElement> & {
   webkitdirectory?: string;
   directory?: string;
 };
 
-const FOLDER_UPLOAD_INPUT_PROPS: FolderCapableInputProps = {
+const FOLDER_INPUT_PROPS: FolderInputProps = {
   webkitdirectory: "",
   directory: "",
 };
@@ -354,6 +354,9 @@ export default function Upload() {
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const emptyFileInputRef = useRef<HTMLInputElement | null>(null);
+  const emptyFolderInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
@@ -716,6 +719,11 @@ export default function Upload() {
 
     const queuedItems = uploadQueue.filter((item) => item.phase === "idle" || item.phase === "error");
     if (queuedItems.length === 0) {
+      // If only successful items remain, let the primary action close the upload queue.
+      setUploadQueue([]);
+      setShowUploadQueue(false);
+      setErr(null);
+      setStatus(null);
       return;
     }
 
@@ -1129,9 +1137,8 @@ export default function Upload() {
     const droppedFiles = await collectDroppedFiles(event.dataTransfer);
     onSelectFiles(droppedFiles);
   }
-  const hasPendingUploads = uploadQueue.some(
-    (item) => item.phase === "idle" || item.phase === "error",
-  );
+  const hasOnlySuccessfulUploads =
+    uploadQueue.length > 0 && uploadQueue.every((item) => item.phase === "success");
   const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
   const isQueueInProgress = useMemo(() => {
     if (busy) {
@@ -1336,7 +1343,7 @@ export default function Upload() {
         onDrop={onUploadDrop}
       >
         {!isUploadQueueVisible ? (
-          <label
+          <div
             className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
             onDragEnter={onUploadDragEnter}
             onDragOver={onUploadDragOver}
@@ -1344,7 +1351,7 @@ export default function Upload() {
             onDrop={onUploadDrop}
           >
             <input
-              {...FOLDER_UPLOAD_INPUT_PROPS}
+              ref={emptyFileInputRef}
               type="file"
               multiple
               accept=".csv,.tsv"
@@ -1353,19 +1360,68 @@ export default function Upload() {
                 event.currentTarget.value = "";
               }}
             />
-            <div className="upload-icon" aria-hidden="true">
-              <img src={uploadLogo} alt="" />
+            <input
+              ref={emptyFolderInputRef}
+              {...FOLDER_INPUT_PROPS}
+              type="file"
+              multiple
+              accept=".csv,.tsv"
+              onChange={(event) => {
+                onSelectFiles(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="upload-icon-row">
+              <button
+                type="button"
+                className="upload-icon icon-trigger"
+                aria-label="Select files"
+                title="Select files"
+                onClick={() => {
+                  emptyFileInputRef.current?.click();
+                }}
+                disabled={busy}
+              >
+                <img src={uploadLogo} alt="" />
+              </button>
+              <button
+                type="button"
+                className="upload-icon icon-trigger"
+                aria-label="Select folder"
+                title="Select folder"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  emptyFolderInputRef.current?.click();
+                }}
+                disabled={busy}
+              >
+                <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                  <path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1H3V6zm0 4h20v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8z" />
+                </svg>
+              </button>
             </div>
             <div className="upload-title">Select or Drag &amp; Drop Your File(s) to Upload</div>
             <div className="upload-subtitle">Supported file formats: .csv, .tsv, folders</div>
-          </label>
+          </div>
         ) : (
           <>
             <h2>Upload CSV/TSV</h2>
             <div className="row upload-queue-toolbar">
               <input
                 ref={fileInputRef}
-                {...FOLDER_UPLOAD_INPUT_PROPS}
+                type="file"
+                multiple
+                accept=".csv,.tsv"
+                onChange={(event) => {
+                  onSelectFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                className="file-input-hidden"
+              />
+              <input
+                ref={folderInputRef}
+                {...FOLDER_INPUT_PROPS}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
@@ -1383,6 +1439,15 @@ export default function Upload() {
               >
                 <img src={plusIcon} alt="" aria-hidden="true" className="upload-add-icon" />
                 Add more files
+              </button>
+              <button
+                onClick={() => folderInputRef.current?.click()}
+                type="button"
+                className="glass upload-add-more-button"
+                disabled={busy || isQueueInProgress}
+              >
+                <img src={plusIcon} alt="" aria-hidden="true" className="upload-add-icon" />
+                Add folder
               </button>
             </div>
 
@@ -1535,11 +1600,11 @@ export default function Upload() {
                   </button>
                   <button
                     onClick={onUpload}
-                    disabled={!hasPendingUploads || busy}
+                    disabled={busy}
                     className="primary"
                     type="button"
                   >
-                    {busy ? "Uploading..." : "Upload all files"}
+                    {busy ? "Uploading..." : hasOnlySuccessfulUploads ? "Done" : "Upload all files"}
                   </button>
                 </div>
               )}
