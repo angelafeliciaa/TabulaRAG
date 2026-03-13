@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   getSlice,
   listTables,
@@ -96,9 +96,45 @@ function detectDateColumns(rows: Record<string, unknown>[], columns: string[]): 
   return out;
 }
 
+function parseNonNegativeInt(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const normalized = Math.trunc(parsed);
+  return normalized >= 0 ? normalized : null;
+}
+
+function resolveReturnPath(search: string): string {
+  const params = new URLSearchParams(search);
+  const returnTo = (params.get("return_to") || "").trim();
+  if (!returnTo) {
+    return "/";
+  }
+  if (returnTo.startsWith("/")) {
+    return returnTo;
+  }
+  try {
+    const parsed = new URL(returnTo);
+    if (parsed.origin === window.location.origin) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    return "/";
+  }
+  return "/";
+}
+
 export default function TableView() {
   const { datasetId } = useParams();
+  const location = useLocation();
   const numericDatasetId = Number(datasetId);
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const highlightedRow = parseNonNegativeInt(queryParams.get("highlight_row"));
+  const returnPath = resolveReturnPath(location.search);
 
   const [data, setData] = useState<TableSlice | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -147,10 +183,11 @@ export default function TableView() {
   }, [numericDatasetId]);
 
   useEffect(() => {
-    setCurrentPage(1);
-    setPageInput("1");
+    const initialPage = highlightedRow !== null ? Math.floor(highlightedRow / ROWS_PER_PAGE) + 1 : 1;
+    setCurrentPage(initialPage);
+    setPageInput(String(initialPage));
     setSearchQuery("");
-  }, [numericDatasetId]);
+  }, [numericDatasetId, highlightedRow]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -322,6 +359,28 @@ export default function TableView() {
     setPageInput(String(safeCurrentPage));
   }, [safeCurrentPage]);
 
+  useEffect(() => {
+    if (highlightedRow === null || !data) {
+      return;
+    }
+
+    if (highlightedRow < data.offset || highlightedRow >= data.offset + data.rows.length) {
+      return;
+    }
+
+    const targetElement = document.querySelector(
+      `[data-row-index="${highlightedRow}"]`,
+    ) as HTMLElement | null;
+
+    if (!targetElement) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+  }, [data, highlightedRow, displayRows.length, dateViewMode]);
+
   function scrollTableToEdge() {
     const container = tableAreaRef.current;
     const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
@@ -387,9 +446,9 @@ export default function TableView() {
               placeholder="Search for values"
               aria-label="Search rows"
             />
-            <Link className="table-view-back-link" to="/">
+            <Link className="table-view-back-link" to={returnPath}>
               <img src={returnIcon} alt="" aria-hidden="true" />
-              Back to All Uploads
+              {returnPath === "/" ? "Back to All Uploads" : "Back to Results"}
             </Link>
           </div>
         </div>
@@ -402,6 +461,11 @@ export default function TableView() {
             columns={data.columns}
             rows={displayRows}
             rowIndices={filtered.rowIndices}
+            highlight={
+              highlightedRow !== null
+                ? { rows: [highlightedRow], cols: data.columns }
+                : undefined
+            }
             sortable
             onCellContextMenu={(event, payload) => {
               if (!dateColumns.has(payload.column) || !parseDateToDate(payload.value)) {
