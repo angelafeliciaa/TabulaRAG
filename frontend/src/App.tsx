@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { logout, getUser, getServerStatus, type ServerStatus } from "./api";
+import { logout, getUser, isAuthenticated, getServerStatus, type ServerStatus } from "./api";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";
@@ -8,6 +8,7 @@ import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
 import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
+import Login from "./pages/Login";
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -18,6 +19,8 @@ export default function App() {
     return "light";
   });
   const [serverStatus, setServerStatus] = useState<ServerStatus>("Unknown");
+  const [authed, setAuthed] = useState(isAuthenticated());
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem("theme", theme);
@@ -42,10 +45,20 @@ export default function App() {
     };
   }, []);
 
+  const handleLogin = useCallback(() => {
+    setAuthed(true);
+  }, []);
+
   const user = getUser();
 
   function handleLogout() {
     logout();
+    setAuthed(false);
+  }
+
+  // Show login for unauthenticated users (except the callback route)
+  if (!authed && !window.location.pathname.startsWith("/auth/callback")) {
+    return <Login />;
   }
 
   return (
@@ -64,7 +77,6 @@ export default function App() {
           <button
             className="logout-btn"
             onClick={handleLogout}
-            hidden
             type="button"
           >
             Sign out
@@ -92,7 +104,7 @@ export default function App() {
           <Route path="/tables/virtual" element={<AggregateTableView />} />
           <Route path="/tables/:datasetId" element={<TableView />} />
           <Route path="/highlight/:highlightId" element={<HighlightView />} />
-          <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
+          <Route path="/auth/callback" element={<AuthCallback onLogin={handleLogin} />} />
         </Routes>
       </div>
     </div>

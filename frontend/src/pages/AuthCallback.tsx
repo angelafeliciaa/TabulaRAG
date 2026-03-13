@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { exchangeGithubCode } from "../api";
+import { exchangeGithubCode, exchangeGoogleCode } from "../api";
 
 interface AuthCallbackProps {
   onLogin: () => void;
@@ -10,26 +10,36 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const code = new URLSearchParams(window.location.search).get("code");
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const provider = params.get("provider") || "github";
 
   useEffect(() => {
     if (!code) return;
 
-    exchangeGithubCode(code)
-      .then(() => {
+    async function exchange() {
+      try {
+        if (provider === "google") {
+          const redirectUri = `${window.location.origin}/auth/callback?provider=google`;
+          await exchangeGoogleCode(code!, redirectUri);
+        } else {
+          await exchangeGithubCode(code!);
+        }
         onLogin();
         navigate("/", { replace: true });
-      })
-      .catch(() => {
-        setError("GitHub authentication failed. Please try again.");
-      });
-  }, [code, onLogin, navigate]);
+      } catch {
+        setError(`${provider === "google" ? "Google" : "GitHub"} authentication failed. Please try again.`);
+      }
+    }
+
+    exchange();
+  }, [code, provider, onLogin, navigate]);
 
   if (!code) {
     return (
       <div className="login-page">
         <div className="login-card">
-          <p className="login-error">No authorization code received from GitHub.</p>
+          <p className="login-error">No authorization code received.</p>
           <button
             type="button"
             className="login-btn"
@@ -62,7 +72,9 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <p className="login-subtitle">Signing in with GitHub...</p>
+        <p className="login-subtitle">
+          Signing in with {provider === "google" ? "Google" : "GitHub"}...
+        </p>
       </div>
     </div>
   );
