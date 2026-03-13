@@ -26,6 +26,60 @@ _SYMBOL_TO_CURRENCY: Dict[str, str] = {
 # For value-based "looks like money" detection: symbol/code at front or code at end + rest parses as number (commas stripped).
 CURRENCY_SYMBOLS = set("$€£¥₩₹฿₺₽")
 CURRENCY_CODES = frozenset({"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "KRW", "THB", "TRY", "RUB"})
+
+# Known measurement units (lowercase); number + unit at end (e.g. "100 kg") or unit + number (e.g. "kg 100").
+MEASUREMENT_UNITS = frozenset({
+    "kg", "g", "mg", "lb", "lbs", "oz", "t", "ton", "tons",
+    "m", "km", "cm", "mm", "ft", "in", "mi", "yd",
+    "l", "ml", "gal", "qt", "pt",
+    "°c", "°f", "c", "f", "k",  # temperature
+    "mph", "kph", "m/s",
+    "sq", "sq m", "sq ft", "sqm", "sqft",
+})
+# Number then unit (e.g. "100 kg") or unit then number (e.g. "kg 100")
+_MEASUREMENT_NUM_UNIT_RE = re.compile(r"^\s*(-?\d+(?:[.,]\d+)*)\s+(.+?)\s*$")
+_MEASUREMENT_UNIT_NUM_RE = re.compile(r"^\s*(.+?)\s+(-?\d+(?:[.,]\d+)*)\s*$")
+
+# (standard_unit, multiplier, offset): value_std = value * multiplier + offset. Enables "1 kg" and "1000 g" → same standard.
+_MEASUREMENT_TO_STANDARD: Dict[str, Tuple[str, float, float]] = {
+    # Mass -> kg
+    "g": ("kg", 0.001, 0.0),
+    "mg": ("kg", 0.000_001, 0.0),
+    "kg": ("kg", 1.0, 0.0),
+    "lb": ("kg", 0.453_592, 0.0),
+    "lbs": ("kg", 0.453_592, 0.0),
+    "oz": ("kg", 0.028_349_5, 0.0),
+    "t": ("kg", 1000.0, 0.0),
+    "ton": ("kg", 1000.0, 0.0),
+    "tons": ("kg", 1000.0, 0.0),
+    # Length -> m
+    "m": ("m", 1.0, 0.0),
+    "km": ("m", 1000.0, 0.0),
+    "cm": ("m", 0.01, 0.0),
+    "mm": ("m", 0.001, 0.0),
+    "ft": ("m", 0.304_8, 0.0),
+    "in": ("m", 0.025_4, 0.0),
+    "mi": ("m", 1609.344, 0.0),
+    "yd": ("m", 0.914_4, 0.0),
+    # Volume -> L
+    "l": ("L", 1.0, 0.0),
+    "ml": ("L", 0.001, 0.0),
+    "gal": ("L", 3.785_41, 0.0),
+    "qt": ("L", 0.946_353, 0.0),
+    "pt": ("L", 0.473_176, 0.0),
+    # Temperature -> °C
+    "°c": ("°C", 1.0, 0.0),
+    "c": ("°C", 1.0, 0.0),
+    "°f": ("°C", 5.0 / 9.0, -160.0 / 9.0),
+    "f": ("°C", 5.0 / 9.0, -160.0 / 9.0),
+    "k": ("°C", 1.0, -273.15),
+    # Speed -> m/s
+    "m/s": ("m/s", 1.0, 0.0),
+    "mph": ("m/s", 0.447_04, 0.0),
+    "kph": ("m/s", 1.0 / 3.6, 0.0),
+}
+# Area: keep as-is or pick sq m as standard; skip conversion for now to avoid ambiguity (sq vs sq m)
+
 _ISO_DATE_RE = re.compile(
     r"^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$"
 )
@@ -217,6 +271,122 @@ def infer_money_columns(
             cell = row[i] if i < len(row) else ""
             values.append(str(cell) if cell is not None else "")
         if is_money_column(values):
+            out.add(i)
+    return out
+
+
+# ─── Unit measurements ───────────────────────────────────────────────────────
+
+MEASUREMENT_COLUMN_THRESHOLD = 0.8
+MAX_ROWS_FOR_MEASUREMENT_INFERENCE = 2000
+
+
+def _normalize_unit_for_lookup(unit: str) -> str:
+    """Lowercase for lookup; preserve ° for temperature."""
+    u = unit.strip()
+    return u.lower() if u else ""
+
+
+def _parse_measurement_parts(value: str) -> Optional[Tuple[float, str]]:
+    """If value is 'number unit' or 'unit number' with known unit, return (number, unit); else None."""
+    v = value.strip()
+    if not v:
+        return None
+    # Number then unit (e.g. "100 kg", "1,000.5 m")
+    m = _MEASUREMENT_NUM_UNIT_RE.match(v)
+    if m:
+        num_str, unit_part = m.group(1).replace(",", ""), m.group(2).strip()
+        unit_norm = _normalize_unit_for_lookup(unit_part)
+        if unit_norm in MEASUREMENT_UNITS:
+            num = parse_number(num_str)
+            if num is not None:
+                return (float(num), unit_part.strip())
+    # Unit then number (e.g. "kg 100")
+    m = _MEASUREMENT_UNIT_NUM_RE.match(v)
+    if m:
+        unit_part, num_str = m.group(1).strip(), m.group(2).replace(",", "")
+        unit_norm = _normalize_unit_for_lookup(unit_part)
+        if unit_norm in MEASUREMENT_UNITS:
+            num = parse_number(num_str)
+            if num is not None:
+                return (float(num), unit_part)
+    return None
+
+
+def _looks_like_measurement(value: str) -> bool:
+    """True if value is 'number unit' or 'unit number' with a known unit."""
+    return _parse_measurement_parts(value) is not None
+
+
+def _convert_measurement_to_standard(value: float, unit: str) -> Optional[Tuple[float, str]]:
+    """Convert (value, unit) to (value_in_standard_unit, standard_unit). Returns None if unit has no standard."""
+    key = _normalize_unit_for_lookup(unit)
+    if not key or key not in _MEASUREMENT_TO_STANDARD:
+        return None
+    std_unit, mult, offset = _MEASUREMENT_TO_STANDARD[key]
+    value_std = value * mult + offset
+    return (value_std, std_unit)
+
+
+def _format_measurement_canonical(value: float, unit: str) -> str:
+    """Format as 'number unit' with sensible decimals."""
+    if value == int(value) and abs(value) < 1e15:
+        return f"{int(value)} {unit}"
+    s = f"{value:.4f}".rstrip("0").rstrip(".")
+    return f"{s} {unit}"
+
+
+def parse_measurement(value: Any) -> Optional[Tuple[str, float, str]]:
+    """
+    If value looks like a measurement (number + known unit), return (canonical_str, number, unit).
+    Values are converted to standard units where defined (e.g. 1000 g → 1 kg, 1 kg → 1 kg).
+    """
+    if value is None:
+        return None
+    parts = _parse_measurement_parts(str(value).strip())
+    if parts is None:
+        return None
+    num, unit = parts
+    converted = _convert_measurement_to_standard(float(num), unit)
+    if converted is not None:
+        value_std, standard_unit = converted
+        canonical_str = _format_measurement_canonical(value_std, standard_unit)
+        return (canonical_str, value_std, standard_unit)
+    # No standard for this unit (e.g. sq ft); keep as-is
+    canonical_str = _format_measurement_canonical(float(num), unit)
+    return (canonical_str, float(num), unit)
+
+
+def is_measurement_column(values: List[str], threshold: float = MEASUREMENT_COLUMN_THRESHOLD) -> bool:
+    """Returns True if majority of non-empty values look like measurements."""
+    non_empty = [v.strip() for v in values if v and str(v).strip()]
+    if not non_empty:
+        return False
+    hits = sum(1 for v in non_empty if _looks_like_measurement(v))
+    return hits / len(non_empty) >= threshold
+
+
+def infer_measurement_columns(
+    normalized_headers: List[str],
+    rows: List[List[str]],
+    *,
+    max_samples_per_column: int = 500,
+) -> Set[int]:
+    """
+    Infer which column indices are measurement columns (number + unit) by scanning up to
+    MAX_ROWS_FOR_MEASUREMENT_INFERENCE rows.
+    """
+    ncols = len(normalized_headers)
+    rows_to_scan = rows[:MAX_ROWS_FOR_MEASUREMENT_INFERENCE]
+    out: Set[int] = set()
+    for i in range(ncols):
+        values = []
+        for row in rows_to_scan:
+            if len(values) >= max_samples_per_column:
+                break
+            cell = row[i] if i < len(row) else ""
+            values.append(str(cell) if cell is not None else "")
+        if is_measurement_column(values):
             out.add(i)
     return out
 
@@ -424,10 +594,12 @@ def normalize_row_obj(
     store_original: bool = True,
     date_format_by_column: Optional[Dict[int, Optional[DateFormatHint]]] = None,
     money_columns: Optional[Set[int]] = None,
+    measurement_columns: Optional[Set[int]] = None,
 ) -> Dict[str, Any]:
     """Build row_data: keys are normalized column names; values are { original, normalized } or legacy plain normalized.
     When date_format_by_column is set, dates are parsed with that format and normalized value becomes ISO (YYYY-MM-DD).
     When money_columns is set, a cell is only typed as money if its column index is in the set (avoids false positives).
+    When measurement_columns is set, a cell is only typed as measurement if its column index is in the set.
     """
     result: Dict[str, Any] = {}
     typed: Dict[str, Dict[str, Any]] = {}
@@ -478,6 +650,18 @@ def normalize_row_obj(
                 }
                 continue
 
+        # Measurement column: number + unit (e.g. "100 kg", "kg 100")
+        is_measurement_col = measurement_columns is not None and i in measurement_columns
+        measurement_value = parse_measurement(raw) if raw is not None else None
+        if measurement_value is not None and is_measurement_col:
+            canonical_str, num, unit = measurement_value
+            if store_original:
+                result[key] = {"original": raw, "normalized": canonical_str}
+            else:
+                result[key] = canonical_str
+            typed[key] = {"type": "measurement", "number": num, "unit": unit}
+            continue
+
         normalized = text_normalized
         if store_original:
             result[key] = {"original": raw if raw is not None else None, "normalized": normalized}
@@ -518,7 +702,7 @@ def get_numeric_value(row_data: Dict[str, Any], column: str) -> Optional[float]:
     typed = get_typed_value(row_data, column)
     if typed:
         t = typed.get("type")
-        if t in ("number", "money"):
+        if t in ("number", "money", "measurement"):
             raw = typed.get("number")
             try:
                 return float(raw)
