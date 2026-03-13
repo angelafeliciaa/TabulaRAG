@@ -1,7 +1,8 @@
+"""All normalization logic: cell values, column/header names, and row_data helpers."""
 import re
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 INTERNAL_TYPED_KEY = "__typed__"
@@ -19,6 +20,30 @@ _DMY_OR_MDY_RE = re.compile(
 
 def is_internal_key(key: str) -> bool:
     return key.startswith("__")
+
+
+# ─── Column / header name normalization ───────────────────────────────────────
+
+
+def normalize_headers(headers: List[str]) -> List[str]:
+    """Normalize header names: strip whitespace, empty → col_{index}, dedupe with _2, _3, …."""
+    seen: Dict[str, int] = {}
+    normalized: List[str] = []
+    for idx, header in enumerate(headers):
+        base = (header or "").strip()
+        if not base:
+            base = f"col_{idx + 1}"
+        key = base
+        if key in seen:
+            seen[key] += 1
+            key = f"{base}_{seen[base]}"
+        else:
+            seen[key] = 1
+        normalized.append(key)
+    return normalized
+
+
+# ─── Cell value normalization ───────────────────────────────────────────────
 
 
 def normalize_text_value(value: Any) -> Optional[str]:

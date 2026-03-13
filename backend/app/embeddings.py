@@ -2,7 +2,7 @@ import os
 from typing import Dict, List, Optional
 
 from fastembed import TextEmbedding
-from app.typed_values import is_internal_key
+from app.normalization import is_internal_key
 
 _model: Optional[TextEmbedding] = None
 
@@ -44,7 +44,7 @@ def row_to_text(row_data: Dict[str, object]) -> str:
     Example: {"name": "Alice", "age": "30"} -> "name: Alice | age: 30"
     Skips keys whose values are None or empty string. Uses normalized value per column.
     """
-    from app.typed_values import get_normalized_value
+    from app.normalization import get_normalized_value
 
     parts = []
     for key in row_data:

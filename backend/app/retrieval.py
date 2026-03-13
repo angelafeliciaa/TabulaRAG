@@ -11,7 +11,7 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.embeddings import embed_texts
 from app.qdrant_client import search_vectors
-from app.typed_values import (
+from app.normalization import (
     flatten_row_data_to_normalized,
     get_numeric_value,
     get_normalized_value,

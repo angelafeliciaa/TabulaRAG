@@ -11,6 +11,7 @@ from sqlalchemy import insert, text, select
 from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
+    ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     set_dataset_index_ready,
 )
@@ -28,7 +29,7 @@ from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
-from app.typed_values import normalize_row_obj
+from app.normalization import normalize_headers, normalize_row_obj
 from app.name_guard import normalize_dataset_name_or_raise
 from app.auth import require_auth, exchange_github_code, create_jwt, GITHUB_CLIENT_ID
 
@@ -42,6 +43,7 @@ INDEX_WORKER_CONCURRENCY = max(1, int(os.getenv("INDEX_WORKER_CONCURRENCY", "4")
 async def lifespan(app: FastAPI):
     global _index_worker
     Base.metadata.create_all(bind=engine)
+    ensure_dataset_columns_normalized_columns()
     ensure_dataset_index_ready_column()
     try:
         from app.embeddings import get_model
@@ -112,24 +114,6 @@ def validate_filename(filename: str) -> None:
         raise HTTPException(
             status_code=400, detail="File must have a .csv or .tsv extension."
         )
-
-
-# normalizes header names by stripping whitespace, replacing empty names with col_{index}, and ensuring uniqueness by appending _{count} to duplicates
-def _normalize_headers(headers: List[str]) -> List[str]:
-    seen = {}
-    normalized = []
-    for idx, header in enumerate(headers):
-        base = (header or "").strip()
-        if not base:
-            base = f"col_{idx + 1}"
-        key = base
-        if key in seen:
-            seen[key] += 1
-            key = f"{base}_{seen[base]}"
-        else:
-            seen[key] = 1
-        normalized.append(key)
-    return normalized
 
 
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
@@ -216,11 +200,11 @@ def _iter_rows(
 
     if has_header:
         raw_headers = [str(h) if h is not None else "" for i, h in enumerate(first_row)]
-        normalized_headers = _normalize_headers(first_row)
+        normalized_headers = normalize_headers(first_row)
         rows_iter = reader
     else:
         raw_headers = [f"col_{i + 1}" for i in range(len(first_row))]
-        normalized_headers = _normalize_headers(raw_headers)
+        normalized_headers = normalize_headers(raw_headers)
 
         def row_iter() -> Iterable[List[str]]:
             yield first_row

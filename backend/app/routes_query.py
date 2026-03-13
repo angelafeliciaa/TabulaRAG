@@ -12,7 +12,7 @@ from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context,
 from app.routes_tables import list_tables, get_cols_for_dataset
 import app.db as app_db
 from app.db import SessionLocal
-from app.typed_values import flatten_row_data_to_normalized, strip_internal_fields
+from app.normalization import flatten_row_data_to_normalized, strip_internal_fields
 
 router = APIRouter()
 
