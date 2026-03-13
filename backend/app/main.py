@@ -417,11 +417,11 @@ def auth_google_redirect():
 @app.post("/auth/google/callback", include_in_schema=False)
 async def auth_google_callback(body: dict):
     code = body.get("code")
-    redirect_uri = body.get("redirect_uri")
     if not code:
         raise HTTPException(status_code=400, detail="Missing code parameter")
-    if not redirect_uri:
-        raise HTTPException(status_code=400, detail="Missing redirect_uri parameter")
+    # Compute redirect_uri server-side from trusted config to prevent open redirect
+    ui_base = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
+    redirect_uri = f"{ui_base}/auth/callback?provider=google"
     google_user = await exchange_google_code(code, redirect_uri)
     user = upsert_user(
         provider="google",

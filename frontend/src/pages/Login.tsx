@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import logo from "../images/logo.png";
-import { getGithubClientId, getGoogleClientId, type OAuthProviders } from "../api";
+import { getGithubClientId, getGoogleClientId, generateOAuthState, type OAuthProviders } from "../api";
 
 export default function Login() {
   const [loading, setLoading] = useState<"github" | "google" | null>(null);
@@ -32,9 +32,10 @@ export default function Login() {
     setError(null);
     try {
       const clientId = await getGithubClientId();
+      const state = generateOAuthState();
       const redirectUri = `${window.location.origin}/auth/callback?provider=github`;
       window.location.href =
-        `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user`;
+        `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user&state=${state}`;
     } catch {
       setError("Failed to start GitHub login. Is the server running?");
       setLoading(null);
@@ -46,9 +47,10 @@ export default function Login() {
     setError(null);
     try {
       const clientId = await getGoogleClientId();
+      const state = generateOAuthState();
       const redirectUri = `${window.location.origin}/auth/callback?provider=google`;
       window.location.href =
-        `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent("openid email profile")}&access_type=offline&prompt=select_account`;
+        `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent("openid email profile")}&access_type=offline&prompt=select_account&state=${state}`;
     } catch {
       setError("Failed to start Google login. Is the server running?");
       setLoading(null);

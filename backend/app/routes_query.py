@@ -447,6 +447,11 @@ def query_dataset(body: QueryRequest, auth: dict = Depends(require_auth)):
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
+    # Verify the authenticated user owns the resolved dataset
+    if user_id is not None:
+        with SessionLocal() as db:
+            _check_dataset_access(db, resolved_dataset_id, user_id)
+
     payload = smart_query(
         dataset_id=resolved_dataset_id,
         question=body.question,
@@ -632,8 +637,13 @@ def filter_dataset(body: FilterRequest, auth: dict = Depends(require_auth)):
     response_model=HighlightResponse,
     include_in_schema=False,
 )
-def highlight_endpoint(highlight_id: str):
+def highlight_endpoint(highlight_id: str, auth: dict = Depends(require_auth)):
+    user_id = get_user_id_from_auth(auth)
     result = get_highlight(highlight_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Highlight not found.")
+    # Verify the user owns this dataset
+    if user_id is not None:
+        with SessionLocal() as db:
+            _check_dataset_access(db, result["dataset_id"], user_id)
     return result

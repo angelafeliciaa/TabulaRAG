@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { exchangeGithubCode, exchangeGoogleCode } from "../api";
+import { exchangeGithubCode, exchangeGoogleCode, verifyOAuthState } from "../api";
 
 interface AuthCallbackProps {
   onLogin: () => void;
@@ -12,16 +12,21 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
 
   const params = new URLSearchParams(window.location.search);
   const code = params.get("code");
+  const state = params.get("state");
   const provider = params.get("provider") || "github";
 
   useEffect(() => {
     if (!code) return;
 
+    if (!verifyOAuthState(state)) {
+      setError("Invalid OAuth state. This may be a CSRF attack. Please try again.");
+      return;
+    }
+
     async function exchange() {
       try {
         if (provider === "google") {
-          const redirectUri = `${window.location.origin}/auth/callback?provider=google`;
-          await exchangeGoogleCode(code!, redirectUri);
+          await exchangeGoogleCode(code!);
         } else {
           await exchangeGithubCode(code!);
         }
@@ -33,7 +38,7 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
     }
 
     exchange();
-  }, [code, provider, onLogin, navigate]);
+  }, [code, state, provider, onLogin, navigate]);
 
   if (!code) {
     return (

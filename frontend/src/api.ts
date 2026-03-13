@@ -59,6 +59,25 @@ async function authFetch(
   return res;
 }
 
+// ── OAuth CSRF state ─────────────────────────────────────────────
+
+const OAUTH_STATE_KEY = "tabularag_oauth_state";
+
+export function generateOAuthState(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  const state = Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+  sessionStorage.setItem(OAUTH_STATE_KEY, state);
+  return state;
+}
+
+export function verifyOAuthState(state: string | null): boolean {
+  const stored = sessionStorage.getItem(OAUTH_STATE_KEY);
+  sessionStorage.removeItem(OAUTH_STATE_KEY);
+  if (!stored || !state) return false;
+  return stored === state;
+}
+
 // ── GitHub OAuth ──────────────────────────────────────────────────
 
 export async function getGithubClientId(): Promise<string> {
@@ -96,12 +115,11 @@ export async function getGoogleClientId(): Promise<string> {
 
 export async function exchangeGoogleCode(
   code: string,
-  redirectUri: string,
 ): Promise<{ token: string; user: AuthUser }> {
   const res = await fetch(`${API_BASE}/auth/google/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    body: JSON.stringify({ code }),
   });
   if (!res.ok) {
     const err = await res.text();
