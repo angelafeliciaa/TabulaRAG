@@ -8,7 +8,7 @@ from app.db import SessionLocal
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
-from app.normalization import flatten_row_data_to_normalized, strip_internal_fields
+from app.normalization import strip_internal_fields
 from app.name_guard import normalize_dataset_name_or_raise
 
 router = APIRouter()
@@ -153,7 +153,7 @@ def get_table_slice(
             "rows": [
                 {
                     "row_index": r.row_index,
-                    "data": flatten_row_data_to_normalized(r.row_data),
+                    "data": strip_internal_fields(r.row_data),
                 }
                 for r in rows
             ],

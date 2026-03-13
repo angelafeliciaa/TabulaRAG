@@ -10,7 +10,38 @@ import DataTable from "../components/DataTable";
 import returnIcon from "../images/return.png";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
+type ValueMode = "normalized" | "original";
 const ROWS_PER_PAGE = 500;
+
+function resolveCellValue(
+  value: unknown,
+  mode: ValueMode,
+): unknown {
+  if (
+    value != null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && "normalized" in value
+    && "original" in value
+  ) {
+    const o = value as { original?: unknown; normalized?: unknown };
+    return mode === "original" ? o.original : o.normalized;
+  }
+  return value;
+}
+
+function flattenRowsByValueMode(
+  rows: Record<string, unknown>[],
+  valueMode: ValueMode,
+): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [col, val] of Object.entries(row)) {
+      out[col] = resolveCellValue(val, valueMode);
+    }
+    return out;
+  });
+}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -112,6 +143,7 @@ export default function TableView() {
   const [pageInput, setPageInput] = useState("1");
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
+  const [valueMode, setValueMode] = useState<ValueMode>("normalized");
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -164,7 +196,7 @@ export default function TableView() {
     const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
     const pageEndExclusive = pageOffset + ROWS_PER_PAGE;
 
-    getSlice(numericDatasetId, pageOffset, pageEndExclusive)
+    getSlice(numericDatasetId, pageOffset, pageEndExclusive, { flatten: false })
       .then((slice) => {
         if (!mounted) {
           return;
@@ -200,25 +232,29 @@ export default function TableView() {
   const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
+  const resolvedRows = useMemo(
+    () => (data ? flattenRowsByValueMode(data.rows, valueMode) : []),
+    [data, valueMode],
+  );
   const dateColumns = useMemo(
-    () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
-    [data],
+    () => (data ? detectDateColumns(resolvedRows, data.columns) : new Set<string>()),
+    [data, resolvedRows],
   );
   const filtered = useMemo(() => {
     if (!data) {
-      return { rows: [], rowIndices: [] as number[] };
+      return { rows: [] as Record<string, unknown>[], rowIndices: [] as number[] };
     }
     if (!normalizedSearch) {
       return {
-        rows: data.rows,
-        rowIndices: data.rows.map((_, index) => data.offset + index),
+        rows: resolvedRows,
+        rowIndices: resolvedRows.map((_, index) => data.offset + index),
       };
     }
 
     const nextRows: Record<string, unknown>[] = [];
     const nextRowIndices: number[] = [];
-    for (let i = 0; i < data.rows.length; i += 1) {
-      const row = data.rows[i];
+    for (let i = 0; i < resolvedRows.length; i += 1) {
+      const row = resolvedRows[i];
       const matches = Object.values(row).some((value) =>
         String(value ?? "").toLowerCase().includes(normalizedSearch),
       );
@@ -228,7 +264,7 @@ export default function TableView() {
       }
     }
     return { rows: nextRows, rowIndices: nextRowIndices };
-  }, [data, normalizedSearch]);
+  }, [data, normalizedSearch, resolvedRows]);
 
   const displayRows = useMemo(() => {
     if (!data || dateViewMode === "default" || dateColumns.size === 0) {
@@ -379,6 +415,17 @@ export default function TableView() {
             </div>
           </div>
           <div className="table-view-tools">
+            <label className="table-view-value-mode-toggle">
+              <span className="table-view-value-mode-label">Values:</span>
+              <select
+                value={valueMode}
+                onChange={(e) => setValueMode(e.target.value as ValueMode)}
+                aria-label="Show original or normalized values"
+              >
+                <option value="normalized">Normalized</option>
+                <option value="original">Original</option>
+              </select>
+            </label>
             <input
               type="text"
               className="table-view-search"

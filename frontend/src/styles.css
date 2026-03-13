@@ -1904,6 +1904,27 @@ ul {
     min-width: 240px;
 }
 
+.table-view-value-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.table-view-value-mode-label {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.table-view-value-mode-toggle select {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+}
+
 .table-view-pagination {
     display: flex;
     width: 100%;

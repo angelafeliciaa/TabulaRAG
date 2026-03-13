@@ -154,6 +154,25 @@ function normalizeRowData(raw: unknown): TableRow {
   return {};
 }
 
+/** Flatten row cells that are { original, normalized } to a single value (normalized). */
+function flattenRowToNormalized(row: TableRow): TableRow {
+  const out: TableRow = {};
+  for (const [col, val] of Object.entries(row)) {
+    if (
+      val != null
+      && typeof val === "object"
+      && !Array.isArray(val)
+      && "normalized" in val
+      && "original" in val
+    ) {
+      out[col] = (val as { normalized?: unknown }).normalized;
+    } else {
+      out[col] = val;
+    }
+  }
+  return out;
+}
+
 export interface HighlightResponse {
   highlight_id: string;
   dataset_id: number;
@@ -317,10 +336,16 @@ export async function listIndexStatus(
   return (await res.json()) as TableIndexStatus[];
 }
 
+export type SliceOptions = {
+  /** If true (default), flatten each row to normalized values only. If false, return raw { original, normalized } per cell for toggle support. */
+  flatten?: boolean;
+};
+
 export async function getSlice(
   datasetId: number,
   rowFrom: number,
   rowTo: number,
+  options?: SliceOptions,
 ): Promise<TableSlice> {
   const offset = Math.max(0, rowFrom);
   const limit = Math.max(1, rowTo - rowFrom);
@@ -334,6 +359,14 @@ export async function getSlice(
   }
 
   const data = (await res.json()) as TableSliceApiResponse;
+  const rawRows = (data.rows || []).map((row) =>
+    normalizeRowData(row.data ?? row.row_data),
+  );
+  const flattenToNormalized = options?.flatten !== false;
+  const rows = flattenToNormalized
+    ? rawRows.map(flattenRowToNormalized)
+    : rawRows;
+
   return {
     dataset_id: data.dataset_id,
     offset: data.offset,
@@ -342,9 +375,7 @@ export async function getSlice(
     column_count: data.column_count,
     has_header: data.has_header,
     columns: data.columns,
-    rows: (data.rows || []).map((row) =>
-      normalizeRowData(row.data ?? row.row_data),
-    ),
+    rows,
   };
 }
 
