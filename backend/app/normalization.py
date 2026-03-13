@@ -13,6 +13,15 @@ NULL_VALUES = {"null", "none", "na", "n/a", "nan", "-", ""}
 
 _NUMBER_CLEAN_RE = re.compile(r"[$€£¥₹,\s]")
 _NUMBER_VALID_RE = re.compile(r"^[-+]?\d*\.?\d+$")
+# Money: raw string contains a currency symbol (used to decide money vs plain number at ingest)
+_CURRENCY_SYMBOLS = re.compile(r"[$€£¥₹]")
+_SYMBOL_TO_CURRENCY: Dict[str, str] = {
+    "$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
+    "₹": "INR",
+}
 _ISO_DATE_RE = re.compile(
     r"^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$"
 )
@@ -106,6 +115,38 @@ def parse_number(value: Any) -> Optional[float]:
     if is_negative_parentheses:
         parsed *= -1.0
     return parsed
+
+
+def _infer_currency(raw: str) -> Optional[str]:
+    """Infer currency code from the first currency symbol in the string. Returns None if none found."""
+    if not raw:
+        return None
+    for symbol, code in _SYMBOL_TO_CURRENCY.items():
+        if symbol in raw:
+            return code
+    return None
+
+
+def _format_money_canonical(num: float) -> str:
+    """Format a number as canonical money string (no commas, no symbol, always 2 decimal places)."""
+    return f"{num:.2f}"
+
+
+def parse_money(value: Any) -> Optional[Tuple[str, float, Optional[str]]]:
+    """
+    If value looks like money (contains currency symbol) and parses as a number,
+    return (canonical_string, number, currency_code). Otherwise None.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw or not _CURRENCY_SYMBOLS.search(raw):
+        return None
+    num = parse_number(raw)
+    if num is None:
+        return None
+    currency = _infer_currency(raw)
+    return (_format_money_canonical(num), float(num), currency)
 
 
 def parse_date(value: Any) -> Optional[Dict[str, Any]]:
@@ -331,6 +372,21 @@ def normalize_row_obj(
                 result[key] = iso_date
             typed[key] = {"type": "date", **date_value}
             continue
+
+        money_value = parse_money(raw) if raw is not None else None
+        if money_value is not None:
+            canonical_str, num, currency = money_value
+            if store_original:
+                result[key] = {"original": raw, "normalized": canonical_str}
+            else:
+                result[key] = canonical_str
+            typed[key] = {
+                "type": "money",
+                "number": num,
+                "currency": currency,
+            }
+            continue
+
         normalized = text_normalized
         if store_original:
             result[key] = {"original": raw if raw is not None else None, "normalized": normalized}
@@ -361,12 +417,14 @@ def get_typed_value(row_data: Dict[str, Any], column: str) -> Optional[Dict[str,
 
 def get_numeric_value(row_data: Dict[str, Any], column: str) -> Optional[float]:
     typed = get_typed_value(row_data, column)
-    if typed and typed.get("type") == "number":
-        raw = typed.get("number")
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
+    if typed:
+        t = typed.get("type")
+        if t in ("number", "money"):
+            raw = typed.get("number")
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return None
     return parse_number(get_normalized_value(row_data, column))
 
 

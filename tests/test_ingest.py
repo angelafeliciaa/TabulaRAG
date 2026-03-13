@@ -130,6 +130,28 @@ def test_db_rows_stored(client, test_engine):
     assert data["age"]["original"] == "30"
 
 
+def test_db_rows_money_normalized(client, test_engine):
+    """Money cells get canonical normalized string and __typed__ with type money + currency."""
+    client.post(
+        "/ingest",
+        files=make_csv("product,price\nWidget,$1,234.56\nGadget,€99.00\n"),
+    )
+    with test_engine.connect() as conn:
+        rows = conn.execute(text("SELECT row_data FROM dataset_rows ORDER BY id")).fetchall()
+    assert len(rows) == 2
+    typed = json.loads(rows[0].row_data).get("__typed__", {})
+    assert typed.get("price", {}).get("type") == "money"
+    assert typed["price"].get("currency") == "USD"
+    assert typed["price"].get("number") == 1234.56
+    data0 = json.loads(rows[0].row_data)
+    assert data0["price"]["original"] == "$1,234.56"
+    assert data0["price"]["normalized"] == "1234.56"
+    data1 = json.loads(rows[1].row_data)
+    assert data1["price"]["original"] == "€99.00"
+    assert data1["price"]["normalized"] == "99.00"
+    assert json.loads(rows[1].row_data).get("__typed__", {}).get("price", {}).get("currency") == "EUR"
+
+
 def test_list_tables_returns_ready_datasets_by_default(client):
     client.post(
         "/ingest",
