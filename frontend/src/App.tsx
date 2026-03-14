@@ -55,50 +55,55 @@ export default function App() {
         <img src={logo} alt="" aria-hidden="true" />
       </Link>
 
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+
       <div
         className={`server-status ${serverStatus}`}
-        tabIndex={0}
-        aria-label={`MCP Server Connection Status: ${serverStatus}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
       >
         <span className="status-dot" />
-        <span className="status-short-label">{serverStatus}</span>
-        <span className="status-label">MCP Server Connection Status: {serverStatus}</span>
+        <span>Server Connection: {serverStatus}</span>
       </div>
 
       <div className="top-bar">
-        <div className="top-bar-actions">
-          <div className="user-menu">
-            {user?.avatar_url && (
-              <img src={user.avatar_url} alt="" className="user-avatar" />
-            )}
-            <span className="user-name">{user?.name || user?.login}</span>
-            <button
-              className="logout-btn"
-              onClick={handleLogout}
-              hidden
-              type="button"
-            >
-              Sign out
-            </button>
-          </div>
-
+        <div className="user-menu">
+          {user?.avatar_url && (
+            <img src={user.avatar_url} alt="" className="user-avatar" />
+          )}
+          <span className="user-name">{user?.name || user?.login}</span>
           <button
-            className="theme-toggle"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            aria-label="Toggle theme"
-            aria-pressed={theme === "light"}
+            className="logout-btn"
+            onClick={handleLogout}
+            hidden
             type="button"
           >
-            <span className="toggle-track">
-              <span className="toggle-thumb">
-                <img src={theme === "dark" ? moonIcon : sunIcon} alt="" />
-              </span>
-            </span>
+            Sign out
           </button>
         </div>
+
+        <button
+          className="theme-toggle"
+          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          aria-pressed={theme === "dark"}
+          type="button"
+        >
+          <span className="sr-only">
+            {theme === "dark" ? "Dark theme enabled" : "Light theme enabled"}
+          </span>
+          <span className="toggle-track">
+            <span className="toggle-thumb">
+              <img src={theme === "dark" ? moonIcon : sunIcon} alt="" />
+            </span>
+          </span>
+        </button>
       </div>
 
-      <div className="content">
+      <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Upload />} />
           <Route path="/tables/virtual" element={<AggregateTableView />} />
@@ -106,7 +111,7 @@ export default function App() {
           <Route path="/highlight/:highlightId" element={<HighlightView />} />
           <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
         </Routes>
-      </div>
+      </main>
     </div>
   );
 }

@@ -18,10 +18,13 @@ export default function VirtualTableView() {
   const location = useLocation();
   const [err, setErr] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
-  const [rows, setRows] = useState<(Record<string, unknown> & { __highlight_id?: string })[]>([]);
+  const [rows, setRows] = useState<(Record<string, unknown> & {
+    __highlight_id?: string;
+    __row_index?: number;
+    __dataset_id?: number;
+  })[]>([]);
   const [resultTitle, setResultTitle] = useState<string>("Result");
   const [resultSubtitle, setResultSubtitle] = useState<string>("");
-  const [isFilterResult, setIsFilterResult] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   type AggregatePayload = {
@@ -87,7 +90,6 @@ export default function VirtualTableView() {
     if ("mode" in payload && payload.mode === "filter") {
       filterRows(payload)
         .then((result: FilterResponse) => {
-          setIsFilterResult(true);
           setResultTitle(`Filter result: ${formatFilterSummary(payload.filters)}`);
           setResultSubtitle("");
 
@@ -102,6 +104,8 @@ export default function VirtualTableView() {
 
           const mappedRows = result.rowsResult.map((item) => ({
             row_index: item.row_index,
+            __row_index: item.row_index,
+            __dataset_id: result.dataset_id,
             __highlight_id: item.highlight_id,
             ...(item.row_data || {}),
           }));
@@ -113,7 +117,6 @@ export default function VirtualTableView() {
 
     aggregate(payload)
       .then((result: AggregateResponse) => {
-        setIsFilterResult(false);
         const aggregatePayload = payload as AggregatePayload;
 
         const operationLabel = aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
@@ -138,9 +141,17 @@ export default function VirtualTableView() {
         setColumns(cols);
 
         const remapped = result.rowsResult.map((row) => {
+          const source = row as Record<string, unknown>;
           const r: Record<string, unknown> = {};
           if (result.group_by_column) r[result.group_by_column] = row.group_value;
           r[metricColLabel] = row.aggregate_value;
+          if (typeof source.row_index === "number" && Number.isFinite(source.row_index)) {
+            r.__row_index = Math.trunc(source.row_index);
+          }
+          if (typeof source.highlight_id === "string" && source.highlight_id.trim()) {
+            r.__highlight_id = source.highlight_id;
+          }
+          r.__dataset_id = result.dataset_id;
           return r;
         });
         setRows(remapped);
@@ -158,35 +169,69 @@ export default function VirtualTableView() {
     if (!normalizedSearch) {
       return {
         rows,
-        rowIndices: rows.map((row, index) =>
-          typeof row.row_index === "number" ? Number(row.row_index) : index,
-        ),
+        rowIndices: rows.map((row, index) => {
+          if (typeof row.__row_index === "number") {
+            return row.__row_index;
+          }
+          if (typeof row.row_index === "number") {
+            return Number(row.row_index);
+          }
+          return index;
+        }),
       };
     }
 
-    const nextRows: (Record<string, unknown> & { __highlight_id?: string })[] = [];
+    const nextRows: (Record<string, unknown> & {
+      __highlight_id?: string;
+      __row_index?: number;
+      __dataset_id?: number;
+    })[] = [];
     const nextRowIndices: number[] = [];
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
       const matches = Object.values(row).some((value) =>
-        String(value ?? "").toLowerCase().includes(normalizedSearch),
+        String(value ?? "").toLowerCase().includes(normalizedSearch)
       );
       if (!matches) {
         continue;
       }
       nextRows.push(row);
-      nextRowIndices.push(
-        typeof row.row_index === "number" ? Number(row.row_index) : i,
-      );
+      if (typeof row.__row_index === "number") {
+        nextRowIndices.push(row.__row_index);
+      } else if (typeof row.row_index === "number") {
+        nextRowIndices.push(Number(row.row_index));
+      } else {
+        nextRowIndices.push(i);
+      }
     }
 
     return { rows: nextRows, rowIndices: nextRowIndices };
   }, [rows, normalizedSearch]);
 
+  const hasRowDrilldown = useMemo(
+    () =>
+      filtered.rows.some((row) => {
+        const sourceRow =
+          typeof row.__row_index === "number"
+            ? row.__row_index
+            : typeof row.row_index === "number"
+              ? Number(row.row_index)
+              : null;
+        const sourceDataset =
+          typeof row.__dataset_id === "number"
+            ? row.__dataset_id
+            : null;
+        return sourceDataset !== null && sourceRow !== null;
+      }),
+    [filtered.rows],
+  );
+
   if (err) {
     return (
       <div className="page-stack">
-        <p className="error">{err}</p>
+        <p className="error" role="alert">
+          {err}
+        </p>
       </div>
     );
   }
@@ -197,30 +242,23 @@ export default function VirtualTableView() {
         <div className="row virtual-results-header-row">
           <div>
             <div className="result-title">{resultTitle}</div>
-            <div className="result-subtitle">{resultSubtitle}</div>
+            {resultSubtitle ? <div className="result-subtitle">{resultSubtitle}</div> : null}
             <div className="small">
               Showing {filtered.rows.length.toLocaleString()} of {rows.length.toLocaleString()} row(s)
             </div>
           </div>
           <div className="table-view-tools virtual-results-tools">
-            <div className="table-view-search-wrap">
-              <span className="table-view-search-toggle" aria-hidden="true">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.06l4.24 4.24a1 1 0 0 1-1.42 1.42l-4.24-4.24A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z" fill="currentColor" />
-                </svg>
-              </span>
-              <input
-                type="text"
-                className="table-view-search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search for values"
-                aria-label="Search results rows"
-              />
-            </div>
-            <Link className="table-view-icon-btn" to="/" aria-label="Home" title="Home">
+            <input
+              type="text"
+              className="table-view-search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search for values"
+              aria-label="Search results rows"
+            />
+            <Link className="table-view-icon-btn" to="/" aria-label="Back to All Uploads" title="Back to All Uploads">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M4 11.2 12 4l8 7.2v7.3a1 1 0 0 1-1 1h-4.6a1 1 0 0 1-1-1v-4.6h-2.8v4.6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-7.3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 4.2 4 10v9a1 1 0 0 0 1 1h4.8a1 1 0 0 0 1-1v-4.2h2.4V19a1 1 0 0 0 1 1H19a1 1 0 0 0 1-1v-9l-8-5.8Z" fill="currentColor" />
               </svg>
             </Link>
           </div>
@@ -235,23 +273,33 @@ export default function VirtualTableView() {
             rowIndices={filtered.rowIndices}
             sortable
             rowAction={
-              isFilterResult
+              hasRowDrilldown
                 ? ({ row }) => {
-                    const highlightId = row.__highlight_id;
-                    if (!highlightId || typeof highlightId !== "string") {
-                      return null;
-                    }
+                  const sourceRow =
+                    typeof row.__row_index === "number"
+                      ? row.__row_index
+                      : typeof row.row_index === "number"
+                        ? Number(row.row_index)
+                        : null;
+                  const sourceDataset =
+                    typeof row.__dataset_id === "number"
+                      ? row.__dataset_id
+                      : null;
+
+                  if (sourceDataset !== null && sourceRow !== null) {
                     return (
                       <Link
                         className="result-row-open-link"
-                        to={`/highlight/${encodeURIComponent(highlightId)}?return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
-                        aria-label={`Show source row ${String(row.row_index ?? "")}`}
-                        title="Show in original table"
+                        to={`/tables/${sourceDataset}?highlight_row=${sourceRow}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
+                        aria-label={`Open row ${sourceRow} in full table`}
+                        title="Open in full table"
                       >
                         <img src={openIcon} alt="" aria-hidden="true" />
                       </Link>
                     );
                   }
+                  return null;
+                }
                 : undefined
             }
             rowActionLabel=""

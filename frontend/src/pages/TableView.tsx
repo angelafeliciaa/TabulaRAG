@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
+import { focusByIndex, focusByOffset } from "../accessibility";
 import {
   getSlice,
   listTables,
@@ -9,7 +10,35 @@ import {
 import DataTable from "../components/DataTable";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
+type DateMenuState = { x: number; y: number } | null;
+type FilterConditionPayload = {
+  column: string;
+  operator: string;
+  value?: string;
+  logical_operator?: "AND" | "OR";
+};
+type QueryPayload =
+  | {
+    mode: "filter";
+    dataset_id: number;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+    offset?: number;
+  }
+  | {
+    dataset_id: number;
+    operation: string;
+    metric_column?: string;
+    group_by?: string;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+  };
 const ROWS_PER_PAGE = 500;
+const DATE_VIEW_OPTIONS: Array<{ value: DateViewMode; label: string }> = [
+  { value: "default", label: "Default" },
+  { value: "mm-dd-yyyy", label: "MM-DD-YYYY" },
+  { value: "mon-dd-yyyy", label: "Jan 12, 2002" },
+];
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -127,6 +156,59 @@ function resolveReturnPath(search: string): string {
   return "/";
 }
 
+function decodePayload(encoded: string): QueryPayload {
+  const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = normalized.length % 4;
+  const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+  return JSON.parse(atob(padded));
+}
+
+function formatFilterSummary(filters?: FilterConditionPayload[]): string {
+  if (!filters || filters.length === 0) {
+    return "no filters";
+  }
+  return filters
+    .map((f, index) => {
+      const clause =
+        f.operator === "IS NULL" || f.operator === "IS NOT NULL"
+          ? `${f.column} ${f.operator}`
+          : `${f.column} ${f.operator} ${f.value ?? ""}`.trim();
+      if (index === 0) {
+        return clause;
+      }
+      return `${(f.logical_operator || "AND").toUpperCase()} ${clause}`;
+    })
+    .join(" ");
+}
+
+function buildQueryContextTitle(returnPath: string): string | null {
+  if (!returnPath || returnPath === "/") {
+    return null;
+  }
+  try {
+    const parsed = new URL(returnPath, window.location.origin);
+    const encoded = parsed.searchParams.get("q");
+    if (!encoded) {
+      return null;
+    }
+    const payload = decodePayload(encoded);
+    if ("mode" in payload && payload.mode === "filter") {
+      return `Filter result: ${formatFilterSummary(payload.filters)}`;
+    }
+
+    const aggregatePayload = payload as Exclude<QueryPayload, { mode: "filter" }>;
+    const operationLabel =
+      aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
+    const metricCol = aggregatePayload.metric_column ?? "aggregate_value";
+    if (aggregatePayload.group_by) {
+      return `Aggregate result: ${operationLabel} ${metricCol} by ${aggregatePayload.group_by}`;
+    }
+    return `Aggregate result: ${operationLabel} of ${metricCol}`;
+  } catch {
+    return null;
+  }
+}
+
 export default function TableView() {
   const { datasetId } = useParams();
   const location = useLocation();
@@ -134,6 +216,7 @@ export default function TableView() {
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const highlightedRow = parseNonNegativeInt(queryParams.get("highlight_row"));
   const returnPath = resolveReturnPath(location.search);
+  const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
 
   const [data, setData] = useState<TableSlice | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -142,12 +225,15 @@ export default function TableView() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateViewMode, setDateViewMode] = useState<DateViewMode>("default");
-  const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
+  const [dateMenu, setDateMenu] = useState<DateMenuState>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
+  const dateMenuId = useId();
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
+  const dateMenuRef = useRef<HTMLDivElement | null>(null);
+  const dateMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -236,6 +322,12 @@ export default function TableView() {
   const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
+  const headerTitle = useMemo(() => {
+    if (sourceQueryTitle) {
+      return sourceQueryTitle;
+    }
+    return tableName || "Table";
+  }, [sourceQueryTitle, tableName]);
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
     [data],
@@ -317,6 +409,23 @@ export default function TableView() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [dateMenu]);
+
+  useEffect(() => {
+    if (!dateMenu) {
+      return;
+    }
+
+    const activeIndex = DATE_VIEW_OPTIONS.findIndex(
+      (option) => option.value === dateViewMode,
+    );
+    const rafId = window.requestAnimationFrame(() => {
+      focusByIndex(dateMenuItemRefs.current, activeIndex === -1 ? 0 : activeIndex);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [dateMenu, dateViewMode]);
 
   useEffect(() => {
     const container = tableAreaRef.current;
@@ -422,10 +531,50 @@ export default function TableView() {
     const targetElement = document.querySelector(
       `[data-row-index="${highlightedRow}"]`,
     ) as HTMLElement | null;
-    if (!targetElement) {
+    targetElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function selectDateViewMode(nextMode: DateViewMode) {
+    setDateViewMode(nextMode);
+    setDateMenu(null);
+  }
+
+  function onDateMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const currentTarget = event.target as HTMLElement | null;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusByOffset(dateMenuItemRefs.current, currentTarget, 1);
       return;
     }
-    targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusByOffset(dateMenuItemRefs.current, currentTarget, -1);
+      return;
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusByIndex(dateMenuItemRefs.current, 0);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      focusByIndex(dateMenuItemRefs.current, DATE_VIEW_OPTIONS.length - 1);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setDateMenu(null);
+      return;
+    }
+
+    if (event.key === "Tab") {
+      setDateMenu(null);
+    }
   }
 
   if (!datasetId) {
@@ -435,7 +584,9 @@ export default function TableView() {
   if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
     return (
       <div className="page-stack">
-        <p className="error">Invalid table id.</p>
+        <p className="error" role="alert">
+          Invalid table id.
+        </p>
       </div>
     );
   }
@@ -445,59 +596,62 @@ export default function TableView() {
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div>
-            <div className="table-view-title">{tableName || "Table"}</div>
-            <div className="small">
-              {loading
-                ? "Loading table page..."
-                : data && data.rows.length > 0
-                  ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
-                  : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
-            </div>
+            <div className="table-view-title">{headerTitle}</div>
+            {highlightedRow !== null && (
+              <div className="table-view-row-meta">
+                <span>Viewing:</span>{" "}
+                <button
+                  type="button"
+                  className="table-view-row-jump"
+                  onClick={jumpToHighlight}
+                  aria-label={`Viewing row ${highlightedRow}. Click to jump to highlighted row`}
+                  title={`Jump to highlighted row ${highlightedRow}`}
+                >
+                  Row {highlightedRow}
+                </button>
+              </div>
+            )}
+            {highlightedRow === null && (
+              <div className="small" role="status" aria-live="polite" aria-atomic="true">
+                {loading
+                  ? "Loading table page..."
+                  : data && data.rows.length > 0
+                    ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
+                    : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
+              </div>
+            )}
           </div>
           <div className="table-view-tools">
-            <div className="table-view-search-wrap">
-              <span className="table-view-search-toggle" aria-hidden="true">
+            <input
+              type="text"
+              className="table-view-search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search for values"
+              aria-label="Search rows"
+            />
+            {highlightedRow !== null && returnPath !== "/" && (
+              <Link className="table-view-context-btn" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.06l4.24 4.24a1 1 0 0 1-1.42 1.42l-4.24-4.24A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z" fill="currentColor" />
+                  <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
                 </svg>
-              </span>
-              <input
-                type="text"
-                className="table-view-search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search for values"
-                aria-label="Search rows"
-              />
-            </div>
-            {highlightedRow !== null && (
-              <button
-                type="button"
-                className="table-view-context-btn"
-                onClick={jumpToHighlight}
-                aria-label="Jump to highlighted row"
-                title={`Jump to highlighted row ${highlightedRow}`}
-              >
-                Jump to Highlight
-              </button>
-            )}
-            {returnPath !== "/" && (
-              <Link className="table-view-icon-btn" to={returnPath} aria-label="Back to Results" title="Back to Results">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.41 11H20a1 1 0 1 1 0 2h-9.59l4.3 4.3a1 1 0 1 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.41 0Z" fill="currentColor" />
-                </svg>
+                Back to Query Results
               </Link>
             )}
-            <Link className="table-view-icon-btn" to="/" aria-label="Home" title="Home">
+            <Link className="table-view-icon-btn" to="/" aria-label="Back to All Uploads" title="Back to All Uploads">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M4 11.2 12 4l8 7.2v7.3a1 1 0 0 1-1 1h-4.6a1 1 0 0 1-1-1v-4.6h-2.8v4.6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-7.3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 4.2 4 10v9a1 1 0 0 0 1 1h4.8a1 1 0 0 0 1-1v-4.2h2.4V19a1 1 0 0 0 1 1H19a1 1 0 0 0 1-1v-9l-8-5.8Z" fill="currentColor" />
               </svg>
             </Link>
           </div>
         </div>
       </div>
 
-      {err && <p className="error">{err}</p>}
+      {err && (
+        <p className="error" role="alert">
+          {err}
+        </p>
+      )}
       {data && (
         <div className="table-area full-table-area" ref={tableAreaRef}>
           <DataTable
@@ -510,6 +664,7 @@ export default function TableView() {
                 : undefined
             }
             sortable
+            caption={`${tableName || "Table"} page ${safeCurrentPage}. ${displayRows.length} row${displayRows.length === 1 ? "" : "s"} shown.`}
             onCellContextMenu={(event, payload) => {
               if (!dateColumns.has(payload.column) || !parseDateToDate(payload.value)) {
                 return;
@@ -606,20 +761,29 @@ export default function TableView() {
       )}
       {dateMenu && (
         <div
+          ref={dateMenuRef}
+          id={dateMenuId}
           className="date-context-menu"
           style={{ left: dateMenu.x, top: dateMenu.y }}
           role="menu"
           aria-label="Date format options"
+          onKeyDown={onDateMenuKeyDown}
         >
-          <button type="button" onClick={() => setDateViewMode("default")}>
-            Default
-          </button>
-          <button type="button" onClick={() => setDateViewMode("mm-dd-yyyy")}>
-            MM-DD-YYYY
-          </button>
-          <button type="button" onClick={() => setDateViewMode("mon-dd-yyyy")}>
-            Jan 12, 2002
-          </button>
+          {DATE_VIEW_OPTIONS.map((option, index) => (
+            <button
+              key={option.value}
+              ref={(element) => {
+                dateMenuItemRefs.current[index] = element;
+              }}
+              type="button"
+              role="menuitemradio"
+              aria-checked={dateViewMode === option.value}
+              className={dateViewMode === option.value ? "active" : undefined}
+              onClick={() => selectDateViewMode(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
