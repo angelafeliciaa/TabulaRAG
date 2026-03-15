@@ -547,6 +547,8 @@ export default function TableView() {
   );
   const normalizedRows = useMemo(
     () => (data ? flattenRowsByValueMode(data.rows, "normalized") : []),
+    [data],
+  );
   const headerTitle = useMemo(() => {
     if (isMultiHighlightMode) {
       const label = (multiHighlightLabel || parsedMultiSpec?.label || "Result").trim();
@@ -563,10 +565,6 @@ export default function TableView() {
     }
     return tableName || "Table";
   }, [highlightedRow, isMultiHighlightMode, multiHighlightLabel, parsedMultiSpec?.label, returnQueryMode, sourceQueryTitle, tableName]);
-  const dateColumns = useMemo(
-    () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
-    [data],
-  );
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(resolvedRows, data.columns) : new Set<string>()),
     [data, resolvedRows],
@@ -730,12 +728,20 @@ export default function TableView() {
       `[data-row-index="${effectiveHighlightRow}"]`,
     ) as HTMLElement | null;
 
-    if (!targetElement) {
+    const container = tableAreaRef.current?.querySelector(".table-scroll") as HTMLDivElement | null;
+    if (!targetElement || !container) {
       return;
     }
 
     window.setTimeout(() => {
-      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+      const targetRect = targetElement.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const scrollOffset =
+        container.scrollTop +
+        (targetRect.top - containerRect.top) +
+        targetRect.height / 2 -
+        container.clientHeight / 2;
+      container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
     }, 0);
   }, [data, effectiveHighlightRow, displayRows.length, dateViewMode]);
 
@@ -783,7 +789,17 @@ export default function TableView() {
     const targetElement = document.querySelector(
       `[data-row-index="${effectiveHighlightRow}"]`,
     ) as HTMLElement | null;
-    targetElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const container = tableAreaRef.current?.querySelector(".table-scroll") as HTMLDivElement | null;
+    if (targetElement && container) {
+      const targetRect = targetElement.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const scrollOffset =
+        container.scrollTop +
+        (targetRect.top - containerRect.top) +
+        targetRect.height / 2 -
+        container.clientHeight / 2;
+      container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
+    }
   }
 
   function moveMultiHighlightCursor(offset: number) {

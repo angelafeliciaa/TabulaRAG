@@ -89,6 +89,10 @@
   box-sizing: border-box;
 }
 
+html {
+  overflow: hidden;
+}
+
 html,
 body {
   margin: 0;
@@ -2129,6 +2133,8 @@ ul {
     color: var(--text);
     font-size: 13px;
     cursor: pointer;
+}
+
 .table-view-context-btn {
     display: inline-flex;
     align-items: center;
@@ -2475,7 +2481,9 @@ thead th {
 }
 
 .table-header-cell-preserve-ws {
-    white-space: pre-wrap;
+  white-space: pre-wrap;
+}
+
 tbody th[scope="row"] {
   position: static;
   background: transparent;

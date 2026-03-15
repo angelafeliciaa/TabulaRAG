@@ -56,6 +56,25 @@ def _column_json_text_expr(column_name: str) -> str:
     return f"COALESCE((row_data::jsonb -> '{escaped}') ->> 'normalized', row_data::jsonb ->> '{escaped}')"
 
 
+def _column_null_check_expr(column_name: str) -> str:
+    """SQL expression for IS NULL / IS NOT NULL: must be SQL NULL when normalized is JSON null, not the whole object. For legacy plain values, use the plain value."""
+    escaped = column_name.replace("'", "''")
+    if _is_sqlite():
+        json_key = column_name.replace("\\", "\\\\").replace('"', '\\"')
+        # When cell is an object, use .normalized only (so JSON null => SQL NULL). When legacy plain value, use it.
+        return (
+            f"CASE WHEN json_type(json_extract(row_data, '$.\"{json_key}\"')) = 'object' "
+            f"THEN json_extract(row_data, '$.\"{json_key}\".normalized') "
+            f"ELSE json_extract(row_data, '$.\"{json_key}\"') END"
+        )
+    # When cell is object use only .normalized (so JSON null => SQL NULL); else legacy scalar
+    return (
+        f"CASE WHEN jsonb_typeof(row_data::jsonb -> '{escaped}') = 'object' "
+        f"THEN (row_data::jsonb -> '{escaped}') ->> 'normalized' "
+        f"ELSE row_data::jsonb ->> '{escaped}' END"
+    )
+
+
 def _group_by_date_part_expr(
     col_expr: str, part: Literal["month", "quarter", "year"]
 ) -> str:
@@ -139,7 +158,8 @@ def _build_where_clauses(
         current_expr = ""
 
         if f.operator in ("IS NULL", "IS NOT NULL"):
-            current_expr = f"{col} {f.operator}"
+            null_col = _column_null_check_expr(f.column)
+            current_expr = f"({null_col} {f.operator})"
         elif f.operator == "IN":
             if not f.value:
                 raise HTTPException(
@@ -655,8 +675,7 @@ def filter_dataset(body: FilterRequest):
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
-    ordered_columns = [str(col["name"]) for col in cols_payload["columns"] if col.get("name")]
-    valid_columns = set(ordered_columns)
+    valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
@@ -749,7 +768,7 @@ def filter_row_indices(body: FilterRowIndicesRequest):
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
-    valid_columns = {str(col["name"]) for col in cols_payload["columns"] if col.get("name")}
+    valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 

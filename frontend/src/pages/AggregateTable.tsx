@@ -79,6 +79,8 @@ function formatAggregateValue(
     return `${formatted} ${unit}`;
   }
   return value;
+}
+
 function encodePayload(value: unknown): string {
   const raw = JSON.stringify(value);
   const bytes = new TextEncoder().encode(raw);
@@ -121,53 +123,6 @@ export default function VirtualTableView() {
   const [resultTitle, setResultTitle] = useState<string>("Result");
   const [resultSubtitle, setResultSubtitle] = useState<string>("");
 
-  type AggregatePayload = {
-    dataset_id: number;
-    operation: string;
-    metric_column?: string;
-    group_by?: string;
-    filters?: FilterConditionPayload[];
-    limit?: number;
-  };
-
-  type FilterConditionPayload = {
-    column: string;
-    operator: string;
-    value?: string;
-    logical_operator?: "AND" | "OR";
-  };
-
-  type FilterPayload = {
-    mode: "filter";
-    dataset_id: number;
-    filters?: FilterConditionPayload[];
-    limit?: number;
-    offset?: number;
-  };
-
-  function decodePayload(encoded: string): AggregatePayload | FilterPayload {
-    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
-    const pad = normalized.length % 4;
-    const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
-    return JSON.parse(atob(padded));
-  }
-
-  function formatFilterSummary(filters?: FilterConditionPayload[]): string {
-    if (!filters || filters.length === 0) return "no filters";
-    return filters
-      .map((f, idx) => {
-        const clause =
-          f.operator === "IS NULL" || f.operator === "IS NOT NULL"
-            ? `${f.column} ${f.operator}`
-            : `${f.column} ${f.operator} ${f.value ?? ""}`.trim();
-        if (idx === 0) return clause;
-        return `${(f.logical_operator || "AND").toUpperCase()} ${clause}`;
-      })
-      .join(" ");
-  }
-
-  useEffect(() => {
-    // Prefer query string; fall back to hash (some clients strip query after normalization)
   const [searchState, setSearchState] = useState<{ key: string; value: string }>({
     key: "",
     value: "",
@@ -180,7 +135,6 @@ export default function VirtualTableView() {
       encoded = hashParams.get("q");
     }
     if (!encoded) {
-      setErr("This URL is not valid or no longer valid");
       return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
     }
     try {
@@ -188,9 +142,13 @@ export default function VirtualTableView() {
     } catch {
       return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
     }
-  }, [location.search]);
+  }, [location.search, location.hash]);
 
   useEffect(() => {
+    if (parsedQuery.error) {
+      setErr(parsedQuery.error);
+      return;
+    }
     if (!parsedQuery.payload) {
       return;
     }
@@ -259,7 +217,11 @@ export default function VirtualTableView() {
           if (result.group_by_column) {
             nextRow[result.group_by_column] = row.group_value;
           }
-          nextRow[metricColLabel] = row.aggregate_value;
+          nextRow[metricColLabel] = formatAggregateValue(
+            row.aggregate_value,
+            result.metric_currency ?? null,
+            result.metric_unit ?? null,
+          );
           nextRow.__dataset_id = result.dataset_id;
 
           const drilldownFilters = [...(aggregatePayload.filters || [])];
@@ -287,7 +249,7 @@ export default function VirtualTableView() {
         setRows(remapped);
       })
       .catch((error: unknown) => setErr(getErrorMessage(error)));
-  }, [parsedQuery.payload]);
+  }, [parsedQuery]);
 
   const searchQuery = searchState.key === location.search ? searchState.value : "";
   const normalizedSearch = searchQuery.trim().toLowerCase();
