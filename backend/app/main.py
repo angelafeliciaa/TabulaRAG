@@ -11,6 +11,7 @@ from sqlalchemy import insert, text, select
 from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
+    ensure_dataset_description_column,
     ensure_dataset_index_ready_column,
     set_dataset_index_ready,
 )
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     global _index_worker
     Base.metadata.create_all(bind=engine)
     ensure_dataset_index_ready_column()
+    ensure_dataset_description_column()
     try:
         from app.embeddings import get_model
         get_model()
