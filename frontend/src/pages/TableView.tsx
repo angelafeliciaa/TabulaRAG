@@ -938,7 +938,7 @@ export default function TableView() {
                 {loading
                   ? "Loading table page..."
                   : data && data.rows.length > 0
-                    ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
+                    ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()}${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}`
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
