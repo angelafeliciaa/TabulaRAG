@@ -1,21 +1,33 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+} from "react";
 import { Link } from "react-router-dom";
+import {
+  focusByIndex,
+  focusByOffset,
+  trapFocus,
+} from "../accessibility";
 import {
   deleteTable,
   getSlice,
   listIndexStatus,
   listTables,
   renameTable,
+  uploadTable,
   type TableIndexStatus,
-  type UploadProgress,
   type TableSlice,
   type TableSummary,
-  uploadTable,
+  type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
 import logo from "../images/logo.png";
 import openIcon from "../images/open.png";
-import plusIcon from "../images/plus.png";
 import uploadLogo from "../images/upload.png";
 
 const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
@@ -29,6 +41,7 @@ const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 1024;
 type ToastState = { id: number; kind: "success"; message: string };
 type UploadQueuePhase = "idle" | UploadProgress["phase"] | "success" | "error";
 type TableSortMode = "alphabet" | "rows" | "recent";
+type UploadPickerTarget = "empty" | "queue";
 type UploadQueueItem = {
   id: string;
   file: File;
@@ -40,6 +53,46 @@ type UploadQueueItem = {
   error: string | null;
   description: string;
 };
+
+type FileSystemEntryLike = {
+  isFile: boolean;
+  isDirectory: boolean;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+};
+
+type FileSystemDirectoryReaderLike = {
+  readEntries: (
+    successCallback: (entries: FileSystemEntryLike[]) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+  createReader: () => FileSystemDirectoryReaderLike;
+};
+
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntryLike | null;
+};
+
+type FolderInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory?: string;
+  directory?: string;
+};
+
+const FOLDER_INPUT_PROPS: FolderInputProps = {
+  webkitdirectory: "",
+  directory: "",
+};
+
+const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
+  { value: "recent", label: "Most recent" },
+  { value: "rows", label: "Most rows" },
+  { value: "alphabet", label: "Alphabetical" },
+];
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -68,6 +121,18 @@ function isTableNotFoundError(error: unknown): boolean {
   return /table not found/i.test(getErrorMessage(error));
 }
 
+function isOfflineConnectionError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("failed to fetch")
+    || normalized.includes("networkerror")
+    || normalized.includes("network error")
+    || normalized.includes("load failed")
+    || normalized.includes("network request failed")
+    || normalized.includes("err_network")
+  );
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -83,6 +148,88 @@ function formatFileSize(bytes: number): string {
   return `${(safeBytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+function getFileIdentity(file: File): string {
+  const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  return `${relativePath}:${file.size}:${file.lastModified}`;
+}
+
+function hasSupportedExtension(fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  return lowerName.endsWith(".csv") || lowerName.endsWith(".tsv");
+}
+
+function isLikelyDirectoryPlaceholder(file: File): boolean {
+  if (hasSupportedExtension(file.name)) {
+    return false;
+  }
+  const noExtension = !/\.[^./\\]+$/.test(file.name);
+  return noExtension && file.size === 0 && file.type === "";
+}
+
+function fileFromEntry(entry: FileSystemFileEntryLike): Promise<File> {
+  return new Promise<File>((resolve, reject) => {
+    entry.file(resolve, reject);
+  });
+}
+
+function readAllDirectoryEntries(
+  reader: FileSystemDirectoryReaderLike,
+): Promise<FileSystemEntryLike[]> {
+  return new Promise<FileSystemEntryLike[]>((resolve, reject) => {
+    const allEntries: FileSystemEntryLike[] = [];
+    const readBatch = () => {
+      reader.readEntries(
+        (entries) => {
+          if (entries.length === 0) {
+            resolve(allEntries);
+            return;
+          }
+          allEntries.push(...entries);
+          readBatch();
+        },
+        reject,
+      );
+    };
+    readBatch();
+  });
+}
+
+async function collectFilesFromEntry(entry: FileSystemEntryLike): Promise<File[]> {
+  if (entry.isFile) {
+    const file = await fileFromEntry(entry as FileSystemFileEntryLike);
+    return [file];
+  }
+  if (!entry.isDirectory) {
+    return [];
+  }
+  const dirReader = (entry as FileSystemDirectoryEntryLike).createReader();
+  const childEntries = await readAllDirectoryEntries(dirReader);
+  const files = await Promise.all(childEntries.map((child) => collectFilesFromEntry(child)));
+  return files.flat();
+}
+
+async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+  const itemFiles = await Promise.all(
+    Array.from(dataTransfer.items || []).map(async (item) => {
+      if (item.kind !== "file") {
+        return [] as File[];
+      }
+      const itemWithEntry = item as DataTransferItemWithEntry;
+      const entry = itemWithEntry.webkitGetAsEntry?.();
+      if (entry) {
+        return await collectFilesFromEntry(entry);
+      }
+      const fallbackFile = item.getAsFile();
+      return fallbackFile ? [fallbackFile] : [];
+    }),
+  );
+  const flattened = itemFiles.flat();
+  if (flattened.length > 0) {
+    return flattened.filter((file) => !isLikelyDirectoryPlaceholder(file));
+  }
+  return Array.from(dataTransfer.files || []).filter((file) => !isLikelyDirectoryPlaceholder(file));
+}
+
 function countDelimitedColumns(line: string, delimiter: string): number {
   if (!line.length) {
     return 0;
@@ -92,8 +239,8 @@ function countDelimitedColumns(line: string, delimiter: string): number {
   let count = 1;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
+    if (ch === "\"") {
+      if (inQuotes && line[i + 1] === "\"") {
         i += 1;
       } else {
         inQuotes = !inQuotes;
@@ -108,15 +255,14 @@ function countDelimitedColumns(line: string, delimiter: string): number {
 }
 
 function stripSupportedFileExtension(name: string): string {
-  return name
-    .trim()
-    .replace(/\.(csv|tsv)$/i, "")
-    .trim();
+  return name.trim().replace(/\.(csv|tsv)$/i, "").trim();
 }
 
 function sanitizeTableNameInput(name: string): string {
   const withoutExtension = stripSupportedFileExtension(name);
-  const allowedCharsOnly = withoutExtension.replace(/[^A-Za-z0-9 _-]/g, "");
+  // eslint-disable-next-line no-control-regex
+  const withoutControlChars = withoutExtension.replace(/[\u0000-\u001f\u007f]/g, "");
+  const allowedCharsOnly = withoutControlChars.replace(/[^A-Za-z0-9 _-]/g, "");
   const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ").trim();
   return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
 }
@@ -137,10 +283,7 @@ function getNameKey(name: string): string {
   return sanitizeTableNameInput(name).toLocaleLowerCase();
 }
 
-function claimUniqueTableName(
-  baseName: string,
-  occupiedNameKeys: Set<string>,
-): string {
+function claimUniqueTableName(baseName: string, occupiedNameKeys: Set<string>): string {
   const cleanedBaseName = sanitizeTableNameInput(baseName) || "table";
   let candidate = cleanedBaseName;
   let suffix = 2;
@@ -160,28 +303,14 @@ function smoothIndexStatus(
   fallbackTotalRows: number,
 ): TableIndexStatus {
   const totalRows =
-    incoming.total_rows > 0
-      ? incoming.total_rows
-      : Math.max(0, fallbackTotalRows);
+    incoming.total_rows > 0 ? incoming.total_rows : Math.max(0, fallbackTotalRows);
 
-  if (
-    incoming.state !== "indexing" ||
-    !previous ||
-    previous.state !== "indexing"
-  ) {
+  if (incoming.state !== "indexing" || !previous || previous.state !== "indexing") {
     return { ...incoming, total_rows: totalRows };
   }
 
-  const previousProgress = clamp(
-    previous.progress || 0,
-    0,
-    INDEX_PROGRESS_DRIFT_CAP,
-  );
-  const serverProgress = clamp(
-    incoming.progress || 0,
-    0,
-    INDEX_PROGRESS_DRIFT_CAP,
-  );
+  const previousProgress = clamp(previous.progress || 0, 0, INDEX_PROGRESS_DRIFT_CAP);
+  const serverProgress = clamp(incoming.progress || 0, 0, INDEX_PROGRESS_DRIFT_CAP);
 
   if (serverProgress > previousProgress + 0.05) {
     return { ...incoming, total_rows: totalRows };
@@ -189,11 +318,7 @@ function smoothIndexStatus(
 
   const nextProgress = Math.max(
     serverProgress,
-    clamp(
-      previousProgress + INDEX_PROGRESS_DRIFT_STEP,
-      0,
-      INDEX_PROGRESS_DRIFT_CAP,
-    ),
+    clamp(previousProgress + INDEX_PROGRESS_DRIFT_STEP, 0, INDEX_PROGRESS_DRIFT_CAP),
   );
 
   let nextProcessedRows = Math.max(0, incoming.processed_rows || 0);
@@ -215,6 +340,7 @@ function smoothIndexStatus(
 
 export default function Upload() {
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [showUploadQueue, setShowUploadQueue] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -224,8 +350,7 @@ export default function Upload() {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [activeTableId, setActiveTableId] = useState<number | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [deleteConfirmTable, setDeleteConfirmTable] =
-    useState<TableSummary | null>(null);
+  const [deleteConfirmTable, setDeleteConfirmTable] = useState<TableSummary | null>(null);
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [uploadedAtBottom, setUploadedAtBottom] = useState(false);
   const [showPreviewScrollHint, setShowPreviewScrollHint] = useState(false);
@@ -236,10 +361,9 @@ export default function Upload() {
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [uploadPickerOpen, setUploadPickerOpen] = useState<UploadPickerTarget | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
-  const [deletingTableIds, setDeletingTableIds] = useState<
-    Record<number, boolean>
-  >({});
+  const [deletingTableIds, setDeletingTableIds] = useState<Record<number, boolean>>({});
   const [isDragActive, setIsDragActive] = useState(false);
   const [pinnedTableIds, setPinnedTableIds] = useState<number[]>(() => {
     try {
@@ -252,10 +376,7 @@ export default function Upload() {
         return [];
       }
       return parsed
-        .filter(
-          (value): value is number =>
-            typeof value === "number" && Number.isFinite(value),
-        )
+        .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
         .map((value) => Math.trunc(value));
     } catch {
       return [];
@@ -264,14 +385,41 @@ export default function Upload() {
   const [indexStatusByTable, setIndexStatusByTable] = useState<
     Record<number, TableIndexStatus>
   >({});
+  const uploadQueueTitleId = useId();
+  const uploadQueueDescriptionId = useId();
+  const uploadDropDescriptionId = useId();
+  const sortMenuId = useId();
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadPanelRef = useRef<HTMLDivElement | null>(null);
+  const uploadDropFileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDropFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const queueFileInputRef = useRef<HTMLInputElement | null>(null);
+  const queueFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadPickerEmptyRef = useRef<HTMLDivElement | null>(null);
+  const uploadPickerQueueRef = useRef<HTMLDivElement | null>(null);
+  const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedDescriptionInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
+  const sortToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const sortMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  const deleteCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const uploadDialogReturnFocusRef = useRef<HTMLElement | null>(null);
+  const deleteDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const isUploadDialogOpen = uploadQueue.length > 0;
+  const isQueueInProgress = useMemo(() => {
+    if (busy) {
+      return true;
+    }
+    return uploadQueue.some(
+      (item) => item.phase === "uploading" || item.phase === "processing",
+    );
+  }, [busy, uploadQueue]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -307,13 +455,9 @@ export default function Upload() {
         sampledLineCount,
         Math.round(nextFile.size / avgBytesPerLine),
       );
-      const delimiter = nextFile.name.toLowerCase().endsWith(".tsv")
-        ? "\t"
-        : ",";
+      const delimiter = nextFile.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
       const headerLine = lines.find((line) => line.trim().length > 0) || "";
-      const estimatedCols = headerLine
-        ? countDelimitedColumns(headerLine, delimiter)
-        : null;
+      const estimatedCols = headerLine ? countDelimitedColumns(headerLine, delimiter) : null;
       // In this UI we always upload with has_header=true.
       return {
         rows: Math.max(0, estimatedTotalLines - 1),
@@ -343,54 +487,51 @@ export default function Upload() {
     }, SUCCESS_TOAST_MS);
   }
 
-  const refreshIndexStatuses = useCallback(
-    async (nextTables: TableSummary[]) => {
-      if (nextTables.length === 0) {
-        setIndexStatusByTable({});
-        return;
+  const refreshIndexStatuses = useCallback(async (nextTables: TableSummary[]) => {
+    if (nextTables.length === 0) {
+      setIndexStatusByTable({});
+      return;
+    }
+
+    const datasetIds = nextTables.map((table) => table.dataset_id);
+    const statuses = await listIndexStatus(datasetIds);
+    const nextStatusByTable: Record<number, TableIndexStatus> = {};
+
+    for (const status of statuses) {
+      nextStatusByTable[status.dataset_id] = status;
+    }
+
+    for (const table of nextTables) {
+      if (!nextStatusByTable[table.dataset_id]) {
+        nextStatusByTable[table.dataset_id] = {
+          dataset_id: table.dataset_id,
+          state: "ready",
+          progress: 100,
+          processed_rows: table.row_count,
+          total_rows: table.row_count,
+          message: "Vector index is ready.",
+          started_at: null,
+          updated_at: null,
+          finished_at: null,
+        };
       }
+    }
 
-      const datasetIds = nextTables.map((table) => table.dataset_id);
-      const statuses = await listIndexStatus(datasetIds);
-      const nextStatusByTable: Record<number, TableIndexStatus> = {};
-
-      for (const status of statuses) {
-        nextStatusByTable[status.dataset_id] = status;
-      }
-
+    setIndexStatusByTable((previous) => {
+      const merged: Record<number, TableIndexStatus> = {};
       for (const table of nextTables) {
-        if (!nextStatusByTable[table.dataset_id]) {
-          nextStatusByTable[table.dataset_id] = {
-            dataset_id: table.dataset_id,
-            state: "ready",
-            progress: 100,
-            processed_rows: table.row_count,
-            total_rows: table.row_count,
-            message: "Vector index is ready.",
-            started_at: null,
-            updated_at: null,
-            finished_at: null,
-          };
-        }
+        merged[table.dataset_id] = smoothIndexStatus(
+          previous[table.dataset_id],
+          nextStatusByTable[table.dataset_id],
+          table.row_count,
+        );
       }
-
-      setIndexStatusByTable((previous) => {
-        const merged: Record<number, TableIndexStatus> = {};
-        for (const table of nextTables) {
-          merged[table.dataset_id] = smoothIndexStatus(
-            previous[table.dataset_id],
-            nextStatusByTable[table.dataset_id],
-            table.row_count,
-          );
-        }
-        return merged;
-      });
-    },
-    [],
-  );
+      return merged;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
-    const nextTables = await listTables();
+    const nextTables = await listTables({ includePending: true });
     setTables(nextTables);
     try {
       await refreshIndexStatuses(nextTables);
@@ -400,9 +541,7 @@ export default function Upload() {
   }, [refreshIndexStatuses]);
 
   useEffect(() => {
-    const pendingRaw = window.sessionStorage.getItem(
-      PENDING_UPLOAD_SESSION_KEY,
-    );
+    const pendingRaw = window.sessionStorage.getItem(PENDING_UPLOAD_SESSION_KEY);
     if (!pendingRaw) {
       return;
     }
@@ -466,6 +605,45 @@ export default function Upload() {
   }, [editingId, busy]);
 
   useEffect(() => {
+    if (!isUploadDialogOpen) {
+      uploadDialogReturnFocusRef.current?.focus();
+      uploadDialogReturnFocusRef.current = null;
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      uploadDialogReturnFocusRef.current = document.activeElement;
+    }
+  }, [isUploadDialogOpen]);
+
+  useEffect(() => {
+    if (!isUploadDialogOpen) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && uploadPickerOpen) {
+        setUploadPickerOpen(null);
+        return;
+      }
+
+      if (event.key === "Escape" && !isQueueInProgress) {
+        setUploadQueue([]);
+        setErr(null);
+        setStatus(null);
+        return;
+      }
+
+      trapFocus(event, uploadPanelRef.current);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isQueueInProgress, isUploadDialogOpen, uploadPickerOpen]);
+
+  useEffect(() => {
     if (!sortMenuOpen) {
       return;
     }
@@ -480,6 +658,7 @@ export default function Upload() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSortMenuOpen(false);
+        sortToggleButtonRef.current?.focus();
       }
     };
 
@@ -490,6 +669,55 @@ export default function Upload() {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [sortMenuOpen]);
+
+  useEffect(() => {
+    if (!sortMenuOpen) {
+      return;
+    }
+
+    const activeSortIndex = TABLE_SORT_OPTIONS.findIndex(
+      (option) => option.value === tableSortMode,
+    );
+    const rafId = window.requestAnimationFrame(() => {
+      focusByIndex(sortMenuItemRefs.current, activeSortIndex === -1 ? 0 : activeSortIndex);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [sortMenuOpen, tableSortMode]);
+
+  useEffect(() => {
+    if (!uploadPickerOpen) {
+      return;
+    }
+
+    const activePickerRef =
+      uploadPickerOpen === "empty" ? uploadPickerEmptyRef : uploadPickerQueueRef;
+    const activeToggleRef =
+      uploadPickerOpen === "empty" ? uploadPickerEmptyButtonRef : uploadPickerQueueButtonRef;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (activePickerRef.current && !activePickerRef.current.contains(target)) {
+        setUploadPickerOpen(null);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setUploadPickerOpen(null);
+        activeToggleRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [uploadPickerOpen]);
 
   useEffect(() => {
     if (busy || uploadQueue.length === 0) {
@@ -512,6 +740,12 @@ export default function Upload() {
   }, [uploadQueue.length, busy]);
 
   useEffect(() => {
+    if (!(showUploadQueue || uploadQueue.length > 0)) {
+      setUploadPickerOpen(null);
+    }
+  }, [showUploadQueue, uploadQueue.length]);
+
+  useEffect(() => {
     return () => {
       clearToastTimer();
     };
@@ -519,16 +753,36 @@ export default function Upload() {
 
   useEffect(() => {
     if (!deleteConfirmTable) {
+      deleteDialogReturnFocusRef.current?.focus();
+      deleteDialogReturnFocusRef.current = null;
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      deleteDialogReturnFocusRef.current = document.activeElement;
+    }
+
+    const rafId = window.requestAnimationFrame(() => {
+      deleteCancelButtonRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [deleteConfirmTable]);
+
+  useEffect(() => {
+    if (!deleteConfirmTable) {
       return;
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key === "Escape" &&
-        !deletingTableIds[deleteConfirmTable.dataset_id]
-      ) {
+      if (event.key === "Escape" && !deletingTableIds[deleteConfirmTable.dataset_id]) {
         setDeleteConfirmTable(null);
+        return;
       }
+
+      trapFocus(event, deleteDialogRef.current);
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -563,8 +817,7 @@ export default function Upload() {
     }
 
     const updateHint = () => {
-      const atBottom =
-        element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
+      const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
       const canScroll = element.scrollHeight > element.clientHeight + 2;
       setShowScrollHint(canScroll);
       setUploadedAtBottom(atBottom);
@@ -582,9 +835,7 @@ export default function Upload() {
 
   useEffect(() => {
     const container = previewAreaRef.current;
-    const element = container?.querySelector(
-      ".table-scroll",
-    ) as HTMLDivElement | null;
+    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
     if (!element) {
       setShowPreviewScrollHint(false);
       setPreviewAtBottom(false);
@@ -592,8 +843,7 @@ export default function Upload() {
     }
 
     const updateHint = () => {
-      const atBottom =
-        element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
+      const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
       const canScroll = element.scrollHeight > element.clientHeight + 2;
       setShowPreviewScrollHint(canScroll);
       setPreviewAtBottom(atBottom);
@@ -644,10 +894,13 @@ export default function Upload() {
       return;
     }
 
-    const queuedItems = uploadQueue.filter(
-      (item) => item.phase === "idle" || item.phase === "error",
-    );
+    const queuedItems = uploadQueue.filter((item) => item.phase === "idle" || item.phase === "error");
     if (queuedItems.length === 0) {
+      // If only successful items remain, let the primary action close the upload queue.
+      setUploadQueue([]);
+      setShowUploadQueue(false);
+      setErr(null);
+      setStatus(null);
       return;
     }
 
@@ -660,18 +913,14 @@ export default function Upload() {
     let firstFailureMessage: string | null = null;
     let lastUploadedDatasetId: number | null = null;
     const occupiedNameKeys = new Set(
-      tables.map((table) =>
-        getNameKey(stripSupportedFileExtension(table.name) || "table"),
-      ),
+      tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
     );
     const preparedItems = queuedItems.map((item) => {
       const preferredName =
-        sanitizeTableNameInput(item.name) ||
-        sanitizeTableNameInput(item.file.name) ||
-        "table";
-      const normalizedDescription = sanitizeTableDescriptionInput(
-        item.description,
-      );
+        sanitizeTableNameInput(item.name)
+        || sanitizeTableNameInput(item.file.name)
+        || "table";
+      const normalizedDescription = sanitizeTableDescriptionInput(item.description);
       return {
         item,
         normalizedName: claimUniqueTableName(preferredName, occupiedNameKeys),
@@ -679,95 +928,81 @@ export default function Upload() {
       };
     });
     let completedCount = 0;
-    setStatus(
-      `Uploading ${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
-    );
+    setStatus(`Uploading ${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`);
     window.sessionStorage.setItem(
       PENDING_UPLOAD_SESSION_KEY,
       JSON.stringify({
         file_name:
-          queuedItems.length === 1
-            ? queuedItems[0].file.name
-            : `${queuedItems.length} files`,
+          queuedItems.length === 1 ? queuedItems[0].file.name : `${queuedItems.length} files`,
         started_at: new Date().toISOString(),
       }),
     );
 
     await Promise.allSettled(
-      preparedItems.map(
-        async ({ item, normalizedName, normalizedDescription }) => {
-          setUploadQueue((previous) =>
-            previous.map((current) =>
-              current.id === item.id
-                ? {
-                    ...current,
-                    name: normalizedName,
-                    phase: "uploading",
-                    progress: 2,
-                    error: null,
-                  }
-                : current,
-            ),
-          );
+      preparedItems.map(async ({ item, normalizedName, normalizedDescription }) => {
+        setUploadQueue((previous) =>
+          previous.map((current) =>
+            current.id === item.id
+              ? {
+                ...current,
+                name: normalizedName,
+                phase: "uploading",
+                progress: 2,
+                error: null,
+              }
+              : current,
+          ),
+        );
 
-          try {
-            const result = await uploadTable(
-              item.file,
-              normalizedName,
-              normalizedDescription || null,
-              (progress) => {
-                setUploadQueue((previous) =>
-                  previous.map((current) =>
-                    current.id === item.id
-                      ? {
-                          ...current,
-                          phase: progress.phase,
-                          progress: Math.max(
-                            current.progress,
-                            progress.percent,
-                          ),
-                        }
-                      : current,
-                  ),
-                );
-              },
-            );
-
-            successCount += 1;
-            lastUploadedDatasetId = result.dataset_id;
+        try {
+          const result = await uploadTable(item.file, normalizedName, normalizedDescription || null, (progress) => {
             setUploadQueue((previous) =>
               previous.map((current) =>
                 current.id === item.id
                   ? {
-                      ...current,
-                      phase: "success",
-                      progress: 100,
-                      error: null,
-                    }
+                    ...current,
+                    phase: progress.phase,
+                    progress: Math.max(current.progress, progress.percent),
+                  }
                   : current,
               ),
             );
-          } catch (error: unknown) {
-            failureCount += 1;
-            const message = getErrorMessage(error);
-            if (!firstFailureMessage) {
-              firstFailureMessage = message;
-            }
-            setUploadQueue((previous) =>
-              previous.map((current) =>
-                current.id === item.id
-                  ? { ...current, phase: "error", progress: 0, error: message }
-                  : current,
-              ),
-            );
-          } finally {
-            completedCount += 1;
-            setStatus(
-              `Completed ${completedCount}/${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
-            );
+          });
+
+          successCount += 1;
+          lastUploadedDatasetId = result.dataset_id;
+          setUploadQueue((previous) =>
+            previous.map((current) =>
+              current.id === item.id
+                ? {
+                  ...current,
+                  phase: "success",
+                  progress: 100,
+                  error: null,
+                }
+                : current,
+            ),
+          );
+        } catch (error: unknown) {
+          failureCount += 1;
+          const message = getErrorMessage(error);
+          if (!firstFailureMessage) {
+            firstFailureMessage = message;
           }
-        },
-      ),
+          setUploadQueue((previous) =>
+            previous.map((current) =>
+              current.id === item.id
+                ? { ...current, phase: "error", progress: 0, error: message }
+                : current,
+            ),
+          );
+        } finally {
+          completedCount += 1;
+          setStatus(
+            `Completed ${completedCount}/${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
+          );
+        }
+      }),
     );
 
     window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
@@ -793,6 +1028,7 @@ export default function Upload() {
     }
     if (failureCount === 0 && successCount === queuedItems.length) {
       setUploadQueue([]);
+      setShowUploadQueue(false);
     }
 
     setStatus(null);
@@ -815,9 +1051,7 @@ export default function Upload() {
 
     try {
       await deleteTable(datasetId);
-      setTables((previous) =>
-        previous.filter((current) => current.dataset_id !== datasetId),
-      );
+      setTables((previous) => previous.filter((current) => current.dataset_id !== datasetId));
       setPinnedTableIds((previous) =>
         previous.filter((currentId) => currentId !== datasetId),
       );
@@ -830,9 +1064,7 @@ export default function Upload() {
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
       if (isTableNotFoundError(error)) {
-        setTables((previous) =>
-          previous.filter((current) => current.dataset_id !== datasetId),
-        );
+        setTables((previous) => previous.filter((current) => current.dataset_id !== datasetId));
         setPinnedTableIds((previous) =>
           previous.filter((currentId) => currentId !== datasetId),
         );
@@ -871,9 +1103,8 @@ export default function Upload() {
     const nextNameKey = getNameKey(nextName);
     const hasDuplicateName = tables.some(
       (table) =>
-        table.dataset_id !== datasetId &&
-        getNameKey(stripSupportedFileExtension(table.name) || "table") ===
-          nextNameKey,
+        table.dataset_id !== datasetId
+        && getNameKey(stripSupportedFileExtension(table.name) || "table") === nextNameKey,
     );
     if (hasDuplicateName) {
       setErr("Name already exists, please choose a different name.");
@@ -892,14 +1123,13 @@ export default function Upload() {
   }
 
   function validateSelectedFile(nextFile: File): string | null {
-    const lowerName = nextFile.name.toLowerCase();
-    if (!(lowerName.endsWith(".csv") || lowerName.endsWith(".tsv"))) {
+    if (!hasSupportedExtension(nextFile.name)) {
       return "File must have a .csv or .tsv extension.";
     }
     return null;
   }
 
-  function onSelectFiles(nextFiles: FileList | null) {
+  function onSelectFiles(nextFiles: FileList | File[] | null) {
     if (busy) {
       return;
     }
@@ -909,31 +1139,25 @@ export default function Upload() {
       return;
     }
 
-    const existingFileKeys = new Set(
-      uploadQueue.map(
-        (item) =>
-          `${item.file.name}:${item.file.size}:${item.file.lastModified}`,
-      ),
-    );
+    const existingFileKeys = new Set(uploadQueue.map((item) => getFileIdentity(item.file)));
     const occupiedNameKeys = new Set<string>([
-      ...tables.map((table) =>
-        getNameKey(stripSupportedFileExtension(table.name) || "table"),
-      ),
-      ...uploadQueue.map((item) =>
-        getNameKey(stripSupportedFileExtension(item.name) || "table"),
-      ),
+      ...tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
+      ...uploadQueue.map((item) => getNameKey(stripSupportedFileExtension(item.name) || "table")),
     ]);
     const nextItems: UploadQueueItem[] = [];
     const rejectedMessages: string[] = [];
 
     for (const nextFile of Array.from(nextFiles)) {
+      if (isLikelyDirectoryPlaceholder(nextFile)) {
+        continue;
+      }
       const validationError = validateSelectedFile(nextFile);
       if (validationError) {
         rejectedMessages.push(`${nextFile.name}: ${validationError}`);
         continue;
       }
 
-      const fileKey = `${nextFile.name}:${nextFile.size}:${nextFile.lastModified}`;
+      const fileKey = getFileIdentity(nextFile);
       if (existingFileKeys.has(fileKey)) {
         rejectedMessages.push(`${nextFile.name}: already selected.`);
         continue;
@@ -972,11 +1196,7 @@ export default function Upload() {
         setUploadQueue((previous) =>
           previous.map((current) =>
             current.id === item.id
-              ? {
-                  ...current,
-                  estimatedRows: stats.rows,
-                  estimatedCols: stats.cols,
-                }
+              ? { ...current, estimatedRows: stats.rows, estimatedCols: stats.cols }
               : current,
           ),
         );
@@ -991,6 +1211,7 @@ export default function Upload() {
     const nextQueue = uploadQueue.filter((item) => item.id !== queueItemId);
     setUploadQueue(nextQueue);
     if (nextQueue.length === 0) {
+      setShowUploadQueue(false);
       setErr(null);
       setStatus(null);
     }
@@ -1001,14 +1222,12 @@ export default function Upload() {
       return;
     }
     setUploadQueue([]);
+    setShowUploadQueue(false);
     setErr(null);
     setStatus(null);
   }
 
-  function isQueuedNameDuplicate(
-    queueItemId: string,
-    candidateName: string,
-  ): boolean {
+  function isQueuedNameDuplicate(queueItemId: string, candidateName: string): boolean {
     const normalizedCandidate = sanitizeTableNameInput(candidateName);
     if (!normalizedCandidate) {
       return false;
@@ -1016,9 +1235,7 @@ export default function Upload() {
     const candidateKey = getNameKey(normalizedCandidate);
 
     const existsInTables = tables.some(
-      (table) =>
-        getNameKey(stripSupportedFileExtension(table.name) || "table") ===
-        candidateKey,
+      (table) => getNameKey(stripSupportedFileExtension(table.name) || "table") === candidateKey,
     );
     if (existsInTables) {
       return true;
@@ -1046,9 +1263,9 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-              ...item,
-              name: nextName,
-            }
+            ...item,
+            name: nextName,
+          }
           : item,
       ),
     );
@@ -1064,21 +1281,21 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-              ...item,
-              description: nextDescription,
-            }
+            ...item,
+            description: nextDescription,
+          }
           : item,
       ),
     );
   }
 
-  function onUploadDragEnter(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragEnter(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(true);
   }
 
-  function onUploadDragOver(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragOver(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
@@ -1087,7 +1304,7 @@ export default function Upload() {
     }
   }
 
-  function onUploadDragLeave(event: React.DragEvent<HTMLLabelElement>) {
+  function onUploadDragLeave(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     const relatedTarget = event.relatedTarget as Node | null;
@@ -1096,35 +1313,71 @@ export default function Upload() {
     }
   }
 
-  function onUploadDrop(event: React.DragEvent<HTMLLabelElement>) {
+  async function onUploadDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(false);
-    onSelectFiles(event.dataTransfer.files);
+    const transferTypes = Array.from(event.dataTransfer.types || []);
+    const hasFileTransferType = transferTypes.some((type) =>
+      type.toLowerCase().includes("file")
+    );
+    const hasDroppedFileItem = Array.from(event.dataTransfer.items || []).some(
+      (item) => item.kind === "file",
+    );
+    if (event.dataTransfer.files.length > 0 || hasDroppedFileItem || hasFileTransferType) {
+      setShowUploadQueue(true);
+    }
+    if (event.dataTransfer.files.length === 0 && (hasDroppedFileItem || hasFileTransferType)) {
+      setStatus(null);
+      setErr("Unsupported file type. Please upload a .csv or .tsv file.");
+      return;
+    }
+    const droppedFiles = await collectDroppedFiles(event.dataTransfer);
+    onSelectFiles(droppedFiles);
+  }
+
+  function openUploadPicker(target: UploadPickerTarget) {
+    setUploadPickerOpen((current) => (current === target ? null : target));
+  }
+
+  function onUploadFiles(target: UploadPickerTarget) {
+    setUploadPickerOpen(null);
+    if (target === "empty") {
+      uploadDropFileInputRef.current?.click();
+      return;
+    }
+    queueFileInputRef.current?.click();
+  }
+
+  function onUploadFolder(target: UploadPickerTarget) {
+    setUploadPickerOpen(null);
+    if (target === "empty") {
+      uploadDropFolderInputRef.current?.click();
+      return;
+    }
+    queueFolderInputRef.current?.click();
   }
   const hasPendingUploads = uploadQueue.some(
     (item) => item.phase === "idle" || item.phase === "error",
   );
-  const isQueueInProgress = useMemo(() => {
-    if (busy) {
-      return true;
-    }
-    return uploadQueue.some(
-      (item) => item.phase === "uploading" || item.phase === "processing",
-    );
-  }, [busy, uploadQueue]);
+  const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
   const activeTableName =
     activeTableId !== null
-      ? tables.find((table) => table.dataset_id === activeTableId)?.name ||
-        "Table"
+      ? tables.find((table) => table.dataset_id === activeTableId)?.name || "Table"
       : null;
   const deleteConfirmBusy = deleteConfirmTable
     ? Boolean(deletingTableIds[deleteConfirmTable.dataset_id])
     : false;
-  const pinnedTableIdSet = useMemo(
-    () => new Set(pinnedTableIds),
-    [pinnedTableIds],
-  );
+  const showOfflineView = useMemo(() => {
+    if (tables.length > 0 || busy) {
+      return false;
+    }
+    if (typeof window !== "undefined" && window.navigator && window.navigator.onLine === false) {
+      return true;
+    }
+    return Boolean(err && isOfflineConnectionError(err));
+  }, [tables.length, busy, err]);
+  const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
   const sortedTables = useMemo(() => {
     const sortByMode = (a: TableSummary, b: TableSummary): number => {
       if (tableSortMode === "alphabet") {
@@ -1172,6 +1425,10 @@ export default function Upload() {
       table.name.toLowerCase().includes(normalizedTableSearchQuery),
     );
   }, [sortedTables, normalizedTableSearchQuery]);
+  const tableSortLabel =
+    TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)?.label
+    || "Most recent";
+
   function onTogglePin(datasetId: number) {
     setPinnedTableIds((previous) => {
       if (previous.includes(datasetId)) {
@@ -1179,6 +1436,63 @@ export default function Upload() {
       }
       return [datasetId, ...previous];
     });
+  }
+
+  function selectTableSortMode(nextMode: TableSortMode) {
+    setTableSortMode(nextMode);
+    setSortMenuOpen(false);
+    sortToggleButtonRef.current?.focus();
+  }
+
+  function onSortToggleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (
+      event.key === "ArrowDown"
+      || event.key === "ArrowUp"
+      || event.key === "Enter"
+      || event.key === " "
+    ) {
+      event.preventDefault();
+      setSortMenuOpen(true);
+    }
+  }
+
+  function onSortMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const currentTarget = event.target as HTMLElement | null;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusByOffset(sortMenuItemRefs.current, currentTarget, 1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusByOffset(sortMenuItemRefs.current, currentTarget, -1);
+      return;
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusByIndex(sortMenuItemRefs.current, 0);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      focusByIndex(sortMenuItemRefs.current, TABLE_SORT_OPTIONS.length - 1);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSortMenuOpen(false);
+      sortToggleButtonRef.current?.focus();
+      return;
+    }
+
+    if (event.key === "Tab") {
+      setSortMenuOpen(false);
+    }
   }
 
   function scrollUploadedTablesToBottom() {
@@ -1195,9 +1509,7 @@ export default function Upload() {
 
   function scrollPreviewToBottom() {
     const container = previewAreaRef.current;
-    const element = container?.querySelector(
-      ".table-scroll",
-    ) as HTMLDivElement | null;
+    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
     if (!element) {
       return;
     }
@@ -1208,10 +1520,29 @@ export default function Upload() {
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  if (showOfflineView) {
+    return (
+      <div className="page page-stack">
+        <div className="hero">
+          <div className="hero-title-row">
+            <img src={logo} alt="TabulaRAG" className="hero-logo" />
+            <div className="hero-title">TabulaRAG</div>
+          </div>
+          <div className="hero-subtitle">
+            A fast-ingesting tabular data RAG tool backed with cell citations.
+          </div>
+        </div>
+        <div className="panel">
+          <p className="error">Connection Error: Server is currently offline.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page page-stack">
       {toast && (
-        <div key={toast.id} className="toast success">
+        <div key={toast.id} className="toast success" role="status" aria-live="polite">
           <span>{toast.message}</span>
         </div>
       )}
@@ -1226,6 +1557,7 @@ export default function Upload() {
           }}
         >
           <div
+            ref={deleteDialogRef}
             className="confirm-modal"
             role="dialog"
             aria-modal="true"
@@ -1238,13 +1570,11 @@ export default function Upload() {
             <h3 id="delete-confirm-title">Delete table permanently?</h3>
             <p id="delete-confirm-description" className="small">
               This will permanently delete{" "}
-              <span className="confirm-modal-table-name">
-                {deleteConfirmTable.name}
-              </span>
-              . This action cannot be undone.
+              <span className="confirm-modal-table-name">{deleteConfirmTable.name}</span>. This action cannot be undone.
             </p>
             <div className="confirm-modal-actions">
               <button
+                ref={deleteCancelButtonRef}
                 type="button"
                 className="glass"
                 onClick={() => {
@@ -1269,11 +1599,9 @@ export default function Upload() {
         </div>
       )}
 
-      {uploadQueue.length > 0 && (
-        <div className="upload-queue-backdrop" aria-hidden="true" />
-      )}
+      {isUploadQueueVisible && <div className="upload-queue-backdrop" aria-hidden="true" />}
 
-      <div className="hero">
+      <div className="hero" aria-hidden={isUploadDialogOpen}>
         <div className="hero-title-row">
           <img src={logo} alt="TabulaRAG" className="hero-logo" />
           <div className="hero-title">TabulaRAG</div>
@@ -1284,17 +1612,40 @@ export default function Upload() {
       </div>
 
       <div
-        className={`panel upload-panel${uploadQueue.length > 0 ? " has-queue in-modal" : ""}`}
+        ref={uploadPanelRef}
+        className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
+        role={isUploadQueueVisible ? "dialog" : undefined}
+        aria-modal={isUploadQueueVisible ? "true" : undefined}
+        aria-labelledby={isUploadQueueVisible ? uploadQueueTitleId : undefined}
+        aria-describedby={isUploadQueueVisible ? uploadQueueDescriptionId : undefined}
+        aria-busy={busy}
+        onDragEnter={onUploadDragEnter}
+        onDragOver={onUploadDragOver}
+        onDragLeave={onUploadDragLeave}
+        onDrop={onUploadDrop}
       >
-        {uploadQueue.length === 0 ? (
-          <label
+        {!isUploadQueueVisible ? (
+          <div
             className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            aria-labelledby="upload-drop-title"
+            aria-describedby={uploadDropDescriptionId}
             onDragEnter={onUploadDragEnter}
             onDragOver={onUploadDragOver}
             onDragLeave={onUploadDragLeave}
             onDrop={onUploadDrop}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                uploadDropFileInputRef.current?.click();
+              }
+            }}
           >
             <input
+              ref={(element) => {
+                uploadDropFileInputRef.current = element;
+              }}
               type="file"
               multiple
               accept=".csv,.tsv"
@@ -1303,22 +1654,74 @@ export default function Upload() {
                 event.currentTarget.value = "";
               }}
             />
-            <div className="upload-icon" aria-hidden="true">
-              <img src={uploadLogo} alt="" />
+            <input
+              ref={uploadDropFolderInputRef}
+              {...FOLDER_INPUT_PROPS}
+              type="file"
+              multiple
+              accept=".csv,.tsv"
+              onChange={(event) => {
+                onSelectFiles(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="upload-icon-row">
+              <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
+                <button
+                  ref={uploadPickerEmptyButtonRef}
+                  type="button"
+                  className={`upload-icon icon-trigger upload-picker-trigger ${uploadPickerOpen === "empty" ? "active" : ""}`}
+                  aria-label="Upload options"
+                  title="Upload options"
+                  aria-haspopup="menu"
+                  aria-expanded={uploadPickerOpen === "empty"}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openUploadPicker("empty");
+                  }}
+                  disabled={busy}
+                >
+                  <img src={uploadLogo} alt="" />
+                </button>
+                {uploadPickerOpen === "empty" && (
+                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFiles("empty")}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFolder("empty")}
+                    >
+                      Upload folder
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="upload-title">
+            <div id="upload-drop-title" className="upload-title">
               Select or Drag &amp; Drop Your File(s) to Start Uploading
             </div>
-            <div className="upload-subtitle">
-              Supported file formats: .csv, .tsv
+            <div id={uploadDropDescriptionId} className="upload-subtitle">
+              Supported file formats: .csv, .tsv, and folders.
             </div>
-          </label>
+          </div>
         ) : (
           <>
-            <h2>Upload CSV/TSV</h2>
+            <h2 id={uploadQueueTitleId}>Upload CSV/TSV</h2>
+            <p id={uploadQueueDescriptionId} className="sr-only">
+              Review file names, fix any validation errors, then upload or cancel the queue.
+            </p>
             <div className="row upload-queue-toolbar">
               <input
-                ref={fileInputRef}
+                ref={queueFileInputRef}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
@@ -1328,57 +1731,78 @@ export default function Upload() {
                 }}
                 className="file-input-hidden"
               />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                type="button"
-                className="glass upload-add-more-button"
-                disabled={busy || isQueueInProgress}
-              >
-                <img
-                  src={plusIcon}
-                  alt=""
-                  aria-hidden="true"
-                  className="upload-add-icon"
-                />
-                Add more files
-              </button>
+              <input
+                ref={queueFolderInputRef}
+                {...FOLDER_INPUT_PROPS}
+                type="file"
+                multiple
+                accept=".csv,.tsv"
+                onChange={(event) => {
+                  onSelectFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                className="file-input-hidden"
+              />
+              <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
+                <button
+                  ref={uploadPickerQueueButtonRef}
+                  onClick={() => openUploadPicker("queue")}
+                  type="button"
+                  className={`glass upload-add-more-button upload-icon-only ${uploadPickerOpen === "queue" ? "active" : ""}`}
+                  aria-label="Upload options"
+                  title="Upload options"
+                  aria-haspopup="menu"
+                  aria-expanded={uploadPickerOpen === "queue"}
+                  disabled={busy || isQueueInProgress}
+                >
+                  <img src={uploadLogo} alt="" aria-hidden="true" />
+                </button>
+                {uploadPickerOpen === "queue" && (
+                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFiles("queue")}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFolder("queue")}
+                    >
+                      Upload folder
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <ul
-              className="upload-queue-list"
-              aria-label="Selected files for upload"
-            >
+            <ul className="upload-queue-list" aria-label="Selected files for upload">
               {uploadQueue.map((item, index) => {
                 const progressValue = Math.max(0, Math.min(100, item.progress));
-                const canEditQueuedName =
-                  item.phase === "idle" || item.phase === "error";
-                const queueNameIsEmpty =
-                  sanitizeTableNameInput(item.name).length === 0;
+                const canEditQueuedName = item.phase === "idle" || item.phase === "error";
+                const queueNameIsEmpty = sanitizeTableNameInput(item.name).length === 0;
                 const queueNameIsDuplicate =
-                  !queueNameIsEmpty &&
-                  isQueuedNameDuplicate(item.id, item.name);
+                  !queueNameIsEmpty && isQueuedNameDuplicate(item.id, item.name);
                 const estimatedRowsText =
-                  item.estimatedRows === null
-                    ? "..."
-                    : item.estimatedRows.toLocaleString();
+                  item.estimatedRows === null ? "..." : item.estimatedRows.toLocaleString();
                 const estimatedColsText =
-                  item.estimatedCols === null
-                    ? "..."
-                    : item.estimatedCols.toLocaleString();
+                  item.estimatedCols === null ? "..." : item.estimatedCols.toLocaleString();
                 const processedRows =
                   item.estimatedRows === null
                     ? null
                     : item.phase === "success"
                       ? item.estimatedRows
                       : Math.max(
-                          0,
-                          Math.min(
-                            item.estimatedRows,
-                            Math.round(
-                              (progressValue / 100) * item.estimatedRows,
-                            ),
-                          ),
-                        );
+                        0,
+                        Math.min(
+                          item.estimatedRows,
+                          Math.round((progressValue / 100) * item.estimatedRows),
+                        ),
+                      );
                 const stateLabel =
                   item.phase === "success"
                     ? "Uploaded"
@@ -1403,35 +1827,31 @@ export default function Upload() {
                   item.estimatedRows === null
                     ? "Rows: estimating..."
                     : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
+                const queueItemSubtitleId = `${item.id}-subtitle`;
+                const queueItemStateId = `${item.id}-state`;
+                const queueItemValidationId = `${item.id}-validation`;
+                const queueItemUploadErrorId = `${item.id}-upload-error`;
                 const progressFillWidth =
                   item.phase === "error" ? 100 : progressValue;
-                const progressFillClassName = `upload-progress-fill ${
-                  item.phase === "processing" ? "processing" : ""
-                } ${
-                  item.phase === "success" ? "success" : ""
-                } ${item.phase === "error" ? "error" : ""}`;
+                const progressFillClassName = `upload-progress-fill ${item.phase === "processing"
+                  ? "processing"
+                  : ""
+                  } ${item.phase === "success"
+                    ? "success"
+                    : ""
+                  } ${item.phase === "error" ? "error" : ""}`;
 
                 return (
-                  <li
-                    key={item.id}
-                    className={`upload-queue-item ${item.phase}`}
-                  >
+                  <li key={item.id} className={`upload-queue-item ${item.phase}`}>
                     <div className="upload-queue-head compact">
-                      <span
-                        className="upload-queue-file-icon"
-                        aria-hidden="true"
-                      >
+                      <span className="upload-queue-file-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" role="presentation">
                           <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
                         </svg>
                       </span>
                       <div className="upload-queue-file-text">
                         <input
-                          ref={
-                            index === 0 && canEditQueuedName
-                              ? firstQueuedNameInputRef
-                              : null
-                          }
+                          ref={index === 0 && canEditQueuedName ? firstQueuedNameInputRef : null}
                           type="text"
                           className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
                           value={item.name}
@@ -1444,11 +1864,25 @@ export default function Upload() {
                           placeholder="Enter table name"
                           maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
                           disabled={busy || !canEditQueuedName}
+                          aria-label={`Table name for ${item.file.name}`}
+                          aria-invalid={
+                            canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate)
+                          }
+                          aria-describedby={
+                            `${queueItemSubtitleId} ${queueItemStateId} ${queueNameIsEmpty || queueNameIsDuplicate
+                                ? queueItemValidationId
+                                : ""
+                              } ${item.error ? queueItemUploadErrorId : ""
+                              }`.trim()
+                          }
                         />
-                        <div className="upload-queue-file-subtitle">
+                        <div id={queueItemSubtitleId} className="upload-queue-file-subtitle">
                           {item.file.name} - {formatFileSize(item.file.size)} (
                           {estimatedRowsText} rows, {estimatedColsText} cols){" "}
-                          <span className={`upload-queue-state ${item.phase}`}>
+                          <span
+                            id={queueItemStateId}
+                            className={`upload-queue-state ${item.phase}`}
+                          >
                             {stateLabel}
                           </span>
                         </div>
@@ -1503,7 +1937,18 @@ export default function Upload() {
                       )}
                     </div>
                     {item.phase !== "idle" && (
-                      <div className="upload-progress-track upload-queue-track compact">
+                      <div
+                        className="upload-progress-track upload-queue-track compact"
+                        role={item.phase === "error" ? "status" : "progressbar"}
+                        aria-label={`${item.file.name} upload progress`}
+                        aria-valuemin={item.phase === "error" ? undefined : 0}
+                        aria-valuemax={item.phase === "error" ? undefined : 100}
+                        aria-valuenow={
+                          item.phase === "error" ? undefined : Math.round(progressValue)
+                        }
+                        aria-valuetext={`${stateLabel}. ${item.phase === "error" ? item.error || "Upload failed." : rowsLabel
+                          }`}
+                      >
                         <div
                           className={progressFillClassName}
                           style={{
@@ -1516,17 +1961,21 @@ export default function Upload() {
                       <div className="upload-queue-rows">{rowsLabel}</div>
                     )}
                     {queueNameIsEmpty && canEditQueuedName && (
-                      <p className="small error upload-queue-error">
+                      <p id={queueItemValidationId} className="small error upload-queue-error">
                         Table name cannot be empty.
                       </p>
                     )}
                     {queueNameIsDuplicate && canEditQueuedName && (
-                      <p className="small error upload-queue-error">
+                      <p id={queueItemValidationId} className="small error upload-queue-error">
                         Name already exists, please choose a different name.
                       </p>
                     )}
                     {item.error && (
-                      <p className="small error upload-queue-error">
+                      <p
+                        id={queueItemUploadErrorId}
+                        className="small error upload-queue-error"
+                        role="alert"
+                      >
                         {item.error}
                       </p>
                     )}
@@ -1536,8 +1985,7 @@ export default function Upload() {
             </ul>
             <div className="upload-queue-footer">
               <div className="small">
-                Tip: You can rename each table before clicking 'Upload all
-                files'.
+                Tip: You can rename each table before clicking 'Upload all files'.
               </div>
               {!isQueueInProgress && (
                 <div className="upload-queue-footer-actions">
@@ -1563,24 +2011,29 @@ export default function Upload() {
           </>
         )}
 
-        {err && <p className="error">{err}</p>}
-        {reloadNotice && <p className="small status-info">{reloadNotice}</p>}
-        {status && !err && <p className="small status-info">{status}</p>}
+        {err && (
+          <p className="error" role="alert">
+            {err}
+          </p>
+        )}
+        {reloadNotice && (
+          <p className="small status-info" role="status" aria-live="polite">
+            {reloadNotice}
+          </p>
+        )}
+        {status && !err && (
+          <p className="small status-info" role="status" aria-live="polite">
+            {status}
+          </p>
+        )}
       </div>
 
-      <div className="panel">
+      <div className="panel" aria-hidden={isUploadDialogOpen}>
         <div className="row tables-header-row">
           <h3 style={{ marginBottom: 0 }}>Uploaded tables</h3>
           <div className="tables-header-controls">
-            <label
-              className="tables-search-input-wrap"
-              aria-label="Search table name"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                role="presentation"
-                className="tables-search-icon"
-              >
+            <label className="tables-search-input-wrap" aria-label="Search table name">
+              <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon">
                 <path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.06l4.24 4.24a1 1 0 0 1-1.42 1.42l-4.24-4.24A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z" />
               </svg>
               <input
@@ -1594,64 +2047,58 @@ export default function Upload() {
             </label>
             <div className="sort-menu-wrap" ref={sortMenuRef}>
               <button
+                ref={sortToggleButtonRef}
                 type="button"
                 className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
                 onClick={() => setSortMenuOpen((current) => !current)}
-                aria-haspopup="dialog"
+                onKeyDown={onSortToggleKeyDown}
+                aria-haspopup="menu"
                 aria-expanded={sortMenuOpen}
-                aria-label="Sort tables"
+                aria-controls={sortMenuOpen ? sortMenuId : undefined}
+                aria-label={`Sort tables. Current order: ${tableSortLabel}`}
                 title="Sort tables"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  role="presentation"
-                  className="sort-toggle-icon"
-                >
+                <svg viewBox="0 0 24 24" role="presentation" className="sort-toggle-icon">
                   <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
                 </svg>
-                <span className="sort-toggle-text">Sort</span>
+                <span className="sort-toggle-text">Sort: {tableSortLabel}</span>
               </button>
               {sortMenuOpen && (
                 <div
+                  id={sortMenuId}
                   className="sort-menu"
-                  role="dialog"
+                  role="menu"
                   aria-label="Sort options"
+                  onKeyDown={onSortMenuKeyDown}
                 >
-                  <button
-                    type="button"
-                    className={`sort-menu-item ${tableSortMode === "recent" ? "active" : ""}`}
-                    onClick={() => {
-                      setTableSortMode("recent");
-                      setSortMenuOpen(false);
-                    }}
-                  >
-                    Most recent
-                  </button>
-                  <button
-                    type="button"
-                    className={`sort-menu-item ${tableSortMode === "rows" ? "active" : ""}`}
-                    onClick={() => {
-                      setTableSortMode("rows");
-                      setSortMenuOpen(false);
-                    }}
-                  >
-                    Most rows
-                  </button>
-                  <button
-                    type="button"
-                    className={`sort-menu-item ${tableSortMode === "alphabet" ? "active" : ""}`}
-                    onClick={() => {
-                      setTableSortMode("alphabet");
-                      setSortMenuOpen(false);
-                    }}
-                  >
-                    Alphabetical
-                  </button>
+                  {TABLE_SORT_OPTIONS.map((option, index) => (
+                    <button
+                      key={option.value}
+                      ref={(element) => {
+                        sortMenuItemRefs.current[index] = element;
+                      }}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={tableSortMode === option.value}
+                      className={`sort-menu-item ${tableSortMode === option.value ? "active" : ""}`}
+                      onClick={() => {
+                        selectTableSortMode(option.value);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
           </div>
         </div>
+        <p className="sr-only" role="status" aria-live="polite">
+          Showing {filteredTables.length} uploaded table
+          {filteredTables.length === 1 ? "" : "s"}
+          {normalizedTableSearchQuery ? ` matching ${tableSearchQuery.trim()}` : ""}. Sorted by{" "}
+          {tableSortLabel}.
+        </p>
 
         <div className="tables-scroll" ref={tablesScrollRef}>
           <ul>
@@ -1680,6 +2127,8 @@ export default function Upload() {
                     : indexState === "error"
                       ? "Index failed"
                       : "Indexed";
+              const isIndexing = indexState === "indexing";
+              const indexStatusText = indexStatus?.message || indexLabel;
 
               return (
                 <li key={table.dataset_id}>
@@ -1688,13 +2137,9 @@ export default function Upload() {
                       type="button"
                       className={`icon-button ${isPinned ? "pinned" : "pin"}`}
                       onClick={() => onTogglePin(table.dataset_id)}
-                      aria-label={
-                        isPinned ? `Unpin ${table.name}` : `Pin ${table.name}`
-                      }
+                      aria-label={isPinned ? `Unpin ${table.name}` : `Pin ${table.name}`}
                       title={isPinned ? "Unpin table" : "Pin table"}
-                      disabled={
-                        busy || Boolean(deletingTableIds[table.dataset_id])
-                      }
+                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
                     >
                       <svg viewBox="0 0 24 24" role="presentation">
                         <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
@@ -1702,18 +2147,15 @@ export default function Upload() {
                     </button>
 
                     <div
-                      className={`list-item ${
-                        activeTableId === table.dataset_id ? "selected" : ""
-                      }`}
+                      className={`list-item ${activeTableId === table.dataset_id ? "selected" : ""
+                        }`}
                     >
                       {editingId === table.dataset_id ? (
                         <input
                           ref={renameInputRef}
                           value={editingName}
                           onChange={(event) => {
-                            setEditingName(
-                              sanitizeTableNameInput(event.target.value),
-                            );
+                            setEditingName(sanitizeTableNameInput(event.target.value));
                             if (renameHintId === table.dataset_id) {
                               setRenameHintId(null);
                             }
@@ -1723,9 +2165,8 @@ export default function Upload() {
                               void onRename(table.dataset_id);
                             }
                           }}
-                          className={`rename-input ${
-                            renameHintId === table.dataset_id ? "invalid" : ""
-                          }`}
+                          className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
+                            }`}
                           autoCapitalize="none"
                           autoCorrect="off"
                           spellCheck={false}
@@ -1736,6 +2177,8 @@ export default function Upload() {
                               : "Enter table name"
                           }
                           disabled={busy}
+                          aria-label={`Rename ${table.name}`}
+                          aria-invalid={renameHintId === table.dataset_id}
                         />
                       ) : (
                         <button
@@ -1744,10 +2187,9 @@ export default function Upload() {
                           onClick={() => {
                             void loadPreview(table.dataset_id);
                           }}
+                          aria-pressed={activeTableId === table.dataset_id}
                         >
-                          <span className="uploaded-table-name">
-                            {table.name}
-                          </span>{" "}
+                          <span className="uploaded-table-name">{table.name}</span>{" "}
                           <span className="small uploaded-table-meta">
                             ({table.row_count} rows, {table.column_count} cols)
                           </span>
@@ -1757,10 +2199,20 @@ export default function Upload() {
 
                     <div
                       className={`index-job ${indexState}`}
-                      title={indexStatus?.message || indexLabel}
+                      title={indexStatusText}
+                      role={isIndexing ? "progressbar" : "status"}
+                      aria-label={
+                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexStatusText}`
+                      }
+                      aria-valuemin={isIndexing ? 0 : undefined}
+                      aria-valuemax={isIndexing ? 100 : undefined}
+                      aria-valuenow={isIndexing ? indexProgress : undefined}
+                      aria-valuetext={
+                        isIndexing ? `${indexLabel}. ${indexProgress}% complete.` : undefined
+                      }
                     >
                       <div className="index-job-ready">{indexLabel}</div>
-                      {indexState === "indexing" && (
+                      {isIndexing && (
                         <div className="index-job-track" aria-hidden="true">
                           <div
                             className="index-job-fill indexing"
@@ -1782,15 +2234,9 @@ export default function Upload() {
                           setRenameHintId(null);
                         }
                       }}
-                      aria-label={
-                        editingId === table.dataset_id
-                          ? "Save name"
-                          : `Rename ${table.name}`
-                      }
+                      aria-label={editingId === table.dataset_id ? "Save name" : `Rename ${table.name}`}
                       title={editingId === table.dataset_id ? "Save" : "Rename"}
-                      disabled={
-                        busy || Boolean(deletingTableIds[table.dataset_id])
-                      }
+                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
                     >
                       {editingId === table.dataset_id ? (
                         <svg viewBox="0 0 24 24" role="presentation">
@@ -1811,9 +2257,7 @@ export default function Upload() {
                       }}
                       aria-label={`Delete ${table.name}`}
                       title="Delete table"
-                      disabled={
-                        busy || Boolean(deletingTableIds[table.dataset_id])
-                      }
+                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
                     >
                       <svg viewBox="0 0 24 24" role="presentation">
                         <path d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 0 0 0 2h1v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9zm1 2h4v0H10zm-1 4a1 1 0 0 1 2 0v8a1 1 0 1 1-2 0V9zm6-1a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1z" />
@@ -1831,27 +2275,22 @@ export default function Upload() {
             type="button"
             className="scroll-indicator uploaded-scroll-indicator"
             onClick={scrollUploadedTablesToBottom}
-            aria-label={
-              uploadedAtBottom
-                ? "Scroll uploaded tables to top"
-                : "Scroll uploaded tables to bottom"
-            }
+            aria-label={uploadedAtBottom ? "Scroll uploaded tables to top" : "Scroll uploaded tables to bottom"}
             title={uploadedAtBottom ? "Scroll to top" : "Scroll to bottom"}
           >
             {uploadedAtBottom ? "▲" : "▼"}
           </button>
         )}
+
       </div>
 
-      <div className="panel upload-preview">
+      <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
         <div className="preview-header">
           <div className="preview-header-left">
             <h3 style={{ marginBottom: 0 }}>Table preview</h3>
             {activeTableName && (
               <div className="preview-table-name" aria-live="polite">
-                <span className="preview-table-name-value">
-                  {activeTableName}
-                </span>
+                <span className="preview-table-name-value">{activeTableName}</span>
               </div>
             )}
           </div>
@@ -1859,16 +2298,25 @@ export default function Upload() {
             <Link
               className="preview-open-icon-link"
               to={`/tables/${activeTableId}`}
-              aria-label="Open full table"
-              title="Open Full Table"
+              aria-label="View Full Table"
+              title="View Full Table"
             >
               <img src={openIcon} alt="" aria-hidden="true" />
+              <span>View Full Table</span>
             </Link>
           )}
         </div>
 
-        {previewBusy && <p className="small">Loading preview...</p>}
-        {previewErr && <p className="error">{previewErr}</p>}
+        {previewBusy && (
+          <p className="small" role="status" aria-live="polite">
+            Loading preview...
+          </p>
+        )}
+        {previewErr && (
+          <p className="error" role="alert">
+            {previewErr}
+          </p>
+        )}
 
         {preview && (
           <div className="table-area" ref={previewAreaRef}>
@@ -1876,6 +2324,7 @@ export default function Upload() {
               columns={preview.columns}
               rows={preview.rows}
               sortable={false}
+              caption={`Preview of ${activeTableName || "the selected table"}.`}
             />
           </div>
         )}
@@ -1885,11 +2334,7 @@ export default function Upload() {
             type="button"
             className="scroll-indicator preview-scroll-indicator"
             onClick={scrollPreviewToBottom}
-            aria-label={
-              previewAtBottom
-                ? "Scroll table preview to top"
-                : "Scroll table preview to bottom"
-            }
+            aria-label={previewAtBottom ? "Scroll table preview to top" : "Scroll table preview to bottom"}
             title={previewAtBottom ? "Scroll to top" : "Scroll to bottom"}
           >
             {previewAtBottom ? "▲" : "▼"}
@@ -1897,9 +2342,7 @@ export default function Upload() {
         )}
 
         {!previewBusy && !preview && !previewErr && (
-          <p className="small">
-            Select a table above to preview the first 30 rows.
-          </p>
+          <p className="small">Select a table above to preview the first 30 rows.</p>
         )}
       </div>
     </div>

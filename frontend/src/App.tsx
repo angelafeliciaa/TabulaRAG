@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { logout, getUser, getServerStatus, type ServerStatus } from "./api";
+import logo from "./images/logo.png";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";
@@ -50,6 +51,10 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <Link className="app-brand" to="/" aria-label="Go to home">
+        <img src={logo} alt="" aria-hidden="true" />
+      </Link>
+
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
