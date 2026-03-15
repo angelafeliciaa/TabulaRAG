@@ -1,18 +1,48 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { focusByIndex, focusByOffset } from "../accessibility";
 import {
+  filterRowIndices,
   getSlice,
   listTables,
+  type FilterRowIndicesResponse,
   type TableSlice,
   type TableSummary,
 } from "../api";
 import DataTable from "../components/DataTable";
-import returnIcon from "../images/return.png";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
-type DateMenuState = { x: number; y: number; source: "button" | "cell" } | null;
+type DateMenuState = { x: number; y: number } | null;
+type FilterConditionPayload = {
+  column: string;
+  operator: string;
+  value?: string;
+  logical_operator?: "AND" | "OR";
+};
+type QueryPayload =
+  | {
+    mode: "filter";
+    dataset_id: number;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+    offset?: number;
+  }
+  | {
+    dataset_id: number;
+    operation: string;
+    metric_column?: string;
+    group_by?: string;
+    filters?: FilterConditionPayload[];
+    limit?: number;
+  };
+type MultiHighlightSpec = {
+  dataset_id: number;
+  filters?: FilterConditionPayload[];
+  label?: string;
+  max_rows?: number;
+};
 const ROWS_PER_PAGE = 500;
+const DEFAULT_MULTI_MAX_ROWS = 1000;
 const DATE_VIEW_OPTIONS: Array<{ value: DateViewMode; label: string }> = [
   { value: "default", label: "Default" },
   { value: "mm-dd-yyyy", label: "MM-DD-YYYY" },
@@ -103,12 +133,146 @@ function detectDateColumns(rows: Record<string, unknown>[], columns: string[]): 
   return out;
 }
 
+function parseNonNegativeInt(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const normalized = Math.trunc(parsed);
+  return normalized >= 0 ? normalized : null;
+}
+
+function resolveReturnPath(search: string): string {
+  const params = new URLSearchParams(search);
+  const returnTo = (params.get("return_to") || "").trim();
+  if (!returnTo) {
+    return "/";
+  }
+  if (returnTo.startsWith("/")) {
+    return returnTo;
+  }
+  try {
+    const parsed = new URL(returnTo);
+    if (parsed.origin === window.location.origin) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    return "/";
+  }
+  return "/";
+}
+
+function decodePayload(encoded: string): QueryPayload {
+  const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = normalized.length % 4;
+  const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function decodeMultiHighlightSpec(encoded: string): MultiHighlightSpec {
+  const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = normalized.length % 4;
+  const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function formatFilterSummary(filters?: FilterConditionPayload[]): string {
+  if (!filters || filters.length === 0) {
+    return "no filters";
+  }
+  return filters
+    .map((f, index) => {
+      const clause =
+        f.operator === "IS NULL" || f.operator === "IS NOT NULL"
+          ? `${f.column} ${f.operator}`
+          : `${f.column} ${f.operator} ${f.value ?? ""}`.trim();
+      if (index === 0) {
+        return clause;
+      }
+      return `${(f.logical_operator || "AND").toUpperCase()} ${clause}`;
+    })
+    .join(" ");
+}
+
+function buildQueryContextTitle(returnPath: string): string | null {
+  if (!returnPath || returnPath === "/") {
+    return null;
+  }
+  try {
+    const parsed = new URL(returnPath, window.location.origin);
+    const encoded = parsed.searchParams.get("q");
+    if (!encoded) {
+      return null;
+    }
+    const payload = decodePayload(encoded);
+    if ("mode" in payload && payload.mode === "filter") {
+      return `Filter result: ${formatFilterSummary(payload.filters)}`;
+    }
+
+    const aggregatePayload = payload as Exclude<QueryPayload, { mode: "filter" }>;
+    const operationLabel =
+      aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
+    const metricCol = aggregatePayload.metric_column ?? "aggregate_value";
+    if (aggregatePayload.group_by) {
+      return `Aggregate result: ${operationLabel} ${metricCol} by ${aggregatePayload.group_by}`;
+    }
+    return `Aggregate result: ${operationLabel} of ${metricCol}`;
+  } catch {
+    return null;
+  }
+}
+
 export default function TableView() {
   const { datasetId } = useParams();
+  const location = useLocation();
   const numericDatasetId = Number(datasetId);
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const highlightedRow = parseNonNegativeInt(queryParams.get("highlight_row"));
+  const highlightMode = queryParams.get("highlight_mode");
+  const encodedHighlightSpec = queryParams.get("highlight_spec");
+  const isMultiHighlightMode = highlightMode === "multi" && !!encodedHighlightSpec;
+  const returnPath = resolveReturnPath(location.search);
+  const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
+  const returnQueryMode = useMemo<"filter" | "aggregate" | null>(() => {
+    if (!returnPath || returnPath === "/") {
+      return null;
+    }
+    try {
+      const parsed = new URL(returnPath, window.location.origin);
+      const encoded = parsed.searchParams.get("q");
+      if (!encoded) {
+        return null;
+      }
+      const payload = decodePayload(encoded);
+      if ("mode" in payload && payload.mode === "filter") {
+        return "filter";
+      }
+      return "aggregate";
+    } catch {
+      return null;
+    }
+  }, [returnPath]);
+  const parsedMultiSpec = useMemo(() => {
+    if (!isMultiHighlightMode || !encodedHighlightSpec) {
+      return null;
+    }
+    try {
+      return decodeMultiHighlightSpec(encodedHighlightSpec);
+    } catch {
+      return null;
+    }
+  }, [encodedHighlightSpec, isMultiHighlightMode]);
 
   const [data, setData] = useState<TableSlice | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [highlightErr, setHighlightErr] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
   const [tableRowCount, setTableRowCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
@@ -119,11 +283,16 @@ export default function TableView() {
   const [pageInput, setPageInput] = useState("1");
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
+  const [multiHighlightRows, setMultiHighlightRows] = useState<number[]>([]);
+  const [multiHighlightTotal, setMultiHighlightTotal] = useState(0);
+  const [multiHighlightTruncated, setMultiHighlightTruncated] = useState(false);
+  const [activeHighlightCursor, setActiveHighlightCursor] = useState(0);
+  const [multiHighlightLabel, setMultiHighlightLabel] = useState("All matching rows");
   const dateMenuId = useId();
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
   const dateMenuRef = useRef<HTMLDivElement | null>(null);
-  const dateFormatButtonRef = useRef<HTMLButtonElement | null>(null);
   const dateMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const pageChangeSourceRef = useRef<"table" | "highlight">("table");
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -158,10 +327,124 @@ export default function TableView() {
   }, [numericDatasetId]);
 
   useEffect(() => {
-    setCurrentPage(1);
-    setPageInput("1");
+    if (!isMultiHighlightMode) {
+      setHighlightErr(null);
+      setMultiHighlightRows([]);
+      setMultiHighlightTotal(0);
+      setMultiHighlightTruncated(false);
+      setActiveHighlightCursor(0);
+      setMultiHighlightLabel("All matching rows");
+      return;
+    }
+
+    if (!parsedMultiSpec) {
+      setHighlightErr("This highlight link is invalid or expired.");
+      setMultiHighlightRows([]);
+      setMultiHighlightTotal(0);
+      setMultiHighlightTruncated(false);
+      setActiveHighlightCursor(0);
+      setMultiHighlightLabel("All matching rows");
+      return;
+    }
+
+    if (parsedMultiSpec.dataset_id !== numericDatasetId) {
+      setHighlightErr("This highlight link does not match the selected dataset.");
+      setMultiHighlightRows([]);
+      setMultiHighlightTotal(0);
+      setMultiHighlightTruncated(false);
+      setActiveHighlightCursor(0);
+      setMultiHighlightLabel(parsedMultiSpec.label || "All matching rows");
+      return;
+    }
+
+    const maxRows = Math.max(1, Math.min(parsedMultiSpec.max_rows ?? DEFAULT_MULTI_MAX_ROWS, DEFAULT_MULTI_MAX_ROWS));
+    let mounted = true;
+    setHighlightErr(null);
+    filterRowIndices({
+      dataset_id: parsedMultiSpec.dataset_id,
+      filters: parsedMultiSpec.filters,
+      max_rows: maxRows,
+    })
+      .then((result: FilterRowIndicesResponse) => {
+        if (!mounted) {
+          return;
+        }
+        setMultiHighlightRows(result.row_indices);
+        setMultiHighlightTotal(result.total_match_count);
+        setMultiHighlightTruncated(result.truncated);
+        setActiveHighlightCursor(0);
+        setMultiHighlightLabel(parsedMultiSpec.label || "All matching rows");
+        if (result.row_indices.length > 0) {
+          const initialHighlightPage = Math.floor(result.row_indices[0] / ROWS_PER_PAGE) + 1;
+          pageChangeSourceRef.current = "highlight";
+          setCurrentPage(initialHighlightPage);
+          setPageInput(String(initialHighlightPage));
+        }
+      })
+      .catch((error: unknown) => {
+        if (!mounted) {
+          return;
+        }
+        setHighlightErr(getErrorMessage(error));
+        setMultiHighlightRows([]);
+        setMultiHighlightTotal(0);
+        setMultiHighlightTruncated(false);
+        setActiveHighlightCursor(0);
+        setMultiHighlightLabel(parsedMultiSpec.label || "All matching rows");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [isMultiHighlightMode, parsedMultiSpec, numericDatasetId]);
+
+  useEffect(() => {
+    const initialPage = highlightedRow !== null ? Math.floor(highlightedRow / ROWS_PER_PAGE) + 1 : 1;
+    if (isMultiHighlightMode) {
+      pageChangeSourceRef.current = "table";
+      setCurrentPage(1);
+      setPageInput("1");
+      setSearchQuery("");
+      return;
+    }
+    pageChangeSourceRef.current = "table";
+    setCurrentPage(initialPage);
+    setPageInput(String(initialPage));
     setSearchQuery("");
-  }, [numericDatasetId]);
+  }, [numericDatasetId, highlightedRow, isMultiHighlightMode]);
+
+  useEffect(() => {
+    if (!isMultiHighlightMode || activeHighlightCursor < multiHighlightRows.length) {
+      return;
+    }
+    setActiveHighlightCursor(Math.max(0, multiHighlightRows.length - 1));
+  }, [activeHighlightCursor, isMultiHighlightMode, multiHighlightRows.length]);
+
+  useEffect(() => {
+    if (!isMultiHighlightMode || multiHighlightRows.length === 0) {
+      return;
+    }
+    if (pageChangeSourceRef.current === "highlight") {
+      pageChangeSourceRef.current = "table";
+      return;
+    }
+    const normalizedPage = Math.max(1, currentPage);
+    const pageStart = (normalizedPage - 1) * ROWS_PER_PAGE;
+    const pageEndExclusive = pageStart + ROWS_PER_PAGE;
+    const firstIndexOnPage = multiHighlightRows.findIndex(
+      (rowIndex) => rowIndex >= pageStart && rowIndex < pageEndExclusive,
+    );
+    if (firstIndexOnPage !== -1 && firstIndexOnPage !== activeHighlightCursor) {
+      setActiveHighlightCursor(firstIndexOnPage);
+    }
+  }, [activeHighlightCursor, currentPage, isMultiHighlightMode, multiHighlightRows]);
+
+  const activeMultiHighlightedRow = useMemo(() => {
+    if (!isMultiHighlightMode || multiHighlightRows.length === 0) {
+      return null;
+    }
+    return multiHighlightRows[Math.max(0, Math.min(activeHighlightCursor, multiHighlightRows.length - 1))];
+  }, [activeHighlightCursor, isMultiHighlightMode, multiHighlightRows]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -210,14 +493,34 @@ export default function TableView() {
   const effectiveRowCount = Math.max(tableRowCount, Math.max(0, data?.row_count || 0));
   const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
+  const hasQueryContext = returnPath !== "/";
+  const effectiveHighlightRow = isMultiHighlightMode ? activeMultiHighlightedRow : highlightedRow;
+  const highlightedRows = isMultiHighlightMode
+    ? multiHighlightRows
+    : highlightedRow !== null
+      ? [highlightedRow]
+      : [];
   const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
+  const headerTitle = useMemo(() => {
+    if (isMultiHighlightMode) {
+      const label = (multiHighlightLabel || parsedMultiSpec?.label || "Result").trim();
+      return `Aggregate Result: ${label}`;
+    }
+    if (highlightedRow !== null && returnQueryMode === "filter") {
+      if (sourceQueryTitle) {
+        return sourceQueryTitle;
+      }
+      return "Filter Result";
+    }
+    if (sourceQueryTitle) {
+      return sourceQueryTitle;
+    }
+    return tableName || "Table";
+  }, [highlightedRow, isMultiHighlightMode, multiHighlightLabel, parsedMultiSpec?.label, returnQueryMode, sourceQueryTitle, tableName]);
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(data.rows, data.columns) : new Set<string>()),
     [data],
   );
-  const dateViewLabel =
-    DATE_VIEW_OPTIONS.find((option) => option.value === dateViewMode)?.label
-    || "Default";
   const filtered = useMemo(() => {
     if (!data) {
       return { rows: [], rowIndices: [] as number[] };
@@ -284,9 +587,6 @@ export default function TableView() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setDateMenu(null);
-        if (dateMenu.source === "button") {
-          dateFormatButtonRef.current?.focus();
-        }
       }
     };
     window.addEventListener("click", close);
@@ -356,6 +656,28 @@ export default function TableView() {
     setPageInput(String(safeCurrentPage));
   }, [safeCurrentPage]);
 
+  useEffect(() => {
+    if (effectiveHighlightRow === null || !data) {
+      return;
+    }
+
+    if (effectiveHighlightRow < data.offset || effectiveHighlightRow >= data.offset + data.rows.length) {
+      return;
+    }
+
+    const targetElement = document.querySelector(
+      `[data-row-index="${effectiveHighlightRow}"]`,
+    ) as HTMLElement | null;
+
+    if (!targetElement) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+  }, [data, effectiveHighlightRow, displayRows.length, dateViewMode]);
+
   function scrollTableToEdge() {
     const container = tableAreaRef.current;
     const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
@@ -382,42 +704,50 @@ export default function TableView() {
     }
     const normalized = Math.trunc(parsed);
     const nextPage = Math.min(totalPages, Math.max(1, normalized));
+    pageChangeSourceRef.current = "table";
     setCurrentPage(nextPage);
     setPageInput(String(nextPage));
   }
 
-  function openDateMenuFromButton() {
-    const rect = dateFormatButtonRef.current?.getBoundingClientRect();
-    if (!rect) {
+  function jumpToHighlight() {
+    if (effectiveHighlightRow === null) {
       return;
     }
+    const highlightPage = Math.floor(effectiveHighlightRow / ROWS_PER_PAGE) + 1;
+    if (safeCurrentPage !== highlightPage) {
+      pageChangeSourceRef.current = "highlight";
+      setCurrentPage(highlightPage);
+      return;
+    }
+    const targetElement = document.querySelector(
+      `[data-row-index="${effectiveHighlightRow}"]`,
+    ) as HTMLElement | null;
+    targetElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
-    const estimatedMenuWidth = 188;
-    setDateMenu({
-      x: Math.max(8, Math.min(rect.right - estimatedMenuWidth, window.innerWidth - estimatedMenuWidth - 8)),
-      y: Math.min(rect.bottom + 6, window.innerHeight - 120),
-      source: "button",
-    });
+  function moveMultiHighlightCursor(offset: number) {
+    if (!isMultiHighlightMode || multiHighlightRows.length === 0) {
+      return;
+    }
+    const nextCursor = Math.max(
+      0,
+      Math.min(multiHighlightRows.length - 1, activeHighlightCursor + offset),
+    );
+    if (nextCursor !== activeHighlightCursor) {
+      const targetRow = multiHighlightRows[nextCursor];
+      const highlightPage = Math.floor(targetRow / ROWS_PER_PAGE) + 1;
+      setActiveHighlightCursor(nextCursor);
+      pageChangeSourceRef.current = "highlight";
+      setCurrentPage(highlightPage);
+      setPageInput(String(highlightPage));
+    } else {
+      jumpToHighlight();
+    }
   }
 
   function selectDateViewMode(nextMode: DateViewMode) {
     setDateViewMode(nextMode);
-    if (dateMenu?.source === "button") {
-      dateFormatButtonRef.current?.focus();
-    }
     setDateMenu(null);
-  }
-
-  function onDateFormatButtonKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    if (
-      event.key === "ArrowDown"
-      || event.key === "ArrowUp"
-      || event.key === "Enter"
-      || event.key === " "
-    ) {
-      event.preventDefault();
-      openDateMenuFromButton();
-    }
   }
 
   function onDateMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -450,9 +780,6 @@ export default function TableView() {
     if (event.key === "Escape") {
       event.preventDefault();
       setDateMenu(null);
-      if (dateMenu?.source === "button") {
-        dateFormatButtonRef.current?.focus();
-      }
       return;
     }
 
@@ -478,16 +805,67 @@ export default function TableView() {
   return (
     <div className="page-stack full-table-page">
       <div className="card" style={{ marginBottom: 12 }}>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div>
-            <div className="table-view-title">{tableName || "Table"}</div>
-            <div className="small" role="status" aria-live="polite" aria-atomic="true">
-              {loading
-                ? "Loading table page..."
-                : data && data.rows.length > 0
-                  ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
-                  : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
-            </div>
+        <div className="row table-view-header-row" style={{ justifyContent: "space-between" }}>
+          <div className="table-view-header-main">
+            <div className="table-view-title">{headerTitle}</div>
+            {isMultiHighlightMode && (
+              <div className="table-view-row-meta table-view-header-status">
+                <span>
+                  {multiHighlightLabel}: {multiHighlightTotal.toLocaleString()} results
+                  {multiHighlightTruncated ? ` (showing first ${DEFAULT_MULTI_MAX_ROWS.toLocaleString()})` : ""}
+                  {multiHighlightRows.length > 0
+                    ? ` • Selected ${Math.min(activeHighlightCursor + 1, multiHighlightRows.length)} of ${multiHighlightRows.length}`
+                    : ""}
+                </span>
+                {multiHighlightRows.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="table-view-highlight-nav-btn"
+                      onClick={() => moveMultiHighlightCursor(-1)}
+                      disabled={activeHighlightCursor <= 0}
+                      aria-label="Go to previous highlighted row"
+                      title="Previous highlighted row"
+                    >
+                      {"<"}
+                    </button>
+                    <button
+                      type="button"
+                      className="table-view-highlight-nav-btn"
+                      onClick={() => moveMultiHighlightCursor(1)}
+                      disabled={activeHighlightCursor >= multiHighlightRows.length - 1}
+                      aria-label="Go to next highlighted row"
+                      title="Next highlighted row"
+                    >
+                      {">"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {!isMultiHighlightMode && highlightedRow !== null && (
+              <div className="table-view-row-meta table-view-header-status">
+                <span>Viewing:</span>{" "}
+                <button
+                  type="button"
+                  className="table-view-row-jump"
+                  onClick={jumpToHighlight}
+                  aria-label={`Viewing row ${highlightedRow}. Click to jump to highlighted row`}
+                  title={`Jump to highlighted row ${highlightedRow}`}
+                >
+                  Row {highlightedRow}
+                </button>
+              </div>
+            )}
+            {!isMultiHighlightMode && highlightedRow === null && (
+              <div className="small table-view-header-status" role="status" aria-live="polite" aria-atomic="true">
+                {loading
+                  ? "Loading table page..."
+                  : data && data.rows.length > 0
+                    ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()} (Page ${safeCurrentPage} of ${totalPages})${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}.`
+                    : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
+              </div>
+            )}
           </div>
           <div className="table-view-tools">
             <input
@@ -498,32 +876,26 @@ export default function TableView() {
               placeholder="Search for values"
               aria-label="Search rows"
             />
-            {dateColumns.size > 0 && (
-              <button
-                ref={dateFormatButtonRef}
-                type="button"
-                className="table-view-format-button"
-                onClick={openDateMenuFromButton}
-                onKeyDown={onDateFormatButtonKeyDown}
-                aria-haspopup="menu"
-                aria-expanded={dateMenu !== null}
-                aria-controls={dateMenu ? dateMenuId : undefined}
-                aria-label={`Date format. Current setting: ${dateViewLabel}`}
-              >
-                Date: {dateViewLabel}
-              </button>
+            {(isMultiHighlightMode || highlightedRow !== null) && hasQueryContext && (
+              <Link className="table-view-context-btn" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
+                </svg>
+                Back to Query Results
+              </Link>
             )}
-            <Link className="table-view-back-link" to="/">
-              <img src={returnIcon} alt="" aria-hidden="true" />
-              Back to All Uploads
+            <Link className="table-view-icon-btn" to="/" aria-label="Back to All Uploads" title="Back to All Uploads">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 4.2 4 10v9a1 1 0 0 0 1 1h4.8a1 1 0 0 0 1-1v-4.2h2.4V19a1 1 0 0 0 1 1H19a1 1 0 0 0 1-1v-9l-8-5.8Z" fill="currentColor" />
+              </svg>
             </Link>
           </div>
         </div>
       </div>
 
-      {err && (
+      {(err || highlightErr) && (
         <p className="error" role="alert">
-          {err}
+          {err || highlightErr}
         </p>
       )}
       {data && (
@@ -532,6 +904,21 @@ export default function TableView() {
             columns={data.columns}
             rows={displayRows}
             rowIndices={filtered.rowIndices}
+            onRowClick={({ rowIndex, isHighlighted }) => {
+              if (!isMultiHighlightMode || !isHighlighted) {
+                return;
+              }
+              const nextCursor = multiHighlightRows.indexOf(rowIndex);
+              if (nextCursor !== -1) {
+                pageChangeSourceRef.current = "highlight";
+                setActiveHighlightCursor(nextCursor);
+              }
+            }}
+            highlight={
+              highlightedRows.length > 0
+                ? { rows: highlightedRows, cols: data.columns }
+                : undefined
+            }
             sortable
             caption={`${tableName || "Table"} page ${safeCurrentPage}. ${displayRows.length} row${displayRows.length === 1 ? "" : "s"} shown.`}
             onCellContextMenu={(event, payload) => {
@@ -539,7 +926,7 @@ export default function TableView() {
                 return;
               }
               event.preventDefault();
-              setDateMenu({ x: event.clientX, y: event.clientY, source: "cell" });
+              setDateMenu({ x: event.clientX, y: event.clientY });
             }}
           />
           {showScrollHint && (
@@ -561,7 +948,10 @@ export default function TableView() {
             <button
               type="button"
               className="table-view-page-btn"
-              onClick={() => setCurrentPage(1)}
+              onClick={() => {
+                pageChangeSourceRef.current = "table";
+                setCurrentPage(1);
+              }}
               disabled={loading || safeCurrentPage <= 1}
               aria-label="First page"
               title="First page"
@@ -571,7 +961,10 @@ export default function TableView() {
             <button
               type="button"
               className="table-view-page-btn"
-              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              onClick={() => {
+                pageChangeSourceRef.current = "table";
+                setCurrentPage(Math.max(1, safeCurrentPage - 1));
+              }}
               disabled={loading || safeCurrentPage <= 1}
               aria-label="Previous page"
               title="Previous page"
@@ -608,7 +1001,10 @@ export default function TableView() {
             <button
               type="button"
               className="table-view-page-btn"
-              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              onClick={() => {
+                pageChangeSourceRef.current = "table";
+                setCurrentPage(Math.min(totalPages, safeCurrentPage + 1));
+              }}
               disabled={loading || safeCurrentPage >= totalPages}
               aria-label="Next page"
               title="Next page"
@@ -618,7 +1014,10 @@ export default function TableView() {
             <button
               type="button"
               className="table-view-page-btn"
-              onClick={() => setCurrentPage(totalPages)}
+              onClick={() => {
+                pageChangeSourceRef.current = "table";
+                setCurrentPage(totalPages);
+              }}
               disabled={loading || safeCurrentPage >= totalPages}
               aria-label="Last page"
               title="Last page"

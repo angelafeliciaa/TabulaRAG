@@ -40,6 +40,7 @@ const SAFE_TABLE_NAME_MAX_LENGTH = 64;
 type ToastState = { id: number; kind: "success"; message: string };
 type UploadQueuePhase = "idle" | UploadProgress["phase"] | "success" | "error";
 type TableSortMode = "alphabet" | "rows" | "recent";
+type UploadPickerTarget = "empty" | "queue";
 type UploadQueueItem = {
   id: string;
   file: File;
@@ -346,6 +347,7 @@ export default function Upload() {
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [uploadPickerOpen, setUploadPickerOpen] = useState<UploadPickerTarget | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
   const [deletingTableIds, setDeletingTableIds] = useState<Record<number, boolean>>({});
   const [isDragActive, setIsDragActive] = useState(false);
@@ -376,11 +378,14 @@ export default function Upload() {
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
   const uploadPanelRef = useRef<HTMLDivElement | null>(null);
-  const uploadDropInputRef = useRef<HTMLInputElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
-  const emptyFileInputRef = useRef<HTMLInputElement | null>(null);
-  const emptyFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDropFileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDropFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const queueFileInputRef = useRef<HTMLInputElement | null>(null);
+  const queueFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadPickerEmptyRef = useRef<HTMLDivElement | null>(null);
+  const uploadPickerQueueRef = useRef<HTMLDivElement | null>(null);
+  const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
@@ -602,6 +607,11 @@ export default function Upload() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && uploadPickerOpen) {
+        setUploadPickerOpen(null);
+        return;
+      }
+
       if (event.key === "Escape" && !isQueueInProgress) {
         setUploadQueue([]);
         setErr(null);
@@ -616,7 +626,7 @@ export default function Upload() {
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [isQueueInProgress, isUploadDialogOpen]);
+  }, [isQueueInProgress, isUploadDialogOpen, uploadPickerOpen]);
 
   useEffect(() => {
     if (!sortMenuOpen) {
@@ -663,6 +673,38 @@ export default function Upload() {
   }, [sortMenuOpen, tableSortMode]);
 
   useEffect(() => {
+    if (!uploadPickerOpen) {
+      return;
+    }
+
+    const activePickerRef =
+      uploadPickerOpen === "empty" ? uploadPickerEmptyRef : uploadPickerQueueRef;
+    const activeToggleRef =
+      uploadPickerOpen === "empty" ? uploadPickerEmptyButtonRef : uploadPickerQueueButtonRef;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (activePickerRef.current && !activePickerRef.current.contains(target)) {
+        setUploadPickerOpen(null);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setUploadPickerOpen(null);
+        activeToggleRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [uploadPickerOpen]);
+
+  useEffect(() => {
     if (busy || uploadQueue.length === 0) {
       return;
     }
@@ -681,6 +723,12 @@ export default function Upload() {
       window.cancelAnimationFrame(rafId);
     };
   }, [uploadQueue.length, busy]);
+
+  useEffect(() => {
+    if (!(showUploadQueue || uploadQueue.length > 0)) {
+      setUploadPickerOpen(null);
+    }
+  }, [showUploadQueue, uploadQueue.length]);
 
   useEffect(() => {
     return () => {
@@ -1251,6 +1299,28 @@ export default function Upload() {
     const droppedFiles = await collectDroppedFiles(event.dataTransfer);
     onSelectFiles(droppedFiles);
   }
+
+  function openUploadPicker(target: UploadPickerTarget) {
+    setUploadPickerOpen((current) => (current === target ? null : target));
+  }
+
+  function onUploadFiles(target: UploadPickerTarget) {
+    setUploadPickerOpen(null);
+    if (target === "empty") {
+      uploadDropFileInputRef.current?.click();
+      return;
+    }
+    queueFileInputRef.current?.click();
+  }
+
+  function onUploadFolder(target: UploadPickerTarget) {
+    setUploadPickerOpen(null);
+    if (target === "empty") {
+      uploadDropFolderInputRef.current?.click();
+      return;
+    }
+    queueFolderInputRef.current?.click();
+  }
   const hasOnlySuccessfulUploads =
     uploadQueue.length > 0 && uploadQueue.every((item) => item.phase === "success");
   const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
@@ -1531,14 +1601,13 @@ export default function Upload() {
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                uploadDropInputRef.current?.click();
+                uploadDropFileInputRef.current?.click();
               }
             }}
           >
             <input
               ref={(element) => {
-                uploadDropInputRef.current = element;
-                emptyFileInputRef.current = element;
+                uploadDropFileInputRef.current = element;
               }}
               type="file"
               multiple
@@ -1549,7 +1618,7 @@ export default function Upload() {
               }}
             />
             <input
-              ref={emptyFolderInputRef}
+              ref={uploadDropFolderInputRef}
               {...FOLDER_INPUT_PROPS}
               type="file"
               multiple
@@ -1560,34 +1629,45 @@ export default function Upload() {
               }}
             />
             <div className="upload-icon-row">
-              <button
-                type="button"
-                className="upload-icon icon-trigger"
-                aria-label="Select files"
-                title="Select files"
-                onClick={() => {
-                  emptyFileInputRef.current?.click();
-                }}
-                disabled={busy}
-              >
-                <img src={uploadLogo} alt="" />
-              </button>
-              <button
-                type="button"
-                className="upload-icon icon-trigger"
-                aria-label="Select folder"
-                title="Select folder"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  emptyFolderInputRef.current?.click();
-                }}
-                disabled={busy}
-              >
-                <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
-                  <path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1H3V6zm0 4h20v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8z" />
-                </svg>
-              </button>
+              <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
+                <button
+                  ref={uploadPickerEmptyButtonRef}
+                  type="button"
+                  className={`upload-icon icon-trigger upload-picker-trigger ${uploadPickerOpen === "empty" ? "active" : ""}`}
+                  aria-label="Upload options"
+                  title="Upload options"
+                  aria-haspopup="menu"
+                  aria-expanded={uploadPickerOpen === "empty"}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openUploadPicker("empty");
+                  }}
+                  disabled={busy}
+                >
+                  <img src={uploadLogo} alt="" />
+                </button>
+                {uploadPickerOpen === "empty" && (
+                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFiles("empty")}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFolder("empty")}
+                    >
+                      Upload folder
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div id="upload-drop-title" className="upload-title">
               Select or Drag &amp; Drop Your File(s) to Start Uploading
@@ -1604,7 +1684,7 @@ export default function Upload() {
             </p>
             <div className="row upload-queue-toolbar">
               <input
-                ref={fileInputRef}
+                ref={queueFileInputRef}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
@@ -1615,7 +1695,7 @@ export default function Upload() {
                 className="file-input-hidden"
               />
               <input
-                ref={folderInputRef}
+                ref={queueFolderInputRef}
                 {...FOLDER_INPUT_PROPS}
                 type="file"
                 multiple
@@ -1626,42 +1706,41 @@ export default function Upload() {
                 }}
                 className="file-input-hidden"
               />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                type="button"
-                className="glass upload-add-more-button"
-                disabled={busy || isQueueInProgress}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  className="upload-add-icon"
+              <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
+                <button
+                  ref={uploadPickerQueueButtonRef}
+                  onClick={() => openUploadPicker("queue")}
+                  type="button"
+                  className={`glass upload-add-more-button upload-icon-only ${uploadPickerOpen === "queue" ? "active" : ""}`}
+                  aria-label="Upload options"
+                  title="Upload options"
+                  aria-haspopup="menu"
+                  aria-expanded={uploadPickerOpen === "queue"}
+                  disabled={busy || isQueueInProgress}
                 >
-                  <path
-                    d="M8 3.25a.75.75 0 0 1 .75.75v3.25H12a.75.75 0 0 1 0 1.5H8.75V12a.75.75 0 0 1-1.5 0V8.75H4a.75.75 0 0 1 0-1.5h3.25V4A.75.75 0 0 1 8 3.25Z"
-                    fill="currentColor"
-                  />
-                </svg>
-                Add more files
-              </button>
-              <button
-                onClick={() => folderInputRef.current?.click()}
-                type="button"
-                className="glass upload-add-more-button"
-                disabled={busy || isQueueInProgress}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  className="upload-add-icon"
-                >
-                  <path
-                    d="M8 3.25a.75.75 0 0 1 .75.75v3.25H12a.75.75 0 0 1 0 1.5H8.75V12a.75.75 0 0 1-1.5 0V8.75H4a.75.75 0 0 1 0-1.5h3.25V4A.75.75 0 0 1 8 3.25Z"
-                    fill="currentColor"
-                  />
-                </svg>
-                Add folder
-              </button>
+                  <img src={uploadLogo} alt="" aria-hidden="true" />
+                </button>
+                {uploadPickerOpen === "queue" && (
+                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFiles("queue")}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="upload-picker-item"
+                      onClick={() => onUploadFolder("queue")}
+                    >
+                      Upload folder
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <ul className="upload-queue-list" aria-label="Selected files for upload">
@@ -2153,10 +2232,11 @@ export default function Upload() {
             <Link
               className="preview-open-icon-link"
               to={`/tables/${activeTableId}`}
-              aria-label="Open full table"
-              title="Open Full Table"
+              aria-label="View Full Table"
+              title="View Full Table"
             >
               <img src={openIcon} alt="" aria-hidden="true" />
+              <span>View Full Table</span>
             </Link>
           )}
         </div>

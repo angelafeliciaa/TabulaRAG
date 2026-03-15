@@ -1,4 +1,4 @@
-import { type MouseEvent, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, useMemo, useState } from "react";
 
 type DataTableProps = {
   columns: string[];
@@ -13,6 +13,9 @@ type DataTableProps = {
     event: MouseEvent<HTMLTableCellElement>,
     payload: { column: string; value: unknown; rowIndex: number },
   ) => void;
+  onRowClick?: (payload: { row: Record<string, unknown>; rowIndex: number; isHighlighted: boolean }) => void;
+  rowAction?: (payload: { row: Record<string, unknown>; rowIndex: number }) => ReactNode;
+  rowActionLabel?: string;
 };
 
 type SortDirection = "asc" | "desc";
@@ -193,6 +196,9 @@ export default function DataTable({
   sortable = false,
   formatCellValue,
   onCellContextMenu,
+  onRowClick,
+  rowAction,
+  rowActionLabel = "",
 }: DataTableProps) {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -313,6 +319,7 @@ export default function DataTable({
                   </th>
                 );
               })}
+              {rowAction && <th className="table-row-action-header">{rowActionLabel}</th>}
             </tr>
           </thead>
           <tbody>
@@ -323,7 +330,10 @@ export default function DataTable({
                 <tr
                   key={absoluteRowIndex}
                   data-row-index={absoluteRowIndex}
-                  className={isHighlightedRow ? "table-row-highlighted" : undefined}
+                  className={
+                    `${isHighlightedRow ? "table-row-highlighted" : ""} ${onRowClick ? "table-row-selectable" : ""}`.trim()
+                  }
+                  onClick={() => onRowClick?.({ row, rowIndex: absoluteRowIndex, isHighlighted: isHighlightedRow })}
                 >
                   <th
                     scope="row"
@@ -333,7 +343,8 @@ export default function DataTable({
                   </th>
                   {columns.map((column) => {
                     const isHighlightedCell =
-                      isHighlightedRow && highlightedCols.has(column);
+                      isHighlightedRow
+                      && (highlightedCols.size === 0 || highlightedCols.has(column));
                     const rawValue = row[column];
                     return (
                       <td
@@ -353,6 +364,11 @@ export default function DataTable({
                       </td>
                     );
                   })}
+                  {rowAction && (
+                    <td className="table-row-action-cell">
+                      {rowAction({ row, rowIndex: absoluteRowIndex })}
+                    </td>
+                  )}
                 </tr>
               );
             })}
