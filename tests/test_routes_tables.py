@@ -45,7 +45,7 @@ def test_get_columns(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["dataset_id"] == dataset_id
-    col_names = [c["name"] for c in body["columns"]]
+    col_names = [c["normalized_name"] for c in body["columns"]]
     assert "name" in col_names
     assert "age" in col_names
 

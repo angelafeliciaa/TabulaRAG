@@ -1,6 +1,6 @@
-"""Tests for app.typed_values – parsing, normalization, typed extraction."""
+"""Tests for app.normalization – parsing, normalization, typed extraction."""
 
-from app.typed_values import (
+from app.normalization import (
     is_internal_key,
     normalize_text_value,
     parse_number,
@@ -176,17 +176,17 @@ def test_parse_date_isoformat_with_tz():
 
 def test_normalize_row_obj_basic():
     result = normalize_row_obj(["name", "age"], ["Alice", "30"])
-    assert result["name"] == "Alice"
-    assert result["age"] == "30"
+    assert result["name"]["normalized"] == "Alice"
+    assert result["age"]["normalized"] == "30"
     assert INTERNAL_TYPED_KEY in result
     assert result[INTERNAL_TYPED_KEY]["age"]["type"] == "number"
 
 
 def test_normalize_row_obj_short_row():
     result = normalize_row_obj(["a", "b", "c"], ["x"])
-    assert result["a"] == "x"
-    assert result["b"] is None
-    assert result["c"] is None
+    assert result["a"]["normalized"] == "x"
+    assert result["b"]["normalized"] is None
+    assert result["c"]["normalized"] is None
 
 
 def test_normalize_row_obj_no_typed():

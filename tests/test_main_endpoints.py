@@ -123,8 +123,8 @@ def test_ingest_invalid_extension(client):
 
 
 def test_normalize_headers():
-    from app.main import _normalize_headers
-    result = _normalize_headers(["Name", "", "Name", "  Age  "])
+    from app.normalization import normalize_headers
+    result = normalize_headers(["Name", "", "Name", "  Age  "])
     assert result[0] == "Name"
     assert result[1] == "col_2"
     assert result[2] == "Name_2"  # deduplicated
@@ -132,8 +132,8 @@ def test_normalize_headers():
 
 
 def test_normalize_headers_all_empty():
-    from app.main import _normalize_headers
-    result = _normalize_headers(["", "", ""])
+    from app.normalization import normalize_headers
+    result = normalize_headers(["", "", ""])
     assert result == ["col_1", "col_2", "col_3"]
 
 

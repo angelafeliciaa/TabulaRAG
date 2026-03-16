@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { logout, getUser, isAuthenticated, getServerStatus, type ServerStatus } from "./api";
 import logo from "./images/logo.png";
 import moonIcon from "./images/moon.png";
@@ -12,6 +12,13 @@ import AuthCallback from "./pages/AuthCallback";
 import Login from "./pages/Login";
 
 export default function App() {
+  const location = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [location.pathname, location.search]);
+
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     const storedTheme = window.localStorage.getItem("theme");
     if (storedTheme === "light" || storedTheme === "dark") {
