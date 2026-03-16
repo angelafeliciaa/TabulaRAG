@@ -78,12 +78,21 @@ def test_index_dataset_empty_dataset():
     mock_db_session = MagicMock()
     mock_db_session.__enter__ = MagicMock(return_value=mock_db_session)
     mock_db_session.__exit__ = MagicMock(return_value=False)
-    # scalar() returns 0 rows
-    mock_db_session.execute.return_value.scalar.return_value = 0
-    # Second execute for streaming returns empty iterator
-    mock_result = MagicMock()
-    mock_result.__iter__ = MagicMock(return_value=iter([]))
-    mock_db_session.execute.return_value = mock_result
+
+    call_count = [0]
+
+    def mock_execute(query, params=None):
+        result = MagicMock()
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # scalar query for row count
+            result.scalar.return_value = 0
+            return result
+        # streaming query returns empty iterator
+        result.__iter__ = MagicMock(return_value=iter([]))
+        return result
+
+    mock_db_session.execute.side_effect = mock_execute
 
     with patch("app.indexing.ensure_collection") as mock_ensure, \
          patch("app.indexing.prepare_collection_for_bulk_ingest") as mock_prep, \
