@@ -4,10 +4,16 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
 
+const router = (
+  <BrowserRouter>
+    <App />
+  </BrowserRouter>
+);
+
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>,
+  import.meta.env.DEV ? (
+    router
+  ) : (
+    <StrictMode>{router}</StrictMode>
+  ),
 );

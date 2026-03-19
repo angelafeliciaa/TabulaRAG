@@ -9,7 +9,7 @@ import {
   type TableSummary,
 } from "../api";
 import DataTable from "../components/DataTable";
-import logo from "../images/logo.png";
+import logo from "../images/logo-64.webp";
 import returnIcon from "../images/return.png";
 
 type HighlightTarget = {
@@ -184,13 +184,21 @@ export default function HighlightView() {
     const targetElement = document.querySelector(
       `[data-row-index="${targetRow}"]`,
     ) as HTMLElement | null;
+    const container = document.querySelector(".table-scroll") as HTMLDivElement | null;
 
-    if (!targetElement) {
+    if (!targetElement || !container) {
       return;
     }
 
     window.setTimeout(() => {
-      targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+      const targetRect = targetElement.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const scrollOffset =
+        container.scrollTop +
+        (targetRect.top - containerRect.top) +
+        targetRect.height / 2 -
+        container.clientHeight / 2;
+      container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
     }, 0);
   }, [slice]);
 

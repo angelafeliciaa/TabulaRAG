@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   aggregate,
   filterRows,
@@ -7,7 +7,6 @@ import {
   type FilterResponse,
 } from "../api";
 import DataTable from "../components/DataTable";
-import openIcon from "../images/open.png";
 
 const MAX_MULTI_HIGHLIGHT_ROWS = 1000;
 
@@ -48,6 +47,39 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  INR: "₹",
+  CAD: "C$",
+  AUD: "A$",
+  CHF: "CHF",
+  CNY: "¥",
+  KRW: "₩",
+  THB: "฿",
+  TRY: "₺",
+  RUB: "₽",
+};
+
+function formatAggregateValue(
+  value: number,
+  currency: string | null | undefined,
+  unit: string | null | undefined,
+): string | number {
+  if (currency != null && currency !== "") {
+    const symbol = CURRENCY_SYMBOL[currency] ?? `${currency} `;
+    const formatted = value.toFixed(2);
+    return `${symbol}${formatted}`;
+  }
+  if (unit != null && unit !== "") {
+    const formatted = Number.isInteger(value) ? String(value) : String(value);
+    return `${formatted} ${unit}`;
+  }
+  return value;
+}
+
 function encodePayload(value: unknown): string {
   const raw = JSON.stringify(value);
   const bytes = new TextEncoder().encode(raw);
@@ -84,18 +116,24 @@ function formatFilterSummary(filters?: FilterConditionPayload[]): string {
 
 export default function VirtualTableView() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [err, setErr] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<TableRow[]>([]);
   const [resultTitle, setResultTitle] = useState<string>("Result");
   const [resultSubtitle, setResultSubtitle] = useState<string>("");
+
   const [searchState, setSearchState] = useState<{ key: string; value: string }>({
     key: "",
     value: "",
   });
   const parsedQuery = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    const encoded = params.get("q");
+    let encoded = params.get("q");
+    if (!encoded && location.hash) {
+      const hashParams = new URLSearchParams(location.hash.slice(1));
+      encoded = hashParams.get("q");
+    }
     if (!encoded) {
       return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
     }
@@ -104,9 +142,14 @@ export default function VirtualTableView() {
     } catch {
       return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
     }
-  }, [location.search]);
+  }, [location.search, location.hash]);
 
   useEffect(() => {
+    if (parsedQuery.error) {
+      // Defer to microtask to avoid synchronous setState inside effect body.
+      void Promise.resolve().then(() => setErr(parsedQuery.error));
+      return;
+    }
     if (!parsedQuery.payload) {
       return;
     }
@@ -175,7 +218,11 @@ export default function VirtualTableView() {
           if (result.group_by_column) {
             nextRow[result.group_by_column] = row.group_value;
           }
-          nextRow[metricColLabel] = row.aggregate_value;
+          nextRow[metricColLabel] = formatAggregateValue(
+            row.aggregate_value,
+            result.metric_currency ?? null,
+            result.metric_unit ?? null,
+          );
           nextRow.__dataset_id = result.dataset_id;
 
           const drilldownFilters = [...(aggregatePayload.filters || [])];
@@ -203,7 +250,7 @@ export default function VirtualTableView() {
         setRows(remapped);
       })
       .catch((error: unknown) => setErr(getErrorMessage(error)));
-  }, [parsedQuery.payload]);
+  }, [parsedQuery]);
 
   const searchQuery = searchState.key === location.search ? searchState.value : "";
   const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -289,35 +336,38 @@ export default function VirtualTableView() {
             </div>
           </div>
           <div className="table-view-tools virtual-results-tools">
-            <input
-              type="text"
-              className="table-view-search"
-              value={searchQuery}
-              onChange={(event) =>
-                setSearchState({
-                  key: location.search,
-                  value: event.target.value,
-                })}
-              placeholder="Search for values"
-              aria-label="Search results rows"
-            />
-            <Link className="table-view-icon-btn" to="/" aria-label="Back to All Uploads" title="Back to All Uploads">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M12 4.2 4 10v9a1 1 0 0 0 1 1h4.8a1 1 0 0 0 1-1v-4.2h2.4V19a1 1 0 0 0 1 1H19a1 1 0 0 0 1-1v-9l-8-5.8Z" fill="currentColor" />
+            <div className="table-view-search-wrap">
+              <svg className="table-view-search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
               </svg>
-            </Link>
+              <input
+                type="text"
+                className="table-view-search"
+                value={searchQuery}
+                onChange={(event) =>
+                  setSearchState({
+                    key: location.search,
+                    value: event.target.value,
+                  })}
+                placeholder="Search for values"
+                aria-label="Search results rows"
+              />
+            </div>
           </div>
         </div>
       </div>
 
       {filtered.rows.length > 0 && (
-        <div className="table-area">
-          <DataTable
-            columns={columns}
-            rows={filtered.rows}
-            rowIndices={filtered.rowIndices}
-            sortable
-            rowAction={
+        <>
+          <div
+            className={`table-area aggregate-results-table${hasRowDrilldown ? " aggregate-results-table-clickable" : ""}`}
+          >
+            <DataTable
+              columns={columns}
+              rows={filtered.rows}
+              rowIndices={filtered.rowIndices}
+              sortable
+              onRowClick={
               hasRowDrilldown
                 ? ({ row }) => {
                   const sourceDataset =
@@ -332,44 +382,66 @@ export default function VirtualTableView() {
                         : null;
 
                   if (sourceDataset !== null && Array.isArray(row.__drilldown_filters)) {
-                    const label = String(row.__drilldown_label || "All matching rows");
                     const spec = encodePayload({
                       dataset_id: sourceDataset,
                       filters: row.__drilldown_filters,
-                      label,
+                      label: String(row.__drilldown_label || "All matching rows"),
                       max_rows: MAX_MULTI_HIGHLIGHT_ROWS,
                     });
-                    return (
-                      <Link
-                        className="result-row-open-link"
-                        to={`/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
-                        aria-label={`Open ${label} rows in full table`}
-                        title="Open in full table"
-                      >
-                        <img src={openIcon} alt="" aria-hidden="true" />
-                      </Link>
+                    navigate(
+                      `/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`,
                     );
+                    return;
                   }
 
                   if (sourceDataset !== null && sourceRow !== null) {
-                    return (
-                      <Link
-                        className="result-row-open-link"
-                        to={`/tables/${sourceDataset}?highlight_row=${sourceRow}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
-                        aria-label={`Open row ${sourceRow} in full table`}
-                        title="Open in full table"
-                      >
-                        <img src={openIcon} alt="" aria-hidden="true" />
-                      </Link>
+                    navigate(
+                      `/tables/${sourceDataset}?highlight_row=${sourceRow}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`,
                     );
                   }
-                  return null;
                 }
                 : undefined
-            }
-            rowActionLabel=""
-          />
-        </div>
+              }
+              rowAction={
+              hasRowDrilldown
+                ? ({ row }) => {
+                  const sourceDataset =
+                    typeof row.__dataset_id === "number" ? row.__dataset_id : null;
+                  const sourceRow =
+                    typeof row.__row_index === "number"
+                      ? row.__row_index
+                      : typeof row.row_index === "number"
+                        ? Number(row.row_index)
+                        : null;
+                  const hasLink =
+                    sourceDataset !== null &&
+                    (Array.isArray(row.__drilldown_filters) || sourceRow !== null);
+                  if (!hasLink) return null;
+                  return (
+                    <span
+                      className="aggregate-row-open-indicator"
+                      aria-hidden="true"
+                    >
+                      →
+                    </span>
+                  );
+                }
+                : undefined
+              }
+              rowActionLabel=""
+            />
+          </div>
+          {hasRowDrilldown && (
+            <p className="aggregate-view-full-table-note">
+              <span className="aggregate-view-full-table-note-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z" />
+                </svg>
+              </span>
+              Click on a row to view ungrouped rows in a full table
+            </p>
+          )}
+        </>
       )}
     </div>
   );
