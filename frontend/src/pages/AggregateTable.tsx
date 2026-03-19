@@ -146,7 +146,8 @@ export default function VirtualTableView() {
 
   useEffect(() => {
     if (parsedQuery.error) {
-      setErr(parsedQuery.error);
+      // Defer to microtask to avoid synchronous setState inside effect body.
+      void Promise.resolve().then(() => setErr(parsedQuery.error));
       return;
     }
     if (!parsedQuery.payload) {

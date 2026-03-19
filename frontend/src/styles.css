@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap");
+/* Google Fonts are loaded from index.html for better Lighthouse performance. */
 
 :root {
   --font-sans:
@@ -1145,6 +1145,43 @@ h3 {
   width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.28) transparent;
+}
+
+.upload-home-page-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.upload-home-page-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.upload-home-page-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.upload-home-page-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+  background-clip: padding-box;
+}
+
+:root[data-theme="dark"] .upload-home-page-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+:root[data-theme="dark"] .upload-home-page-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: padding-box;
+}
+
+:root[data-theme="dark"] .upload-home-page-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45);
+  background-clip: padding-box;
 }
 
 .page-stack.upload-home-page {
@@ -1399,6 +1436,13 @@ ul {
   max-height: 124px;
   overflow: auto;
   padding: 6px 4px 2px 2px;
+}
+
+.tables-empty-state-wrapper {
+  padding: 18px 10px 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .uploaded-tables-panel {
@@ -2112,39 +2156,20 @@ ul {
   color: var(--text);
 }
 
-.preview-open-icon-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 38px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
+/* View Full Table link: same design as .sort-toggle-button */
+a.sort-toggle-button.preview-open-link {
   text-decoration: none;
-  white-space: nowrap;
-  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
-.preview-open-icon-link img {
-  width: 16px;
-  height: 16px;
+.preview-open-link-icon {
+  width: 14px;
+  height: 14px;
   object-fit: contain;
 }
 
-.preview-open-icon-link:hover {
-  background: var(--bg-elev);
-  border-color: var(--border-soft);
-  color: var(--text);
-}
-
-:root[data-theme="dark"] .preview-open-icon-link img {
-    filter: brightness(0) invert(1);
-    opacity: 0.92;
+:root[data-theme="dark"] .preview-open-link-icon {
+  filter: brightness(0) invert(1);
+  opacity: 0.92;
 }
 
 .table-view-back-link {
@@ -3041,21 +3066,6 @@ input:focus-visible,
   .preview-table-name-value {
     max-width: 42vw;
     font-size: 15px;
-  }
-
-  .preview-open-icon-link {
-    height: 34px;
-    padding: 0 8px;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .preview-open-icon-link img {
-    width: 14px;
-    height: 14px;
-    min-width: 14px;
   }
 
   .tables-header-controls {

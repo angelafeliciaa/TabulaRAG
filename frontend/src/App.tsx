@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { logout, getUser } from "./api";
-import logo from "./images/logo.png";
+import logo from "./images/logo-64.webp";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";

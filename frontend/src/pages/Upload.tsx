@@ -27,7 +27,8 @@ import {
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
-import logo from "../images/logo.png";
+import logo64 from "../images/logo-64.webp";
+import logo128 from "../images/logo-128.webp";
 import openIcon from "../images/open.png";
 import uploadLogo from "../images/upload.png";
 
@@ -549,12 +550,7 @@ export default function Upload() {
   const refresh = useCallback(async () => {
     const nextTables = await listTables({ includePending: true });
     setTables(nextTables);
-    try {
-      await refreshIndexStatuses(nextTables);
-    } catch {
-      // Keep table list usable even if status polling fails.
-    }
-  }, [refreshIndexStatuses]);
+  }, []);
 
   useEffect(() => {
     const pendingRaw = window.sessionStorage.getItem(PENDING_UPLOAD_SESSION_KEY);
@@ -813,14 +809,28 @@ export default function Upload() {
       return;
     }
 
-    const timer = window.setInterval(() => {
-      refreshIndexStatuses(tables).catch(() => {
+    // Defer polling so it doesn't block/extend the initial render critical path.
+    const initialDelayMs = 2500;
+    let intervalId: number | null = null;
+    const timer = window.setTimeout(() => {
+      // Kick off an immediate refresh after the initial paint window.
+      void refreshIndexStatuses(tables).catch(() => {
         // Keep polling best-effort.
       });
-    }, 1400);
+
+      // Then continue polling.
+      intervalId = window.setInterval(() => {
+        refreshIndexStatuses(tables).catch(() => {
+          // Keep polling best-effort.
+        });
+      }, 2000);
+    }, initialDelayMs);
 
     return () => {
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
     };
   }, [tables, refreshIndexStatuses]);
 
@@ -901,23 +911,44 @@ export default function Upload() {
   const loadPreviewRef = useRef(loadPreview);
   loadPreviewRef.current = loadPreview;
 
-  // Faster page load: don't auto-fetch preview on initial render.
-  // Preview stays empty until the user selects a table.
+  // Clear preview and selection only when the selected table is no longer in the list.
   useEffect(() => {
-    setActiveTableId(null);
-    setPreview(null);
-    setPreviewErr(null);
-    setPreviewBusy(false);
-    setPreviewPage(1);
-    setPreviewRowCount(0);
-    setPreviewSortColumn(null);
-    setPreviewSortDirection("asc");
+    if (activeTableId !== null && !tables.some((t) => t.dataset_id === activeTableId)) {
+      setActiveTableId(null);
+      setPreview(null);
+      setPreviewErr(null);
+      setPreviewBusy(false);
+      setPreviewPage(1);
+      setPreviewRowCount(0);
+      setPreviewSortColumn(null);
+      setPreviewSortDirection("asc");
+    }
+  }, [activeTableId, tables]);
+
+  // Restore selected table from localStorage when returning to the page (e.g. after View Full Table → Back to Home).
+  useEffect(() => {
+    if (tables.length === 0) return;
+    try {
+      const raw = window.localStorage.getItem(SELECTED_PREVIEW_TABLE_KEY);
+      if (raw === null) return;
+      const id = parseInt(raw, 10);
+      if (!Number.isFinite(id) || !tables.some((t) => t.dataset_id === id)) return;
+      setActiveTableId(id);
+    } catch {
+      /* ignore */
+    }
   }, [tables]);
 
   useEffect(() => {
     if (activeTableId !== null && tables.some((t) => t.dataset_id === activeTableId)) {
       try {
         window.localStorage.setItem(SELECTED_PREVIEW_TABLE_KEY, String(activeTableId));
+      } catch {
+        /* ignore */
+      }
+    } else if (activeTableId === null) {
+      try {
+        window.localStorage.removeItem(SELECTED_PREVIEW_TABLE_KEY);
       } catch {
         /* ignore */
       }
@@ -1555,7 +1586,16 @@ export default function Upload() {
       <div className="page page-stack">
         <div className="hero">
           <div className="hero-title-row">
-            <img src={logo} alt="TabulaRAG" className="hero-logo" />
+            <img
+              src={logo64}
+              srcSet={`${logo64} 1x, ${logo128} 2x`}
+              width={48}
+              height={48}
+              alt="TabulaRAG"
+              className="hero-logo"
+              loading="eager"
+              fetchPriority="high"
+            />
             <div className="hero-title">TabulaRAG</div>
           </div>
           <div className="hero-subtitle">
@@ -1634,7 +1674,16 @@ export default function Upload() {
 
       <div className="hero" aria-hidden={isUploadDialogOpen}>
         <div className="hero-title-row">
-          <img src={logo} alt="TabulaRAG" className="hero-logo" />
+          <img
+            src={logo64}
+            srcSet={`${logo64} 1x, ${logo128} 2x`}
+            width={48}
+            height={48}
+            alt="TabulaRAG"
+            className="hero-logo"
+            loading="eager"
+            fetchPriority="high"
+          />
           <div className="hero-title">TabulaRAG</div>
         </div>
         <div className="hero-subtitle">
@@ -2102,9 +2151,14 @@ export default function Upload() {
           {tableSortLabel}.
         </p>
 
-        <div className="tables-scroll" ref={tablesScrollRef}>
-          <ul>
-            {filteredTables.map((table) => {
+        {tables.length === 0 ? (
+          <div className="tables-empty-state-wrapper">
+            <p className="small">No tables uploaded yet...</p>
+          </div>
+        ) : (
+          <div className="tables-scroll" ref={tablesScrollRef}>
+            <ul>
+              {filteredTables.map((table) => {
               const indexStatus = indexStatusByTable[table.dataset_id];
               const indexState = indexStatus?.state || "ready";
               const isPinned = pinnedTableIdSet.has(table.dataset_id);
@@ -2187,7 +2241,23 @@ export default function Upload() {
                           type="button"
                           className="list-button"
                           onClick={() => {
-                            void loadPreview(table.dataset_id, 1, { sortColumn: null, sortDirection: "asc" });
+                            if (activeTableId === table.dataset_id) {
+                              // Toggle off when clicking the currently selected table.
+                              setActiveTableId(null);
+                              setPreview(null);
+                              setPreviewErr(null);
+                              setPreviewBusy(false);
+                              setPreviewPage(1);
+                              setPreviewRowCount(0);
+                              setPreviewSearchQuery("");
+                              setPreviewSortColumn(null);
+                              setPreviewSortDirection("asc");
+                              return;
+                            }
+                            void loadPreview(table.dataset_id, 1, {
+                              sortColumn: null,
+                              sortDirection: "asc",
+                            });
                           }}
                           aria-pressed={activeTableId === table.dataset_id}
                         >
@@ -2269,8 +2339,9 @@ export default function Upload() {
                 </li>
               );
             })}
-          </ul>
-        </div>
+            </ul>
+          </div>
+        )}
 
         {showScrollHint && (
           <button
@@ -2286,7 +2357,8 @@ export default function Upload() {
 
       </div>
 
-      <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
+      {activeTableId !== null && (
+        <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
         <div className="preview-header">
           <div className="preview-header-left">
             <h3 style={{ marginBottom: 0 }}>Table preview</h3>
@@ -2314,13 +2386,13 @@ export default function Upload() {
             )}
             {activeTableId !== null && (
               <Link
-                className="preview-open-icon-link"
+                className="sort-toggle-button preview-open-link"
                 to={`/tables/${activeTableId}`}
                 aria-label="View Full Table"
                 title="View Full Table"
               >
-                <img src={openIcon} alt="" aria-hidden="true" />
-                <span>View Full Table</span>
+                <img src={openIcon} alt="" className="preview-open-link-icon" aria-hidden="true" />
+                <span className="sort-toggle-text">View Full Table</span>
               </Link>
             )}
           </div>
@@ -2446,10 +2518,11 @@ export default function Upload() {
           </div>
         )}
 
-        {!previewBusy && !preview && !previewErr && (
+        {!previewBusy && !preview && !previewErr && tables.length > 0 && (
           <p className="small">Select a table above to preview its rows.</p>
         )}
-      </div>
+        </div>
+      )}
       </div>
     </div>
   );
