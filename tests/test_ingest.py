@@ -2,7 +2,6 @@ import io
 import pytest
 from unittest.mock import patch
 from sqlalchemy import text
-from app.typed_values import strip_internal_fields
 
 
 def make_csv(content: str, filename: str = "test.csv"):
