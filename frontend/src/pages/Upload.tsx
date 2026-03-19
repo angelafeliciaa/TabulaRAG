@@ -39,6 +39,7 @@ const SUCCESS_TOAST_MS = 2800;
 const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
 const SAFE_TABLE_NAME_MAX_LENGTH = 64;
+const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 1024;
 const PREVIEW_ROWS_PER_PAGE = 100;
 
 type ToastState = { id: number; kind: "success"; message: string };
@@ -54,6 +55,7 @@ type UploadQueueItem = {
   estimatedRows: number | null;
   estimatedCols: number | null;
   error: string | null;
+  description: string;
 };
 
 type FileSystemEntryLike = {
@@ -293,6 +295,18 @@ function sanitizeTableNameInput(name: string): string {
   return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
 }
 
+function sanitizeTableDescriptionInput(description: string): string {
+  // Keep printable chars and common whitespace (tab=9, newline=10, CR=13).
+  const withoutControlChars = description
+    .split("")
+    .filter((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 9 || code === 10 || code === 13 || code >= 32;
+    })
+    .join("");
+  return withoutControlChars.slice(0, SAFE_TABLE_DESCRIPTION_MAX_LENGTH);
+}
+
 function getNameKey(name: string): string {
   return sanitizeTableNameInput(name).toLocaleLowerCase();
 }
@@ -419,6 +433,7 @@ export default function Upload() {
   const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
   const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
+  const firstQueuedDescriptionInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const sortToggleButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1016,9 +1031,11 @@ export default function Upload() {
         sanitizeTableNameInput(item.name)
         || sanitizeTableNameInput(item.file.name)
         || "table";
+      const normalizedDescription = sanitizeTableDescriptionInput(item.description);
       return {
         item,
         normalizedName: claimUniqueTableName(preferredName, occupiedNameKeys),
+        normalizedDescription,
       };
     });
     let completedCount = 0;
@@ -1033,7 +1050,7 @@ export default function Upload() {
     );
 
     await Promise.allSettled(
-      preparedItems.map(async ({ item, normalizedName }) => {
+      preparedItems.map(async ({ item, normalizedName, normalizedDescription }) => {
         setUploadQueue((previous) =>
           previous.map((current) =>
             current.id === item.id
@@ -1049,7 +1066,7 @@ export default function Upload() {
         );
 
         try {
-          const result = await uploadTable(item.file, normalizedName, (progress) => {
+          const result = await uploadTable(item.file, normalizedName, normalizedDescription || null, (progress) => {
             setUploadQueue((previous) =>
               previous.map((current) =>
                 current.id === item.id
@@ -1269,6 +1286,7 @@ export default function Upload() {
         estimatedRows: null,
         estimatedCols: null,
         error: null,
+        description: "",
       });
     }
 
@@ -1364,6 +1382,24 @@ export default function Upload() {
     );
   }
 
+  function onChangeQueuedDescription(queueItemId: string, nextValue: string) {
+    if (busy) {
+      return;
+    }
+
+    const nextDescription = sanitizeTableDescriptionInput(nextValue);
+    setUploadQueue((previous) =>
+      previous.map((item) =>
+        item.id === queueItemId
+          ? {
+            ...item,
+            description: nextDescription,
+          }
+          : item,
+      ),
+    );
+  }
+
   function onUploadDragEnter(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -1432,8 +1468,9 @@ export default function Upload() {
     }
     queueFolderInputRef.current?.click();
   }
-  const hasOnlySuccessfulUploads =
-    uploadQueue.length > 0 && uploadQueue.every((item) => item.phase === "success");
+  const hasPendingUploads = uploadQueue.some(
+    (item) => item.phase === "idle" || item.phase === "error",
+  );
   const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
   const activeTableName =
     activeTableId !== null
@@ -1966,6 +2003,35 @@ export default function Upload() {
                             {stateLabel}
                           </span>
                         </div>
+                        <label className="upload-queue-description">
+                          <span className="small upload-queue-description-label">
+                            Description (optional)
+                          </span>
+                          <input
+                            ref={
+                              index === 0 && canEditQueuedName
+                                ? firstQueuedDescriptionInputRef
+                                : null
+                            }
+                            type="text"
+                            className={`upload-queue-description-input ${
+                              canEditQueuedName ? "" : "disabled"
+                            }`}
+                            value={item.description}
+                            onChange={(event) => {
+                              onChangeQueuedDescription(
+                                item.id,
+                                event.target.value,
+                              );
+                            }}
+                            placeholder="Add a short summary to help retrieval"
+                            maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                            disabled={busy || !canEditQueuedName}
+                          />
+                          <span className="upload-queue-description-hint small">
+                            Helps retrieval by giving the AI more context.
+                          </span>
+                        </label>
                       </div>
                       <div className="upload-queue-right">
                         {progressLabel && (
@@ -2050,11 +2116,11 @@ export default function Upload() {
                   </button>
                   <button
                     onClick={onUpload}
-                    disabled={busy}
+                    disabled={!hasPendingUploads || busy}
                     className="primary"
                     type="button"
                   >
-                    {busy ? "Uploading..." : hasOnlySuccessfulUploads ? "Done" : "Upload all files"}
+                    {busy ? "Uploading..." : "Upload all files"}
                   </button>
                 </div>
               )}
