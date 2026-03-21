@@ -335,7 +335,7 @@ class AggregateRequest(BaseModel):
     dataset_id: int = Field(
         description="ID of the dataset to aggregate. Call GET /tables first to discover valid IDs."
     )
-    filters: Optional[List[FilterCondition]] = None
+    filters: List[FilterCondition] = Field(default_factory=list)
     operation: Literal["count", "sum", "avg", "min", "max"]
     metric_column: Optional[str] = Field(
         default=None,
@@ -379,10 +379,7 @@ class FilterRequest(BaseModel):
     dataset_id: int = Field(
         description="ID of the dataset to filter. Call GET /tables first to discover valid IDs."
     )
-    filters: Optional[List[FilterCondition]] = Field(
-        default=None,
-        description="Filter conditions. Use normalized_name for each column (from GET /tables/{dataset_id}/columns).",
-    )
+    filters: List[FilterCondition] = Field(default_factory=list)
     limit: int = 50
     offset: int = 0
 
