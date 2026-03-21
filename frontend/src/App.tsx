@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
-import { logout, getUser, isAuthenticated, getServerStatus, type ServerStatus } from "./api";
+import { logout, getUser, isAuthenticated } from "./api";
 import logo from "./images/logo-64.webp";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
@@ -33,7 +33,6 @@ export default function App() {
     }
     return "light";
   });
-  const [serverStatus, setServerStatus] = useState<ServerStatus>("Unknown");
   const [authed, setAuthed] = useState(isAuthenticated());
 
   useEffect(() => {
