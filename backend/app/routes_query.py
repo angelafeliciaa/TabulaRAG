@@ -2,11 +2,20 @@ import os
 import base64
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional
-from fastapi import APIRouter, HTTPException
+from typing import Any, Dict, List, Literal, Optional, Union
+from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from app.query_input_schemas import (
+    AggregateRequest,
+    FilterCondition,
+    FilterRequest,
+    FilterRowIndicesRequest,
+    QueryRequest,
+    UNIFIED_QUERY_OPENAPI_EXAMPLES,
+    UnifiedQueryRequest,
+)
 from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context, smart_query
 from app.routes_tables import list_tables, get_cols_for_dataset
 import app.db as app_db
@@ -20,21 +29,6 @@ from app.normalization import (
 )
 
 router = APIRouter()
-
-FilterOperator = Literal[
-    "=",
-    "!=",
-    ">",
-    ">=",
-    "<",
-    "<=",
-    "LIKE",
-    "NOT LIKE",
-    "IN",
-    "BETWEEN",
-    "IS NULL",
-    "IS NOT NULL",
-]
 
 
 def _strip_money(value: str) -> str:
@@ -238,17 +232,6 @@ def _build_where_clauses(
 
 
 # ── Request / Response models ──────────────────────────────────────
-
-      
-class FilterCondition(BaseModel):
-    column: str = Field(
-        description="Column name. Use normalized_name from GET /tables/{dataset_id}/columns (not original_name)."
-    )
-    operator: FilterOperator
-    value: Optional[str] = None  # None for IS NULL / IS NOT NULL
-    logical_operator: Literal["AND", "OR"] = "AND"
-
-
 class HighlightItem(BaseModel):
     highlight_id: str
     column: str
@@ -265,22 +248,6 @@ class ResultItem(BaseModel):
     source_url: Optional[str] = None
     top_highlight_id: Optional[str] = None
     highlight_url: Optional[str] = None
-
-
-class QueryRequest(BaseModel):
-    question: str = Field(description="Natural language question to search the dataset with")
-    dataset_id: Optional[int] = Field(
-        default=None,
-        description=(
-            "Preferred dataset ID. For best tool reliability, call GET /tables first and pass dataset_id."
-        ),
-    )
-    dataset_name: Optional[str] = Field(
-        default=None,
-        description="Optional dataset name (for example 'Chocolate'). Helps automatic dataset resolution.",
-    )
-    top_k: int = Field(default=10, ge=1, le=100)
-    filters: Optional[Dict[str, str]] = None
 
 
 class QueryResponse(BaseModel):
@@ -331,27 +298,6 @@ class QueryResponse(BaseModel):
 #     )
 
 
-class AggregateRequest(BaseModel):
-    dataset_id: int = Field(
-        description="ID of the dataset to aggregate. Call GET /tables first to discover valid IDs."
-    )
-    filters: List[FilterCondition] = Field(default_factory=list)
-    operation: Literal["count", "sum", "avg", "min", "max"]
-    metric_column: Optional[str] = Field(
-        default=None,
-        description="Column to aggregate (sum/avg/min/max). Use normalized_name from GET /tables/{dataset_id}/columns.",
-    )
-    group_by: Optional[str] = Field(
-        default=None,
-        description="Column to group by. Use normalized_name from GET /tables/{dataset_id}/columns.",
-    )
-    group_by_date_part: Optional[Literal["month", "quarter", "year"]] = Field(
-        default=None,
-        description="When group_by is a date column (ISO YYYY-MM-DD), group by this part instead of full date: month (YYYY-MM), quarter (YYYY-QN), or year (YYYY).",
-    )
-    limit: int = 50
-
-
 class AggregateResponse(BaseModel):
     dataset_id: int
     metric_column: Optional[str]
@@ -375,15 +321,6 @@ class AggregateResponse(BaseModel):
     )
 
 
-class FilterRequest(BaseModel):
-    dataset_id: int = Field(
-        description="ID of the dataset to filter. Call GET /tables first to discover valid IDs."
-    )
-    filters: List[FilterCondition] = Field(default_factory=list)
-    limit: int = 50
-    offset: int = 0
-
-
 class FilterResponse(BaseModel):
     dataset_id: int
     rowsResult: List[Dict[str, Any]]
@@ -395,20 +332,20 @@ class FilterResponse(BaseModel):
     )
 
 
-class FilterRowIndicesRequest(BaseModel):
-    dataset_id: int = Field(
-        description="ID of the dataset to filter. Call GET /tables first to discover valid IDs."
-    )
-    filters: Optional[List[FilterCondition]] = None
-    max_rows: int = 1000
-
-
 class FilterRowIndicesResponse(BaseModel):
     dataset_id: int
     row_indices: List[int]
     total_match_count: int
     truncated: bool
     sql_query: str
+
+
+UnifiedQueryResponse = Union[
+    QueryResponse,
+    AggregateResponse,
+    FilterResponse,
+    FilterRowIndicesResponse,
+]
 
 
 class HighlightResponse(BaseModel):
@@ -434,7 +371,9 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
         "metric_column": body.metric_column,
         "group_by": body.group_by,
         "group_by_date_part": body.group_by_date_part,
-        "filters": [f.dict() for f in body.filters] if body.filters else None,
+        # Keep filters as a list (not null) so older clients/validators that require
+        # a list keep working when they replay this payload back to /aggregate.
+        "filters": [f.model_dump() for f in body.filters] if body.filters else [],
         "highlight_index": highlight_index,
         "limit": 500,
     }
@@ -447,7 +386,7 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
     payload = {
         "mode": "filter",
         "dataset_id": body.dataset_id,
-        "filters": [f.dict() for f in body.filters] if body.filters else None,
+        "filters": [f.model_dump() for f in body.filters] if body.filters else [],
         "limit": 500,
         "offset": 0,
     }
@@ -484,21 +423,15 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
         status_code=status_code,
         detail={
             "message": message,
-            "guidance": "Call GET /tables first, then call POST /query with the selected dataset_id.",
+            "guidance": "Call GET /tables/context first, then call POST /query with the selected dataset_id.",
             "available_tables": _list_tables_compact(),
         },
     )
 
 
-# ── Endpoints ──────────────────────────────────────────────────────
+# ── Internal query handlers ────────────────────────────────────────
 
-@router.post(
-    "/semantic_query",
-    response_model=QueryResponse,
-    summary="Answer natural-language semantic table queries",
-    description="Use this when you need to answer a question with a semantic search.",
-)
-def query_dataset(body: QueryRequest):
+def _run_semantic_query(body: QueryRequest) -> QueryResponse:
     if _enforce_list_tables_first() and body.dataset_id is None:
         raise _strict_lookup_error(
             status_code=409,
@@ -540,20 +473,18 @@ def query_dataset(body: QueryRequest):
     return QueryResponse(**payload)
 
 
-@router.post(
-    "/aggregate",
-    summary="Answer natural-language table aggregate queries",
-    description="Use this for aggregate queries: max, min, sum, average, count. Call GET /tables/columns first to discover valid column names. Always include URL in response",
-)
-def aggregate_dataset(body: AggregateRequest):
-    # Verify dataset exists
+def _ensure_dataset_exists(dataset_id: int) -> None:
     with SessionLocal() as db:
         row = db.execute(
             text("SELECT id FROM datasets WHERE id = :id"),
-            {"id": body.dataset_id},
+            {"id": dataset_id},
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+
+
+def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
+    _ensure_dataset_exists(body.dataset_id)
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
     valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
@@ -656,23 +587,16 @@ def aggregate_dataset(body: AggregateRequest):
     )
 
 
-@router.post(
-    "/filter",
-    response_model=FilterResponse,
-    summary="Filter rows from a dataset",
-    description="Apply structured filters to a dataset and return matching rows.",
-)
-def filter_dataset(body: FilterRequest):
-    with SessionLocal() as db:
-        row = db.execute(
-            text("SELECT id FROM datasets WHERE id = :id"),
-            {"id": body.dataset_id},
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
+def _run_filter_query(body: FilterRequest) -> FilterResponse:
+    _ensure_dataset_exists(body.dataset_id)
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
-    valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
+    ordered_columns = [
+        col["normalized_name"]
+        for col in cols_payload["columns"]
+        if col.get("normalized_name")
+    ]
+    valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
@@ -749,20 +673,10 @@ def filter_dataset(body: FilterRequest):
     )
 
 
-@router.post(
-    "/filter/row-indices",
-    response_model=FilterRowIndicesResponse,
-    summary="Resolve row indices for a structured filter",
-    description="Apply structured filters to a dataset and return matching row indices.",
-)
-def filter_row_indices(body: FilterRowIndicesRequest):
-    with SessionLocal() as db:
-        row = db.execute(
-            text("SELECT id FROM datasets WHERE id = :id"),
-            {"id": body.dataset_id},
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
+def _run_filter_row_indices_query(
+    body: FilterRowIndicesRequest,
+) -> FilterRowIndicesResponse:
+    _ensure_dataset_exists(body.dataset_id)
 
     cols_payload = get_cols_for_dataset(body.dataset_id)
     valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
@@ -810,6 +724,70 @@ def filter_row_indices(body: FilterRowIndicesRequest):
         truncated=truncated,
         sql_query=_render_sql(sql, params),
     )
+
+
+# ── Endpoints ──────────────────────────────────────────────────────
+
+@router.post(
+    "/query",
+    response_model=UnifiedQueryResponse,
+    summary="Unified query endpoint for semantic, aggregate, and filter modes",
+    description=(
+        "Single structured query endpoint. Provide mode and matching payload. "
+        "Responses are mode-specific and identical to legacy route outputs."
+    ),
+)
+def unified_query_endpoint(
+    body: UnifiedQueryRequest = Body(
+        ...,
+        openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
+    ),
+):
+    if body.mode == "semantic" and body.semantic is not None:
+        return _run_semantic_query(body.semantic)
+    if body.mode == "aggregate" and body.aggregate is not None:
+        return _run_aggregate_query(body.aggregate)
+    if body.mode == "filter" and body.filter is not None:
+        return _run_filter_query(body.filter)
+    if body.mode == "filter_row_indices" and body.filter_row_indices is not None:
+        return _run_filter_row_indices_query(body.filter_row_indices)
+    raise HTTPException(status_code=400, detail="Unsupported query payload.")
+
+
+@router.post(
+    "/semantic_query",
+    response_model=QueryResponse,
+    include_in_schema=False,
+)
+def query_dataset(body: QueryRequest):
+    return _run_semantic_query(body)
+
+
+@router.post(
+    "/aggregate",
+    response_model=AggregateResponse,
+    include_in_schema=False,
+)
+def aggregate_dataset(body: AggregateRequest):
+    return _run_aggregate_query(body)
+
+
+@router.post(
+    "/filter",
+    response_model=FilterResponse,
+    include_in_schema=False,
+)
+def filter_dataset(body: FilterRequest):
+    return _run_filter_query(body)
+
+
+@router.post(
+    "/filter/row-indices",
+    response_model=FilterRowIndicesResponse,
+    include_in_schema=False,
+)
+def filter_row_indices(body: FilterRowIndicesRequest):
+    return _run_filter_row_indices_query(body)
 
 
 @router.get(

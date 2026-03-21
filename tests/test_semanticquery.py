@@ -13,10 +13,17 @@ def _ingest(client):
     return resp.json()["dataset_id"]
 
 
+def _query_semantic(client, payload):
+    return client.post(
+        "/query",
+        json={"mode": "semantic", "semantic": payload},
+    )
+
+
 def test_semantic_query_dataset_not_found(client):
-    resp = client.post(
-        "/semantic_query",
-        json={"question": "Who lives in London?", "dataset_id": 9999},
+    resp = _query_semantic(
+        client,
+        {"question": "Who lives in London?", "dataset_id": 9999},
     )
     assert resp.status_code == 404
 
@@ -37,9 +44,9 @@ def test_semantic_query_semantic_results(client):
 
     with patch("app.retrieval.search_vectors", return_value=mock_hits), \
          patch("app.retrieval.embed_texts", return_value=[[0.1] * 384]):
-        resp = client.post(
-            "/semantic_query",
-            json={"question": "Who lives in London?", "dataset_id": dataset_id},
+        resp = _query_semantic(
+            client,
+            {"question": "Who lives in London?", "dataset_id": dataset_id},
         )
 
     assert resp.status_code == 200

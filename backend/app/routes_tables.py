@@ -61,6 +61,110 @@ def _normalize_row_data(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def _preview_cell_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("original") not in (None, ""):
+            return value.get("original")
+        if "normalized" in value:
+            return value.get("normalized")
+    return value
+
+
+def _coerce_query_context(raw: Any, sample_rows: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    columns = raw.get("columns")
+    rows = raw.get("sample_rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return None
+    sliced_rows = rows[:sample_rows]
+    return {
+        "columns": columns,
+        "sample_rows": sliced_rows,
+        "sample_row_count": len(sliced_rows),
+    }
+
+
+def _build_query_context_from_db(
+    db,
+    dataset_id: int,
+    sample_rows: int,
+) -> Dict[str, Any]:
+    columns = (
+        db.execute(
+            select(DatasetColumn)
+            .where(DatasetColumn.dataset_id == dataset_id)
+            .order_by(DatasetColumn.column_index)
+        )
+        .scalars()
+        .all()
+    )
+    rows = (
+        db.execute(
+            select(DatasetRow.row_index, DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(sample_rows)
+        )
+        .all()
+    )
+    sample = []
+    for row_index, row_data in rows:
+        normalized = _normalize_row_data(row_data)
+        sample.append(
+            {
+                "row_index": int(row_index),
+                "row_data": {
+                    key: _preview_cell_value(value) for key, value in normalized.items()
+                },
+            }
+        )
+    return {
+        "columns": [
+            {
+                "column_index": c.column_index,
+                "original_name": c.original_name,
+                "normalized_name": c.normalized_name,
+            }
+            for c in columns
+        ],
+        "sample_rows": sample,
+        "sample_row_count": len(sample),
+    }
+
+
+def _list_tables_payload(
+    include_pending: bool,
+    include_context: bool,
+    sample_rows: int,
+) -> List[Dict[str, Any]]:
+    with SessionLocal() as db:
+        query = select(Dataset).order_by(Dataset.id.desc())
+        if not include_pending:
+            query = query.where(Dataset.is_index_ready.is_(True))
+        datasets = db.execute(query).scalars().all()
+        items = []
+        for d in datasets:
+            item = {
+                "dataset_id": d.id,
+                "name": d.name,
+                "description": d.description,
+                "source_filename": d.source_filename,
+                "row_count": d.row_count,
+                "column_count": d.column_count,
+                "created_at": d.created_at.isoformat(),
+            }
+            if include_context:
+                stored = _coerce_query_context(d.query_context, sample_rows)
+                item["query_context"] = stored or _build_query_context_from_db(
+                    db,
+                    d.id,
+                    sample_rows,
+                )
+            items.append(item)
+        return items
+
+
 def _delete_collection_safe(dataset_id: int) -> None:
     try:
         delete_collection(dataset_id)
@@ -72,32 +176,48 @@ def _delete_collection_safe(dataset_id: int) -> None:
 @router.get(
     "/tables",
     summary="List all datasets",
-    description="Returns indexed datasets with their IDs, names, and metadata. Pending uploads are omitted unless include_pending=true.",
+    description=(
+        "Returns indexed datasets with IDs and metadata. "
+        "For query planning with columns/sample rows, call GET /tables/context."
+    ),
 )
 def list_tables(include_pending: bool = False):
-    with SessionLocal() as db:
-        query = select(Dataset).order_by(Dataset.id.desc())
-        if not include_pending:
-            query = query.where(Dataset.is_index_ready.is_(True))
-        datasets = db.execute(query).scalars().all()
-        return [
-            {
-                "dataset_id": d.id,
-                "name": d.name,
-                "description": d.description,
-                "source_filename": d.source_filename,
-                "row_count": d.row_count,
-                "column_count": d.column_count,
-                "created_at": d.created_at.isoformat(),
-            }
-            for d in datasets
-        ]
+    return _list_tables_payload(
+        include_pending=include_pending,
+        include_context=False,
+        sample_rows=5,
+    )
+
+
+@router.get(
+    "/tables/context",
+    summary="List datasets with columns and sample rows for query planning",
+    description=(
+        "Use this before POST /query. Returns dataset metadata plus query_context "
+        "with normalized/original columns and representative sample_rows."
+    ),
+)
+def list_tables_with_context(
+    include_pending: bool = False,
+    sample_rows: int = Query(
+        default=5,
+        ge=1,
+        le=20,
+        description="How many sample rows to include per dataset.",
+    ),
+):
+    return _list_tables_payload(
+        include_pending=include_pending,
+        include_context=True,
+        sample_rows=sample_rows,
+    )
 
 
 @router.get(
     "/tables/{dataset_id}/columns",
     summary="List all columns for a dataset",
     description="Returns column names and indexes for a dataset. Always call this to understand the data structure and actual column names before querying.",
+    include_in_schema=False,
 )
 def get_cols_for_dataset(dataset_id: int):
     with SessionLocal() as db:

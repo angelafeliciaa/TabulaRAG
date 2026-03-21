@@ -1,0 +1,199 @@
+from unittest.mock import patch
+
+
+def _ingest_people(client):
+    csv_content = b"name,city,age\nAlice,London,30\nBob,Paris,25\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("people.csv", csv_content, "text/csv")},
+    )
+    assert resp.status_code == 200
+    return resp.json()["dataset_id"]
+
+
+def _ingest_sales(client):
+    csv_content = (
+        b"Sales Person,Boxes Shipped,Country\n"
+        b"Karlen McCaffrey,778,Australia\n"
+        b"Alice,100,UK\n"
+        b"Bob,300,Canada\n"
+        b"Bob,50,Canada\n"
+    )
+    resp = client.post(
+        "/ingest",
+        files={"file": ("sales.csv", csv_content, "text/csv")},
+    )
+    assert resp.status_code == 200
+    return resp.json()["dataset_id"]
+
+
+def test_unified_query_semantic_explicit_and_inferred_match(client):
+    dataset_id = _ingest_people(client)
+    payload = {"question": "Who lives in London?", "dataset_id": dataset_id}
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"name": "Alice", "city": "London", "age": "30"},
+                "text": "name: Alice | city: London | age: 30",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), patch(
+        "app.retrieval.embed_texts", return_value=[[0.1] * 384]
+    ):
+        explicit_resp = client.post(
+            "/query",
+            json={"mode": "semantic", "semantic": payload},
+        )
+        inferred_resp = client.post("/query", json={"semantic": payload})
+
+    assert explicit_resp.status_code == 200
+    assert inferred_resp.status_code == 200
+    assert explicit_resp.json() == inferred_resp.json()
+
+
+def test_unified_query_aggregate_explicit_and_inferred_match(client):
+    dataset_id = _ingest_sales(client)
+    payload = {
+        "dataset_id": dataset_id,
+        "operation": "sum",
+        "metric_column": "Boxes Shipped",
+        "group_by": "Sales Person",
+        "limit": 50,
+    }
+
+    explicit_resp = client.post(
+        "/query",
+        json={"mode": "aggregate", "aggregate": payload},
+    )
+    inferred_resp = client.post("/query", json={"aggregate": payload})
+
+    assert explicit_resp.status_code == 200
+    assert inferred_resp.status_code == 200
+    assert explicit_resp.json() == inferred_resp.json()
+
+
+def test_unified_query_filter_explicit_and_inferred_match(client):
+    dataset_id = _ingest_people(client)
+    payload = {
+        "dataset_id": dataset_id,
+        "filters": [{"column": "city", "operator": "=", "value": "London"}],
+        "limit": 10,
+        "offset": 0,
+    }
+
+    explicit_resp = client.post(
+        "/query",
+        json={"mode": "filter", "filter": payload},
+    )
+    inferred_resp = client.post("/query", json={"filter": payload})
+
+    assert explicit_resp.status_code == 200
+    assert inferred_resp.status_code == 200
+    assert explicit_resp.json() == inferred_resp.json()
+
+
+def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
+    dataset_id = _ingest_people(client)
+    payload = {
+        "dataset_id": dataset_id,
+        "filters": [{"column": "city", "operator": "=", "value": "London"}],
+        "max_rows": 1000,
+    }
+
+    explicit_resp = client.post(
+        "/query",
+        json={"mode": "filter_row_indices", "filter_row_indices": payload},
+    )
+    inferred_resp = client.post("/query", json={"filter_row_indices": payload})
+
+    assert explicit_resp.status_code == 200
+    assert inferred_resp.status_code == 200
+    assert explicit_resp.json() == inferred_resp.json()
+
+
+def test_unified_query_requires_one_payload(client):
+    resp = client.post("/query", json={"mode": "filter"})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(item.get("type") == "value_error" for item in detail)
+
+
+def test_unified_query_mode_payload_mismatch(client):
+    dataset_id = _ingest_people(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "aggregate",
+            "filter": {
+                "dataset_id": dataset_id,
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(item.get("type") == "value_error" for item in detail)
+
+
+def test_openapi_exposes_unified_query_only(client):
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    paths = resp.json().get("paths", {})
+    assert "/query" in paths
+    assert "/semantic_query" not in paths
+    assert "/aggregate" not in paths
+    assert "/filter" not in paths
+    assert "/filter/row-indices" not in paths
+
+    post_query = paths["/query"]["post"]
+    request_body = post_query["requestBody"]["content"]["application/json"]
+    assert "examples" in request_body
+    assert "semantic_question" in request_body["examples"]
+    schema = request_body["schema"]
+    assert "$ref" in schema
+
+
+def test_unified_query_infers_mode_from_single_payload(client):
+    dataset_id = _ingest_people(client)
+    payload = {
+        "aggregate": {
+            "dataset_id": dataset_id,
+            "operation": "count",
+            "group_by": "city",
+            "filters": None,
+        }
+    }
+    resp = client.post("/query", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["group_by_column"] == "city"
+
+
+def test_unified_query_accepts_legacy_aggregate_shape(client):
+    dataset_id = _ingest_people(client)
+    resp = client.post(
+        "/query",
+        json={
+            "aggregate": {
+                "aggregate": {
+                    "dataset_id": dataset_id,
+                    "operation": {
+                        "group_by": ["city"],
+                        "metrics": [{"column": "age", "agg": "sum"}],
+                    },
+                }
+            }
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["group_by_column"] == "city"
+    assert body["metric_column"] == "age"

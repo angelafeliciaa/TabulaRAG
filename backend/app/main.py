@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
     ensure_dataset_description_column,
+    ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     set_dataset_index_ready,
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_columns_normalized_columns()
     ensure_dataset_index_ready_column()
     ensure_dataset_description_column()
+    ensure_dataset_query_context_column()
     try:
         from app.embeddings import get_model
         get_model()
@@ -135,6 +137,39 @@ def _normalize_dataset_description(raw: str | None) -> str | None:
         return None
     # Keep descriptions lightweight for storage/indexing.
     return cleaned[:1024]
+
+
+QUERY_CONTEXT_SAMPLE_ROWS = max(1, int(os.getenv("QUERY_CONTEXT_SAMPLE_ROWS", "5")))
+
+
+def _build_dataset_query_context(
+    raw_headers: List[str],
+    normalized_headers: List[str],
+    rows: List[List[str]],
+    sample_rows: int = QUERY_CONTEXT_SAMPLE_ROWS,
+) -> dict:
+    columns = [
+        {
+            "column_index": i,
+            "original_name": (raw_headers[i] or None) if i < len(raw_headers) else None,
+            "normalized_name": normalized_headers[i],
+        }
+        for i in range(len(normalized_headers))
+    ]
+
+    preview_rows = []
+    for row_index, row in enumerate(rows[:sample_rows]):
+        row_data = {}
+        for i, col_name in enumerate(normalized_headers):
+            value = row[i] if i < len(row) else None
+            row_data[col_name] = value if value not in ("", None) else None
+        preview_rows.append({"row_index": row_index, "row_data": row_data})
+
+    return {
+        "columns": columns,
+        "sample_rows": preview_rows,
+        "sample_row_count": len(preview_rows),
+    }
 
 
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
@@ -443,11 +478,18 @@ def ingest_table(
         dataset_name or os.path.splitext(file.filename)[0]
     )
     dataset_description_value = _normalize_dataset_description(dataset_description)
+    rows_list = list(rows_iter)
+    dataset_query_context = _build_dataset_query_context(
+        raw_headers=raw_headers,
+        normalized_headers=normalized_headers,
+        rows=rows_list,
+    )
 
     with SessionLocal() as db:
         dataset = Dataset(
             name=dataset_display_name,
             description=dataset_description_value,
+            query_context=dataset_query_context,
             source_filename=file.filename,
             delimiter=detected_delimiter,
             has_header=has_header,
@@ -472,10 +514,10 @@ def ingest_table(
         dataset_id = dataset.id
         dataset_name_value = dataset.name
         dataset_description_value = dataset.description
+        dataset_query_context_value = dataset.query_context
         dataset_delimiter = dataset.delimiter
         dataset_has_header = dataset.has_header
 
-    rows_list = list(rows_iter)
     date_format_by_column = infer_date_formats_for_columns(normalized_headers, rows_list)
     money_columns = infer_money_columns(normalized_headers, rows_list)
     measurement_columns = infer_measurement_columns(normalized_headers, rows_list)
@@ -529,6 +571,7 @@ def ingest_table(
         "delimiter": dataset_delimiter,
         "has_header": dataset_has_header,
         "description": dataset_description_value,
+        "query_context": dataset_query_context_value,
     }
 
 
