@@ -36,7 +36,7 @@ class QueryRequest(BaseModel):
     dataset_id: Optional[int] = Field(
         default=None,
         description=(
-            "Preferred dataset ID. For best tool reliability, call GET /tables/context first and pass dataset_id."
+            "Optional dataset ID. Usually you should provide dataset_name instead."
         ),
     )
     dataset_name: Optional[str] = Field(
@@ -50,8 +50,13 @@ class QueryRequest(BaseModel):
 class AggregateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    dataset_id: int = Field(
-        description="ID of the dataset to aggregate. Call GET /tables/context first to discover valid IDs and columns."
+    dataset_id: Optional[int] = Field(
+        default=None,
+        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+    )
+    dataset_name: Optional[str] = Field(
+        default=None,
+        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
     )
     filters: Optional[List[FilterCondition]] = Field(default=None)
     operation: Optional[AggregateOperator] = None
@@ -170,8 +175,13 @@ class AggregateRequest(BaseModel):
 
 
 class FilterRequest(BaseModel):
-    dataset_id: int = Field(
-        description="ID of the dataset to filter. Call GET /tables/context first to discover valid IDs and columns."
+    dataset_id: Optional[int] = Field(
+        default=None,
+        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+    )
+    dataset_name: Optional[str] = Field(
+        default=None,
+        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
     )
     filters: Optional[List[FilterCondition]] = Field(default=None)
     columns: Optional[List[str]] = Field(
@@ -216,8 +226,13 @@ class FilterRequest(BaseModel):
 
 
 class FilterRowIndicesRequest(BaseModel):
-    dataset_id: int = Field(
-        description="ID of the dataset to filter. Call GET /tables/context first to discover valid IDs and columns."
+    dataset_id: Optional[int] = Field(
+        default=None,
+        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+    )
+    dataset_name: Optional[str] = Field(
+        default=None,
+        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
     )
     filters: Optional[List[FilterCondition]] = None
     max_rows: int = 1000
@@ -307,7 +322,7 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
             "mode": "semantic",
             "semantic": {
                 "question": "Who lives in London?",
-                "dataset_id": 12,
+                "dataset_name": "people",
                 "top_k": 10,
             },
         },
@@ -318,7 +333,7 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
         "value": {
             "mode": "aggregate",
             "aggregate": {
-                "dataset_id": 12,
+                "dataset_name": "sales",
                 "operation": "sum",
                 "metric_column": "revenue",
                 "group_by": "country",
@@ -345,7 +360,7 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
         "value": {
             "mode": "filter",
             "filter": {
-                "dataset_id": 12,
+                "dataset_name": "sales",
                 "filters": [
                     {"column": "city", "operator": "=", "value": "London"},
                 ],
@@ -360,7 +375,7 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
         "value": {
             "mode": "filter_row_indices",
             "filter_row_indices": {
-                "dataset_id": 12,
+                "dataset_name": "sales",
                 "filters": [
                     {"column": "city", "operator": "=", "value": "London"},
                 ],

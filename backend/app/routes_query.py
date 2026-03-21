@@ -20,6 +20,7 @@ from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context,
 from app.routes_tables import list_tables, get_cols_for_dataset
 import app.db as app_db
 from app.db import SessionLocal
+from app.name_guard import sanitize_dataset_name
 from app.normalization import (
     flatten_row_data_to_normalized,
     flatten_row_data_to_original,
@@ -507,19 +508,19 @@ def _enforce_list_tables_first() -> bool:
     }
 
 
-def _list_tables_compact() -> List[Dict[str, Any]]:
+def _list_tables_compact(include_ids: bool = True) -> List[Dict[str, Any]]:
     tables = list_tables()
     compact: List[Dict[str, Any]] = []
     for table in tables:
-        compact.append(
-            {
-                "dataset_id": int(table["dataset_id"]),
-                "name": table.get("name"),
-                "source_filename": table.get("source_filename"),
-                "row_count": table.get("row_count"),
-                "column_count": table.get("column_count"),
-            }
-        )
+        item = {
+            "name": table.get("name"),
+            "source_filename": table.get("source_filename"),
+            "row_count": table.get("row_count"),
+            "column_count": table.get("column_count"),
+        }
+        if include_ids:
+            item["dataset_id"] = int(table["dataset_id"])
+        compact.append(item)
     return compact
 
 
@@ -528,8 +529,10 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
         status_code=status_code,
         detail={
             "message": message,
-            "guidance": "Call GET /tables/context first, then call POST /query with the selected dataset_id.",
-            "available_tables": _list_tables_compact(),
+            "guidance": (
+                "Call GET /tables/context first, then call POST /query with dataset_name."
+            ),
+            "available_tables": _list_tables_compact(include_ids=False),
         },
     )
 
@@ -537,21 +540,21 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
 # ── Internal query handlers ────────────────────────────────────────
 
 def _run_semantic_query(body: QueryRequest) -> QueryResponse:
-    if _enforce_list_tables_first() and body.dataset_id is None:
-        raise _strict_lookup_error(
-            status_code=409,
-            message="dataset_id is required when QUERY_ENFORCE_LIST_TABLES_FIRST=true.",
-        )
-
     if _enforce_list_tables_first():
-        tables = _list_tables_compact()
+        resolved_dataset_id = _resolve_structured_dataset_id(
+            dataset_id=body.dataset_id,
+            dataset_name=body.dataset_name,
+            mode_label="Semantic",
+        )
+        body.dataset_id = resolved_dataset_id
+
+        tables = _list_tables_compact(include_ids=True)
         by_id = {int(table["dataset_id"]): table for table in tables}
-        if body.dataset_id is None or int(body.dataset_id) not in by_id:
+        if resolved_dataset_id not in by_id:
             raise _strict_lookup_error(
                 status_code=404,
-                message=f"Dataset ID {body.dataset_id} was not found.",
+                message=f"Dataset was not found.",
             )
-        resolved_dataset_id = int(body.dataset_id)
         resolved_dataset = dict(by_id[resolved_dataset_id])
         resolution_note = None
     else:
@@ -588,6 +591,86 @@ def _ensure_dataset_exists(dataset_id: int) -> None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
 
+def _resolve_structured_dataset_id(
+    *,
+    dataset_id: Optional[int],
+    dataset_name: Optional[str],
+    mode_label: str,
+) -> int:
+    if dataset_id is not None:
+        _ensure_dataset_exists(int(dataset_id))
+        return int(dataset_id)
+
+    tables = _list_tables_compact(include_ids=True)
+    if not tables:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "No datasets are available. Upload a dataset first.",
+                "guidance": "Upload a CSV/TSV, then retry your query.",
+                "available_tables": [],
+            },
+        )
+
+    raw_name = (dataset_name or "").strip()
+    if not raw_name:
+        if len(tables) == 1:
+            only = tables[0].get("dataset_id")
+            if only is not None:
+                return int(only)
+
+        raise _strict_lookup_error(
+            status_code=409,
+            message=(
+                f"{mode_label} query requires dataset_name when multiple datasets are available."
+            ),
+        )
+
+    normalized = sanitize_dataset_name(raw_name)
+    needle = re.sub(r"[^a-z0-9]+", " ", (normalized or raw_name).lower()).strip()
+
+    def _name_token(value: Optional[str]) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+    exact_matches: List[Dict[str, Any]] = []
+    partial_matches: List[Dict[str, Any]] = []
+
+    for table in tables:
+        name_token = _name_token(str(table.get("name") or ""))
+        file_token = _name_token(str(table.get("source_filename") or "").rsplit(".", 1)[0])
+        if needle and (needle == name_token or needle == file_token):
+            exact_matches.append(table)
+        elif needle and (
+            needle in name_token or needle in file_token
+        ):
+            partial_matches.append(table)
+
+    candidates = exact_matches or partial_matches
+    if not candidates:
+        raise _strict_lookup_error(
+            status_code=404,
+            message=f"Dataset name '{raw_name}' was not found.",
+        )
+
+    if len(candidates) > 1:
+        choices = ", ".join(str(item.get("name") or "") for item in candidates[:5])
+        raise _strict_lookup_error(
+            status_code=409,
+            message=(
+                f"Dataset name '{raw_name}' is ambiguous. "
+                f"Please be more specific. Matches: {choices}"
+            ),
+        )
+
+    match_id = candidates[0].get("dataset_id")
+    if match_id is None:
+        raise _strict_lookup_error(
+            status_code=404,
+            message=f"Dataset name '{raw_name}' was not found.",
+        )
+    return int(match_id)
+
+
 def _metric_output_key(
     agg: str, column: Optional[str], index: int, used: set[str]
 ) -> str:
@@ -607,9 +690,14 @@ def _metric_output_key(
 
 
 def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
-    _ensure_dataset_exists(body.dataset_id)
+    resolved_dataset_id = _resolve_structured_dataset_id(
+        dataset_id=body.dataset_id,
+        dataset_name=body.dataset_name,
+        mode_label="Aggregate",
+    )
+    body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(body.dataset_id)
+    cols_payload = get_cols_for_dataset(resolved_dataset_id)
     valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
@@ -620,7 +708,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     if body.group_by and body.group_by not in valid_columns:
         raise HTTPException(status_code=400, detail="Invalid group_by column.")
 
-    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+    column_kinds = _infer_column_kinds(resolved_dataset_id, valid_columns)
 
     metric_specs: List[Dict[str, Optional[str]]] = []
     if body.metrics:
@@ -652,7 +740,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
 
     limit = max(1, min(body.limit, 500))
 
-    params: Dict[str, Any] = {"dataset_id": body.dataset_id, "limit": limit}
+    params: Dict[str, Any] = {"dataset_id": resolved_dataset_id, "limit": limit}
 
     def col_expr(column_name: str) -> str:
         return _column_json_text_expr(column_name)
@@ -726,7 +814,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
         if first_metric_column:
             sample = db.execute(
                 text("SELECT row_data FROM dataset_rows WHERE dataset_id = :dataset_id LIMIT 1"),
-                {"dataset_id": body.dataset_id},
+                {"dataset_id": resolved_dataset_id},
             ).fetchone()
             if sample and sample[0]:
                 row_data = sample[0]
@@ -760,7 +848,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
 
     first_metric_column = metric_specs[0].get("column")
     return AggregateResponse(
-        dataset_id=body.dataset_id,
+        dataset_id=resolved_dataset_id,
         metric_column=first_metric_column,
         metrics=metric_metadata if len(metric_specs) > 1 else None,
         group_by_column=body.group_by,
@@ -774,9 +862,14 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
 
 
 def _run_filter_query(body: FilterRequest) -> FilterResponse:
-    _ensure_dataset_exists(body.dataset_id)
+    resolved_dataset_id = _resolve_structured_dataset_id(
+        dataset_id=body.dataset_id,
+        dataset_name=body.dataset_name,
+        mode_label="Filter",
+    )
+    body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(body.dataset_id)
+    cols_payload = get_cols_for_dataset(resolved_dataset_id)
     ordered_columns = [
         col["normalized_name"]
         for col in cols_payload["columns"]
@@ -801,12 +894,12 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
     if sort_by is not None and sort_by not in valid_columns:
         raise HTTPException(status_code=400, detail=f"Invalid sort_by column: {sort_by}")
 
-    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+    column_kinds = _infer_column_kinds(resolved_dataset_id, valid_columns)
 
     limit = max(1, min(body.limit, 500))
     offset = max(0, body.offset)
     params: Dict[str, Any] = {
-        "dataset_id": body.dataset_id,
+        "dataset_id": resolved_dataset_id,
         "limit": limit,
         "offset": offset,
     }
@@ -893,12 +986,12 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
             item["row_data"] = flattened
 
         row_index = int(item.get("row_index", 0))
-        item["highlight_id"] = f"d{body.dataset_id}_r{row_index}_{highlight_column}"
+        item["highlight_id"] = f"d{resolved_dataset_id}_r{row_index}_{highlight_column}"
         rows.append(item)
     url = build_filter_virtual_table_url(body) if row_count_raw else None
 
     return FilterResponse(
-        dataset_id=body.dataset_id,
+        dataset_id=resolved_dataset_id,
         rowsResult=rows,
         row_count=int(row_count_raw or 0),
         sql_query=_render_sql(sql, params),
@@ -909,18 +1002,23 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
 def _run_filter_row_indices_query(
     body: FilterRowIndicesRequest,
 ) -> FilterRowIndicesResponse:
-    _ensure_dataset_exists(body.dataset_id)
+    resolved_dataset_id = _resolve_structured_dataset_id(
+        dataset_id=body.dataset_id,
+        dataset_name=body.dataset_name,
+        mode_label="Filter row indices",
+    )
+    body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(body.dataset_id)
+    cols_payload = get_cols_for_dataset(resolved_dataset_id)
     valid_columns = {col["normalized_name"] for col in cols_payload["columns"]}
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
-    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+    column_kinds = _infer_column_kinds(resolved_dataset_id, valid_columns)
 
     max_rows = max(1, min(int(body.max_rows), 1000))
     params: Dict[str, Any] = {
-        "dataset_id": body.dataset_id,
+        "dataset_id": resolved_dataset_id,
         "max_rows": max_rows,
     }
 
@@ -954,7 +1052,7 @@ def _run_filter_row_indices_query(
     truncated = total_match_count > len(row_indices)
 
     return FilterRowIndicesResponse(
-        dataset_id=body.dataset_id,
+        dataset_id=resolved_dataset_id,
         row_indices=row_indices,
         total_match_count=total_match_count,
         truncated=truncated,

@@ -115,6 +115,25 @@ def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
     assert explicit_resp.json() == inferred_resp.json()
 
 
+def test_query_table_alias_matches_query(client):
+    dataset_id = _ingest_people(client)
+    payload = {
+        "mode": "filter",
+        "filter": {
+            "dataset_id": dataset_id,
+            "filters": [{"column": "city", "operator": "=", "value": "London"}],
+            "limit": 10,
+            "offset": 0,
+        },
+    }
+    resp_query = client.post("/query", json=payload)
+    resp_alias = client.post("/query_table", json=payload)
+
+    assert resp_query.status_code == 200
+    assert resp_alias.status_code == 200
+    assert resp_alias.json() == resp_query.json()
+
+
 def test_unified_query_requires_one_payload(client):
     resp = client.post("/query", json={"mode": "filter"})
     assert resp.status_code == 422
@@ -146,6 +165,7 @@ def test_openapi_exposes_unified_query_only(client):
     assert resp.status_code == 200
     paths = resp.json().get("paths", {})
     assert "/query" in paths
+    assert "/query_table" in paths
     assert "/semantic_query" not in paths
     assert "/aggregate" not in paths
     assert "/filter" not in paths
@@ -197,3 +217,83 @@ def test_unified_query_accepts_legacy_aggregate_shape(client):
     assert body["dataset_id"] == dataset_id
     assert body["group_by_column"] == "city"
     assert body["metric_column"] == "age"
+
+
+def test_unified_query_filter_resolves_dataset_name(client):
+    dataset_id = _ingest_people(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "people",
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["row_count"] == 1
+
+
+def test_unified_query_aggregate_resolves_dataset_name(client):
+    dataset_id = _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_name": "sales",
+                "operation": "count",
+                "group_by": "Sales Person",
+                "limit": 50,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["group_by_column"] == "Sales Person"
+
+
+def test_unified_query_filter_missing_dataset_prompts_with_guidance(client):
+    _ingest_people(client)
+    _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "dataset_name" in detail["message"]
+    assert "guidance" in detail
+    assert isinstance(detail.get("available_tables"), list)
+
+
+def test_unified_query_filter_auto_resolves_single_dataset_without_name(client):
+    dataset_id = _ingest_people(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["row_count"] == 1
