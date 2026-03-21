@@ -9,7 +9,7 @@ import {
   type TableSummary,
 } from "../api";
 import DataTable from "../components/DataTable";
-import logo from "../images/logo.png";
+import logo from "../images/logo-64.webp";
 import returnIcon from "../images/return.png";
 
 type HighlightTarget = {

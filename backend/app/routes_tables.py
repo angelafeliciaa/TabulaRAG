@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 
 from app.db import SessionLocal, engine
 from app.auth import require_auth, get_user_id_from_auth
@@ -26,6 +26,12 @@ def _slice_column_expr(column_name: str) -> str:
         json_key = column_name.replace("\\", "\\\\").replace('"', '\\"')
         return f"COALESCE(json_extract(row_data, '$.\"{json_key}\".normalized'), json_extract(row_data, '$.\"{json_key}\"'))"
     return f"COALESCE((row_data::jsonb -> '{escaped}') ->> 'normalized', row_data::jsonb ->> '{escaped}')"
+
+
+def _slice_search_like_pattern(search: str) -> str:
+    """Escape search string for use in a LIKE pattern (%, _, \)."""
+    s = (search or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{s}%"
 
 
 def _slice_order_by_clause(sort_column: str, sort_direction: str) -> str:
@@ -82,6 +88,7 @@ def list_tables(include_pending: bool = False, auth: dict = Depends(require_auth
             {
                 "dataset_id": d.id,
                 "name": d.name,
+                "description": d.description,
                 "source_filename": d.source_filename,
                 "row_count": d.row_count,
                 "column_count": d.column_count,
@@ -205,14 +212,50 @@ def get_table_slice(
         default="asc",
         description="Sort direction: 'asc' or 'desc'. Used only when sort_column is set.",
     ),
+    search: Optional[str] = Query(
+        default=None,
+        description="When set, only rows where any cell (original or normalized value) contains this string (case-insensitive) are returned. Pagination applies to the filtered set.",
+    ),
     auth: dict = Depends(require_auth),
 ):
     user_id = get_user_id_from_auth(auth)
     with SessionLocal() as db:
         dataset = _check_dataset_access(db, dataset_id, user_id)
 
+        search_trimmed = search.strip() if search else None
+        like_pattern = _slice_search_like_pattern(search_trimmed) if search_trimmed else None
+
+        if engine.dialect.name == "sqlite":
+            search_filter = (
+                text("LOWER(CAST(row_data AS TEXT)) LIKE LOWER(:pattern) ESCAPE '\\'")
+                if like_pattern is not None
+                else None
+            )
+        else:
+            search_filter = (
+                text("LOWER(row_data::text) LIKE LOWER(:pattern) ESCAPE E'\\\\'")
+                if like_pattern is not None
+                else None
+            )
+
+        base_where = DatasetRow.dataset_id == dataset_id
+        if search_filter is not None:
+            base_query = select(DatasetRow).where(base_where).where(search_filter)
+        else:
+            base_query = select(DatasetRow).where(base_where)
+
+        if search_trimmed and like_pattern is not None:
+            count_query = (
+                select(func.count())
+                .select_from(DatasetRow)
+                .where(base_where)
+                .where(search_filter)
+            )
+            row_count = db.execute(count_query, {"pattern": like_pattern}).scalar() or 0
+        else:
+            row_count = dataset.row_count
+
         if sort_column and sort_direction:
-            # Validate sort_column exists
             col_match = (
                 db.execute(
                     select(DatasetColumn)
@@ -226,29 +269,17 @@ def get_table_slice(
                 raise HTTPException(status_code=400, detail=f"Unknown sort_column: {sort_column}")
             dir_norm = sort_direction.lower() in ("desc", "descending") and "desc" or "asc"
             order_sql = _slice_order_by_clause(sort_column, dir_norm)
-            rows = (
-                db.execute(
-                    select(DatasetRow)
-                    .where(DatasetRow.dataset_id == dataset_id)
-                    .order_by(text(order_sql))
-                    .offset(offset)
-                    .limit(limit)
-                )
-                .scalars()
-                .all()
-            )
+            query = base_query.order_by(text(order_sql)).offset(offset).limit(limit)
+            if like_pattern is not None:
+                rows = db.execute(query, {"pattern": like_pattern}).scalars().all()
+            else:
+                rows = db.execute(query).scalars().all()
         else:
-            rows = (
-                db.execute(
-                    select(DatasetRow)
-                    .where(DatasetRow.dataset_id == dataset_id)
-                    .order_by(DatasetRow.row_index)
-                    .offset(offset)
-                    .limit(limit)
-                )
-                .scalars()
-                .all()
-            )
+            query = base_query.order_by(DatasetRow.row_index).offset(offset).limit(limit)
+            if like_pattern is not None:
+                rows = db.execute(query, {"pattern": like_pattern}).scalars().all()
+            else:
+                rows = db.execute(query).scalars().all()
 
         columns = (
             db.execute(
@@ -264,7 +295,7 @@ def get_table_slice(
             "dataset_id": dataset_id,
             "offset": offset,
             "limit": limit,
-            "row_count": dataset.row_count,
+            "row_count": row_count,
             "column_count": dataset.column_count,
             "has_header": dataset.has_header,
             "rows": [

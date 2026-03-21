@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import logo from "../images/logo.png";
+import logo from "../images/logo-64.webp";
 import { getGithubClientId, getGoogleClientId, generateOAuthState, type OAuthProviders } from "../api";
 
 export default function Login() {

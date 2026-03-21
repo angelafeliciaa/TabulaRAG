@@ -11,6 +11,7 @@ from sqlalchemy import insert, text, select
 from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
+    ensure_dataset_description_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     set_dataset_index_ready,
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_dataset_columns_normalized_columns()
     ensure_dataset_index_ready_column()
+    ensure_dataset_description_column()
     try:
         from app.embeddings import get_model
         get_model()
@@ -129,6 +131,19 @@ def validate_filename(filename: str) -> None:
         raise HTTPException(
             status_code=400, detail="File must have a .csv or .tsv extension."
         )
+
+
+def _normalize_dataset_description(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    # Remove control characters while preserving common whitespace like spaces/newlines.
+    cleaned = "".join(
+        ch for ch in raw if ord(ch) >= 32 or ch in {"\n", "\t", "\r"}
+    ).strip()
+    if not cleaned:
+        return None
+    # Keep descriptions lightweight for storage/indexing.
+    return cleaned[:1024]
 
 
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
@@ -467,6 +482,7 @@ async def auth_google_callback(body: dict):
 def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
+    dataset_description: str | None = Form(None),
     has_header: bool = Form(True),
     auth: dict = Depends(require_auth),
 ):
@@ -479,12 +495,14 @@ def ingest_table(
     dataset_display_name = normalize_dataset_name_or_raise(
         dataset_name or os.path.splitext(file.filename)[0]
     )
+    dataset_description_value = _normalize_dataset_description(dataset_description)
 
     user_id = get_user_id_from_auth(auth)
     with SessionLocal() as db:
         dataset = Dataset(
             user_id=user_id,
             name=dataset_display_name,
+            description=dataset_description_value,
             source_filename=file.filename,
             delimiter=detected_delimiter,
             has_header=has_header,
@@ -508,6 +526,7 @@ def ingest_table(
         db.commit()
         dataset_id = dataset.id
         dataset_name_value = dataset.name
+        dataset_description_value = dataset.description
         dataset_delimiter = dataset.delimiter
         dataset_has_header = dataset.has_header
 
@@ -564,6 +583,7 @@ def ingest_table(
         "columns": len(normalized_headers),
         "delimiter": dataset_delimiter,
         "has_header": dataset_has_header,
+        "description": dataset_description_value,
     }
 
 
