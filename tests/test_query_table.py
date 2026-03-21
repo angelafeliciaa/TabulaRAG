@@ -51,6 +51,16 @@ def assert_sorted(values: List[Any], reverse: bool = False) -> None:
     assert values == sorted(values, reverse=reverse)
 
 
+def _extract_numeric_row_values(rows: List[Dict[str, Any]], column: str) -> List[float]:
+    values: List[float] = []
+    for row in rows:
+        raw = row.get("row_data", {}).get(column)
+        if raw in (None, ""):
+            continue
+        values.append(float(raw))
+    return values
+
+
 def _filter_query(
     client,
     dataset_id: int,
@@ -93,12 +103,12 @@ def _aggregate_query(
 def query_table_dataset_id(client):
     csv_content = (
         b"product,revenue,region,date\n"
-        b"Widget,100,North,20240115\n"
-        b"Widget,200,South,20240210\n"
-        b"Gadget,150,North,20240305\n"
-        b"Gizmo,50,East,20240120\n"
-        b"Gizmo,,West,20240401\n"
-        b"Widget,120,East,20231231\n"
+        b"Widget,100,North,2024-01-15\n"
+        b"Widget,200,South,2024-02-10\n"
+        b"Gadget,150,North,2024-03-05\n"
+        b"Gizmo,50,East,2024-01-20\n"
+        b"Gizmo,,West,2024-04-01\n"
+        b"Widget,120,East,2023-12-31\n"
     )
     resp = client.post(
         "/ingest",
@@ -251,7 +261,7 @@ class TestSorting:
         resp = _post_query_table(client, body)
 
         assert resp.status_code == 200
-        revenues = [float(r["row_data"]["revenue"]) for r in resp.json()["rowsResult"] if r["row_data"]["revenue"] is not None]
+        revenues = _extract_numeric_row_values(resp.json()["rowsResult"], "revenue")
         assert_sorted(revenues, reverse=False)
 
     def test_sort_descending(self, client, query_table_dataset_id):
@@ -271,7 +281,7 @@ class TestSorting:
         resp = _post_query_table(client, body)
 
         assert resp.status_code == 200
-        revenues = [float(r["row_data"]["revenue"]) for r in resp.json()["rowsResult"] if r["row_data"]["revenue"] is not None]
+        revenues = _extract_numeric_row_values(resp.json()["rowsResult"], "revenue")
         assert_sorted(revenues, reverse=True)
 
 
@@ -472,7 +482,7 @@ class TestCombinedQueries:
             metric_column="revenue",
             group_by="product",
             filters=[
-                {"column": "date", "operator": ">", "value": "2023"},
+                {"column": "date", "operator": ">", "value": "2024-01-01"},
                 {"column": "region", "operator": "!=", "value": "West", "logical_operator": "AND"},
             ],
             limit=2,
@@ -484,6 +494,35 @@ class TestCombinedQueries:
         grouped = {row["group_value"]: float(row["aggregate_value"]) for row in rows}
         assert grouped == {"Widget": 300.0, "Gadget": 150.0}
 
+    def test_multiple_metrics_sum_and_avg_per_product(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        body = build_query(
+            mode="aggregate",
+            dataset_id=dataset_id,
+            operation="sum",
+            metric_column="revenue",
+            group_by="product",
+            metrics=[
+                {"column": "revenue", "agg": "sum"},
+                {"column": "revenue", "agg": "avg"},
+            ],
+            limit=10,
+        )
+        resp = _post_query_table(client, body)
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["metrics"] is not None
+        assert len(payload["metrics"]) == 2
+
+        metric_keys = [item["output_key"] for item in payload["metrics"]]
+        assert "avg_revenue" in metric_keys
+
+        rows = payload["rowsResult"]
+        widget_row = next(row for row in rows if row["group_value"] == "Widget")
+        assert float(widget_row["aggregate_value"]) == pytest.approx(420.0)
+        assert float(widget_row["avg_revenue"]) == pytest.approx(140.0)
+
 
 class TestTimeBasedFiltering:
     def test_filter_date_after(self, client, query_table_dataset_id):
@@ -491,24 +530,24 @@ class TestTimeBasedFiltering:
         resp = _filter_query(
             client,
             dataset_id=dataset_id,
-            filters=[{"column": "date", "operator": ">", "value": "2023"}],
+            filters=[{"column": "date", "operator": ">", "value": "2024-01-31"}],
         )
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["row_count"] == 5
+        assert body["row_count"] == 3
 
     def test_filter_date_before(self, client, query_table_dataset_id):
         dataset_id = query_table_dataset_id
         resp = _filter_query(
             client,
             dataset_id=dataset_id,
-            filters=[{"column": "date", "operator": "<", "value": "2024"}],
+            filters=[{"column": "date", "operator": "<", "value": "2024-01-31"}],
         )
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["row_count"] == 1
+        assert body["row_count"] == 3
 
 
 class TestStringMatching:

@@ -23,12 +23,15 @@ from app.db import SessionLocal
 from app.normalization import (
     flatten_row_data_to_normalized,
     flatten_row_data_to_original,
+    get_normalized_value,
     get_column_currency,
     get_column_unit,
+    parse_number,
     strip_internal_fields,
 )
 
 router = APIRouter()
+_ISO_DATE_VALUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _strip_money(value: str) -> str:
@@ -124,10 +127,88 @@ def _render_sql(sql_template: str, params: Dict[str, Any]) -> str:
     return "\n".join(line.rstrip() for line in rendered.strip().splitlines())
 
 
+def _coerce_row_data_dict(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _is_iso_date_value(value: Any) -> bool:
+    if value is None:
+        return False
+    text_value = str(value).strip()
+    return bool(_ISO_DATE_VALUE_RE.match(text_value))
+
+
+def _infer_column_kinds(
+    dataset_id: int, valid_columns: set[str], sample_rows: int = 200
+) -> Dict[str, Literal["text", "number", "date"]]:
+    kind_scores: Dict[str, Dict[str, int]] = {
+        col: {"text": 0, "number": 0, "date": 0} for col in valid_columns
+    }
+    params = {"dataset_id": dataset_id, "sample_rows": max(1, min(sample_rows, 1000))}
+
+    with SessionLocal() as db:
+        sample_rows_raw = db.execute(
+            text(
+                """
+                SELECT row_data
+                FROM dataset_rows
+                WHERE dataset_id = :dataset_id
+                ORDER BY row_index ASC
+                LIMIT :sample_rows
+                """
+            ),
+            params,
+        ).fetchall()
+
+    for row in sample_rows_raw:
+        row_data = _coerce_row_data_dict(row[0] if row else None)
+        if not row_data:
+            continue
+
+        typed = row_data.get("__typed__")
+        if isinstance(typed, dict):
+            for col, item in typed.items():
+                if col not in valid_columns or not isinstance(item, dict):
+                    continue
+                item_type = item.get("type")
+                if item_type == "date":
+                    kind_scores[col]["date"] += 2
+                elif item_type in {"number", "money", "measurement"}:
+                    kind_scores[col]["number"] += 2
+
+        for col in valid_columns:
+            normalized_value = get_normalized_value(row_data, col)
+            if normalized_value is None:
+                continue
+            if _is_iso_date_value(normalized_value):
+                kind_scores[col]["date"] += 1
+            elif parse_number(normalized_value) is not None:
+                kind_scores[col]["number"] += 1
+            else:
+                kind_scores[col]["text"] += 1
+
+    kinds: Dict[str, Literal["text", "number", "date"]] = {}
+    for col, scores in kind_scores.items():
+        winner = max(scores.items(), key=lambda item: (item[1], item[0]))[0]
+        kinds[col] = winner  # type: ignore[assignment]
+    return kinds
+
+
 def _build_where_clauses(
     filters: Optional[List["FilterCondition"]],
     valid_columns: set[str],
     params: Dict[str, Any],
+    column_kinds: Optional[Dict[str, Literal["text", "number", "date"]]] = None,
 ) -> List[str]:
     where_clauses = ["dataset_id = :dataset_id"]
 
@@ -136,6 +217,9 @@ def _build_where_clauses(
 
     def num_col_expr(column_name: str) -> str:
         return _numeric_sql_expr(col_expr(column_name))
+
+    def is_date_column(column_name: str) -> bool:
+        return bool(column_kinds and column_kinds.get(column_name) == "date")
 
     if not filters:
         return where_clauses
@@ -191,12 +275,17 @@ def _build_where_clauses(
                 )
             low_key = f"fval_{i}_low"
             high_key = f"fval_{i}_high"
-            params[low_key] = _strip_money(parts[0])
-            params[high_key] = _strip_money(parts[1])
-            current_expr = (
-                f"{num_col_expr(f.column)} BETWEEN "
-                f"{_numeric_bind_expr(low_key)} AND {_numeric_bind_expr(high_key)}"
-            )
+            if is_date_column(f.column):
+                params[low_key] = parts[0]
+                params[high_key] = parts[1]
+                current_expr = f"{col} BETWEEN :{low_key} AND :{high_key}"
+            else:
+                params[low_key] = _strip_money(parts[0])
+                params[high_key] = _strip_money(parts[1])
+                current_expr = (
+                    f"{num_col_expr(f.column)} BETWEEN "
+                    f"{_numeric_bind_expr(low_key)} AND {_numeric_bind_expr(high_key)}"
+                )
         else:
             if f.value is None:
                 raise HTTPException(
@@ -208,10 +297,14 @@ def _build_where_clauses(
                 params[vp] = f.value
                 current_expr = f"{col} {f.operator} :{vp}"
             elif f.operator in (">", ">=", "<", "<="):
-                params[vp] = _strip_money(f.value)
-                current_expr = (
-                    f"{num_col_expr(f.column)} {f.operator} {_numeric_bind_expr(vp)}"
-                )
+                if is_date_column(f.column):
+                    params[vp] = f.value
+                    current_expr = f"{col} {f.operator} :{vp}"
+                else:
+                    params[vp] = _strip_money(f.value)
+                    current_expr = (
+                        f"{num_col_expr(f.column)} {f.operator} {_numeric_bind_expr(vp)}"
+                    )
             else:
                 params[vp] = f.value
                 current_expr = f"{col} {f.operator} :{vp}"
@@ -301,6 +394,13 @@ class QueryResponse(BaseModel):
 class AggregateResponse(BaseModel):
     dataset_id: int
     metric_column: Optional[str]
+    metrics: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "Optional multi-metric descriptor when request includes metrics[]. "
+            "Each entry includes agg, column, and output_key."
+        ),
+    )
     group_by_column: Optional[str]
     group_by_date_part: Optional[str] = None
     metric_currency: Optional[str] = Field(
@@ -369,6 +469,7 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
         "dataset_id": body.dataset_id,
         "operation": body.operation,
         "metric_column": body.metric_column,
+        "metrics": body.metrics,
         "group_by": body.group_by,
         "group_by_date_part": body.group_by_date_part,
         # Keep filters as a list (not null) so older clients/validators that require
@@ -387,6 +488,10 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
         "mode": "filter",
         "dataset_id": body.dataset_id,
         "filters": [f.model_dump() for f in body.filters] if body.filters else [],
+        "columns": body.columns,
+        "sort_by": body.sort_by,
+        "sort_order": body.sort_order,
+        "sort_as": body.sort_as,
         "limit": 500,
         "offset": 0,
     }
@@ -483,6 +588,24 @@ def _ensure_dataset_exists(dataset_id: int) -> None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
 
+def _metric_output_key(
+    agg: str, column: Optional[str], index: int, used: set[str]
+) -> str:
+    if column:
+        base = f"{agg}_{re.sub(r'[^a-zA-Z0-9]+', '_', column).strip('_').lower()}"
+    else:
+        base = agg
+    if not base:
+        base = f"metric_{index + 1}"
+    key = base
+    suffix = 2
+    while key in used:
+        key = f"{base}_{suffix}"
+        suffix += 1
+    used.add(key)
+    return key
+
+
 def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     _ensure_dataset_exists(body.dataset_id)
 
@@ -497,6 +620,36 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     if body.group_by and body.group_by not in valid_columns:
         raise HTTPException(status_code=400, detail="Invalid group_by column.")
 
+    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+
+    metric_specs: List[Dict[str, Optional[str]]] = []
+    if body.metrics:
+        for metric in body.metrics:
+            agg = str(metric.get("agg", "")).strip().lower()
+            metric_col_raw = metric.get("column")
+            metric_column = (
+                str(metric_col_raw).strip()
+                if metric_col_raw is not None
+                else None
+            )
+            if metric_column is not None and metric_column not in valid_columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid metric column: {metric_column}",
+                )
+            if agg != "count" and not metric_column:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Metric agg '{agg}' requires a column.",
+                )
+            metric_specs.append({"agg": agg, "column": metric_column})
+    else:
+        operation = body.operation or "count"
+        metric_specs.append({"agg": operation, "column": body.metric_column})
+
+    if not metric_specs:
+        raise HTTPException(status_code=400, detail="At least one metric is required.")
+
     limit = max(1, min(body.limit, 500))
 
     params: Dict[str, Any] = {"dataset_id": body.dataset_id, "limit": limit}
@@ -504,13 +657,11 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     def col_expr(column_name: str) -> str:
         return _column_json_text_expr(column_name)
 
-    if body.operation == "count":
-        metric_sql = "COUNT(*) AS aggregate_value"
-    else:
-        numeric_expr = _numeric_sql_expr(col_expr(body.metric_column or ""))
-        metric_sql = f"{body.operation.upper()}({numeric_expr}) AS aggregate_value"
-
     select_parts = []
+    metric_aliases: List[str] = []
+    metric_metadata: List[Dict[str, Any]] = []
+    used_output_keys: set[str] = set()
+
     group_by_sql = ""
     order_by_sql = ""
     if body.group_by:
@@ -529,12 +680,32 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     else:
         order_by_sql = ""
 
-    select_parts.append(metric_sql)
+    for i, metric in enumerate(metric_specs):
+        agg = str(metric.get("agg") or "").lower()
+        metric_column = metric.get("column")
+        alias = "aggregate_value" if i == 0 else f"metric_{i}"
+        metric_aliases.append(alias)
+
+        if agg == "count":
+            metric_expr = "COUNT(*)"
+        else:
+            numeric_expr = _numeric_sql_expr(col_expr(metric_column or ""))
+            metric_expr = f"{agg.upper()}({numeric_expr})"
+
+        select_parts.append(f"{metric_expr} AS {alias}")
+        metric_metadata.append(
+            {
+                "agg": agg,
+                "column": metric_column,
+                "output_key": _metric_output_key(agg, metric_column, i, used_output_keys),
+            }
+        )
 
     where_clauses = _build_where_clauses(
         filters=body.filters,
         valid_columns=valid_columns,
         params=params,
+        column_kinds=column_kinds,
     )
 
     sql = f"""
@@ -551,7 +722,8 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     with SessionLocal() as db:
         rows_raw = db.execute(text(sql), params).mappings().all()
 
-        if body.metric_column:
+        first_metric_column = metric_specs[0].get("column")
+        if first_metric_column:
             sample = db.execute(
                 text("SELECT row_data FROM dataset_rows WHERE dataset_id = :dataset_id LIMIT 1"),
                 {"dataset_id": body.dataset_id},
@@ -561,8 +733,8 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
                 if isinstance(row_data, str):
                     row_data = json.loads(row_data)
                 if isinstance(row_data, dict):
-                    metric_currency = get_column_currency(row_data, body.metric_column)
-                    metric_unit = get_column_unit(row_data, body.metric_column)
+                    metric_currency = get_column_currency(row_data, first_metric_column)
+                    metric_unit = get_column_unit(row_data, first_metric_column)
 
     rows: List[Dict[str, Any]] = []
     for r in rows_raw:
@@ -570,13 +742,27 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
         # normalize non-grouped response shape
         if not body.group_by and "group_value" not in item:
             item["group_value"] = None
+
+        if len(metric_specs) > 1:
+            first_key = metric_metadata[0]["output_key"]
+            if first_key != "aggregate_value":
+                item[first_key] = item.get("aggregate_value")
+
+            for i in range(1, len(metric_specs)):
+                alias = metric_aliases[i]
+                value = item.pop(alias, None)
+                out_key = metric_metadata[i]["output_key"]
+                item[out_key] = value
+
         rows.append(item)
 
     url = build_virtual_table_url(body, rows) if rows else None
 
+    first_metric_column = metric_specs[0].get("column")
     return AggregateResponse(
         dataset_id=body.dataset_id,
-        metric_column=body.metric_column,
+        metric_column=first_metric_column,
+        metrics=metric_metadata if len(metric_specs) > 1 else None,
         group_by_column=body.group_by,
         group_by_date_part=body.group_by_date_part,
         metric_currency=metric_currency,
@@ -600,6 +786,23 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
+    projected_columns: Optional[List[str]] = None
+    if body.columns:
+        deduped_columns = list(dict.fromkeys(body.columns))
+        invalid_projection = [col for col in deduped_columns if col not in valid_columns]
+        if invalid_projection:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid projection columns: {', '.join(invalid_projection)}",
+            )
+        projected_columns = deduped_columns
+
+    sort_by = body.sort_by
+    if sort_by is not None and sort_by not in valid_columns:
+        raise HTTPException(status_code=400, detail=f"Invalid sort_by column: {sort_by}")
+
+    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+
     limit = max(1, min(body.limit, 500))
     offset = max(0, body.offset)
     params: Dict[str, Any] = {
@@ -612,16 +815,38 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         filters=body.filters,
         valid_columns=valid_columns,
         params=params,
+        column_kinds=column_kinds,
     )
+
+    if sort_by:
+        sort_kind = body.sort_as
+        if sort_kind == "auto":
+            inferred_kind = column_kinds.get(sort_by, "text")
+            sort_kind = "number" if inferred_kind == "number" else inferred_kind
+
+        sort_col = _column_json_text_expr(sort_by)
+        if sort_kind == "number":
+            sort_expr = _numeric_sql_expr(sort_col)
+        else:
+            # For dates we sort normalized ISO text (YYYY-MM-DD), which preserves chronology.
+            sort_expr = sort_col
+
+        sort_direction = "DESC" if body.sort_order == "desc" else "ASC"
+        if _is_sqlite():
+            order_sql = f"{sort_expr} {sort_direction}, row_index ASC"
+        else:
+            order_sql = f"{sort_expr} {sort_direction} NULLS LAST, row_index ASC"
+    else:
+        order_sql = "row_index ASC"
 
     sql = """
         SELECT row_index, row_data
         FROM dataset_rows
         WHERE {where_sql}
-        ORDER BY row_index ASC
+        ORDER BY {order_sql}
         LIMIT :limit
         OFFSET :offset
-    """.format(where_sql=" AND ".join(where_clauses))
+    """.format(where_sql=" AND ".join(where_clauses), order_sql=order_sql)
 
     count_sql = """
         SELECT COUNT(*) AS row_count
@@ -648,17 +873,25 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         item = dict(r)
         row_data = item.get("row_data")
         if isinstance(row_data, dict):
-            item["row_data"] = flatten_row_data_to_original(row_data)
+            flattened = flatten_row_data_to_original(row_data)
         elif isinstance(row_data, str):
             try:
                 parsed = json.loads(row_data)
                 if isinstance(parsed, str):
                     parsed = json.loads(parsed)
-                item["row_data"] = (
+                flattened = (
                     flatten_row_data_to_original(parsed) if isinstance(parsed, dict) else {}
                 )
             except Exception:
-                item["row_data"] = {}
+                flattened = {}
+        else:
+            flattened = {}
+
+        if projected_columns is not None:
+            item["row_data"] = {col: flattened.get(col) for col in projected_columns}
+        else:
+            item["row_data"] = flattened
+
         row_index = int(item.get("row_index", 0))
         item["highlight_id"] = f"d{body.dataset_id}_r{row_index}_{highlight_column}"
         rows.append(item)
@@ -683,6 +916,8 @@ def _run_filter_row_indices_query(
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
+    column_kinds = _infer_column_kinds(body.dataset_id, valid_columns)
+
     max_rows = max(1, min(int(body.max_rows), 1000))
     params: Dict[str, Any] = {
         "dataset_id": body.dataset_id,
@@ -693,6 +928,7 @@ def _run_filter_row_indices_query(
         filters=body.filters,
         valid_columns=valid_columns,
         params=params,
+        column_kinds=column_kinds,
     )
 
     sql = """
@@ -728,6 +964,15 @@ def _run_filter_row_indices_query(
 
 # ── Endpoints ──────────────────────────────────────────────────────
 
+@router.post(
+    "/query_table",
+    response_model=UnifiedQueryResponse,
+    summary="Unified query endpoint for semantic, aggregate, and filter modes",
+    description=(
+        "Alias of POST /query. Single structured query endpoint. Provide mode and matching payload. "
+        "Responses are mode-specific and identical to legacy route outputs."
+    ),
+)
 @router.post(
     "/query",
     response_model=UnifiedQueryResponse,

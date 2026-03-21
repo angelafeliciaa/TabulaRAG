@@ -174,8 +174,45 @@ class FilterRequest(BaseModel):
         description="ID of the dataset to filter. Call GET /tables/context first to discover valid IDs and columns."
     )
     filters: Optional[List[FilterCondition]] = Field(default=None)
+    columns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional projection list. When provided, response rows include only these normalized column names."
+        ),
+    )
+    sort_by: Optional[str] = Field(
+        default=None,
+        description="Optional sort column (normalized_name).",
+    )
+    sort_order: Literal["asc", "desc"] = Field(
+        default="asc",
+        description="Sort direction when sort_by is provided.",
+    )
+    sort_as: Literal["auto", "text", "number", "date"] = Field(
+        default="auto",
+        description=(
+            "How to sort values: auto (infer), text, number, or date."
+        ),
+    )
     limit: int = 50
     offset: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        data = dict(raw)
+
+        if data.get("columns") is None and data.get("select") is not None:
+            data["columns"] = data.get("select")
+
+        if data.get("sort_by") is None and data.get("order_by") is not None:
+            data["sort_by"] = data.get("order_by")
+        if data.get("sort_order") is None and data.get("order") is not None:
+            data["sort_order"] = str(data.get("order")).lower()
+
+        return data
 
 
 class FilterRowIndicesRequest(BaseModel):
