@@ -485,6 +485,8 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
 
 
 def build_filter_virtual_table_url(body: FilterRequest) -> str:
+    limit = max(1, min(int(body.limit), 500))
+    offset = max(0, int(body.offset))
     payload = {
         "mode": "filter",
         "dataset_id": body.dataset_id,
@@ -493,14 +495,23 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
         "sort_by": body.sort_by,
         "sort_order": body.sort_order,
         "sort_as": body.sort_as,
-        "limit": 500,
-        "offset": 0,
+        "limit": limit,
+        "offset": offset,
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
 
 def _enforce_list_tables_first() -> bool:
     return os.getenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _require_dataset_name_when_multiple() -> bool:
+    return os.getenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "true").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -597,9 +608,22 @@ def _resolve_structured_dataset_id(
     dataset_name: Optional[str],
     mode_label: str,
 ) -> int:
-    if dataset_id is not None:
-        _ensure_dataset_exists(int(dataset_id))
-        return int(dataset_id)
+    raw_name = (dataset_name or "").strip()
+
+    # Backward-compatible path: explicit dataset_id without dataset_name.
+    if dataset_id is not None and not raw_name:
+        resolved_from_id = int(dataset_id)
+        _ensure_dataset_exists(resolved_from_id)
+        if _require_dataset_name_when_multiple():
+            tables_for_id = _list_tables_compact(include_ids=True)
+            if len(tables_for_id) > 1:
+                raise _strict_lookup_error(
+                    status_code=409,
+                    message=(
+                        f"{mode_label} query requires dataset_name when multiple datasets are available."
+                    ),
+                )
+        return resolved_from_id
 
     tables = _list_tables_compact(include_ids=True)
     if not tables:
@@ -612,63 +636,73 @@ def _resolve_structured_dataset_id(
             },
         )
 
-    raw_name = (dataset_name or "").strip()
-    if not raw_name:
-        if len(tables) == 1:
-            only = tables[0].get("dataset_id")
-            if only is not None:
-                return int(only)
+    if raw_name:
+        normalized = sanitize_dataset_name(raw_name)
+        needle = re.sub(r"[^a-z0-9]+", " ", (normalized or raw_name).lower()).strip()
 
-        raise _strict_lookup_error(
-            status_code=409,
-            message=(
-                f"{mode_label} query requires dataset_name when multiple datasets are available."
-            ),
-        )
+        def _name_token(value: Optional[str]) -> str:
+            return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
-    normalized = sanitize_dataset_name(raw_name)
-    needle = re.sub(r"[^a-z0-9]+", " ", (normalized or raw_name).lower()).strip()
+        exact_matches: List[Dict[str, Any]] = []
+        partial_matches: List[Dict[str, Any]] = []
 
-    def _name_token(value: Optional[str]) -> str:
-        return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+        for table in tables:
+            name_token = _name_token(str(table.get("name") or ""))
+            file_token = _name_token(str(table.get("source_filename") or "").rsplit(".", 1)[0])
+            if needle and (needle == name_token or needle == file_token):
+                exact_matches.append(table)
+            elif needle and (
+                needle in name_token or needle in file_token
+            ):
+                partial_matches.append(table)
 
-    exact_matches: List[Dict[str, Any]] = []
-    partial_matches: List[Dict[str, Any]] = []
+        candidates = exact_matches or partial_matches
+        if not candidates:
+            raise _strict_lookup_error(
+                status_code=404,
+                message=f"Dataset name '{raw_name}' was not found.",
+            )
 
-    for table in tables:
-        name_token = _name_token(str(table.get("name") or ""))
-        file_token = _name_token(str(table.get("source_filename") or "").rsplit(".", 1)[0])
-        if needle and (needle == name_token or needle == file_token):
-            exact_matches.append(table)
-        elif needle and (
-            needle in name_token or needle in file_token
-        ):
-            partial_matches.append(table)
+        if len(candidates) > 1:
+            choices = ", ".join(str(item.get("name") or "") for item in candidates[:5])
+            raise _strict_lookup_error(
+                status_code=409,
+                message=(
+                    f"Dataset name '{raw_name}' is ambiguous. "
+                    f"Please be more specific. Matches: {choices}"
+                ),
+            )
 
-    candidates = exact_matches or partial_matches
-    if not candidates:
-        raise _strict_lookup_error(
-            status_code=404,
-            message=f"Dataset name '{raw_name}' was not found.",
-        )
+        match_id = candidates[0].get("dataset_id")
+        if match_id is None:
+            raise _strict_lookup_error(
+                status_code=404,
+                message=f"Dataset name '{raw_name}' was not found.",
+            )
+        resolved_by_name = int(match_id)
 
-    if len(candidates) > 1:
-        choices = ", ".join(str(item.get("name") or "") for item in candidates[:5])
-        raise _strict_lookup_error(
-            status_code=409,
-            message=(
-                f"Dataset name '{raw_name}' is ambiguous. "
-                f"Please be more specific. Matches: {choices}"
-            ),
-        )
+        if dataset_id is not None and int(dataset_id) != resolved_by_name:
+            raise _strict_lookup_error(
+                status_code=409,
+                message=(
+                    f"dataset_id={dataset_id} does not match dataset_name '{raw_name}'. "
+                    "Use one dataset selection."
+                ),
+            )
 
-    match_id = candidates[0].get("dataset_id")
-    if match_id is None:
-        raise _strict_lookup_error(
-            status_code=404,
-            message=f"Dataset name '{raw_name}' was not found.",
-        )
-    return int(match_id)
+        return resolved_by_name
+
+    if len(tables) == 1:
+        only = tables[0].get("dataset_id")
+        if only is not None:
+            return int(only)
+
+    raise _strict_lookup_error(
+        status_code=409,
+        message=(
+            f"{mode_label} query requires dataset_name when multiple datasets are available."
+        ),
+    )
 
 
 def _metric_output_key(

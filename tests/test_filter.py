@@ -177,8 +177,8 @@ def test_filter_virtual_url_uses_list_filters_for_compatibility(client):
         {
             "dataset_id": dataset_id,
             "filters": None,
-            "limit": 10,
-            "offset": 0,
+            "limit": 3,
+            "offset": 1,
         },
     )
     assert resp.status_code == 200
@@ -193,6 +193,8 @@ def test_filter_virtual_url_uses_list_filters_for_compatibility(client):
         base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
     )
     assert payload["filters"] == []
+    assert payload["limit"] == 3
+    assert payload["offset"] == 1
 
     replay_resp = _query_filter(client, payload)
     assert replay_resp.status_code == 200

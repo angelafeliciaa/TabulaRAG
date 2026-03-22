@@ -297,3 +297,44 @@ def test_unified_query_filter_auto_resolves_single_dataset_without_name(client):
     body = resp.json()
     assert body["dataset_id"] == dataset_id
     assert body["row_count"] == 1
+
+
+def test_unified_query_filter_dataset_id_requires_name_when_multiple(client):
+    people_id = _ingest_people(client)
+    _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "dataset_id": people_id,
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "dataset_name" in detail["message"]
+
+
+def test_unified_query_filter_dataset_id_and_name_mismatch(client):
+    people_id = _ingest_people(client)
+    _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "dataset_id": people_id,
+                "dataset_name": "sales",
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "does not match dataset_name" in detail["message"]
