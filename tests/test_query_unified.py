@@ -165,16 +165,22 @@ def test_openapi_exposes_unified_query_only(client):
     assert resp.status_code == 200
     paths = resp.json().get("paths", {})
     assert "/query" in paths
-    assert "/query_table" in paths
+    assert "/query_table" not in paths
     assert "/semantic_query" not in paths
     assert "/aggregate" not in paths
     assert "/filter" not in paths
     assert "/filter/row-indices" not in paths
 
     post_query = paths["/query"]["post"]
+    assert post_query.get("operationId") == "run_query"
+    description = (post_query.get("description") or "").lower()
+    assert "filtering" in description
+    assert "pagination" in description
+    assert "contains" in description
     request_body = post_query["requestBody"]["content"]["application/json"]
     assert "examples" in request_body
     assert "semantic_question" in request_body["examples"]
+    assert "filter_top_k_sorted" in request_body["examples"]
     schema = request_body["schema"]
     assert "$ref" in schema
 

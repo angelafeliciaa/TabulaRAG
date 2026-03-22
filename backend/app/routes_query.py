@@ -294,7 +294,11 @@ def _build_where_clauses(
                     detail=f"Filter value is required for operator {f.operator} on column {f.column}.",
                 )
 
-            if f.operator in ("LIKE", "NOT LIKE"):
+            if f.operator in ("CONTAINS", "NOT CONTAINS"):
+                params[vp] = f"%{f.value}%"
+                like_op = "NOT LIKE" if f.operator == "NOT CONTAINS" else "LIKE"
+                current_expr = f"LOWER({col}) {like_op} LOWER(:{vp})"
+            elif f.operator in ("LIKE", "NOT LIKE"):
                 params[vp] = f.value
                 current_expr = f"{col} {f.operator} :{vp}"
             elif f.operator in (">", ">=", "<", "<="):
@@ -1099,24 +1103,39 @@ def _run_filter_row_indices_query(
 @router.post(
     "/query_table",
     response_model=UnifiedQueryResponse,
-    summary="Unified query endpoint for semantic, aggregate, and filter modes",
-    description=(
-        "Alias of POST /query. Single structured query endpoint. Provide mode and matching payload. "
-        "Responses are mode-specific and identical to legacy route outputs."
-    ),
+    include_in_schema=False,
 )
 @router.post(
     "/query",
     response_model=UnifiedQueryResponse,
-    summary="Unified query endpoint for semantic, aggregate, and filter modes",
+    operation_id="run_query",
+    summary="Run table queries (retrieve, filter, sort, aggregate)",
     description=(
-        "Single structured query endpoint. Provide mode and matching payload. "
-        "Responses are mode-specific and identical to legacy route outputs."
+        "Primary query endpoint for structured table querying.\n\n"
+        "Supported behaviors:\n"
+        "- Basic retrieval: show rows / first N rows\n"
+        "- Filtering: =, !=, >, >=, <, <=, LIKE, CONTAINS, IN, BETWEEN, IS NULL, IS NOT NULL\n"
+        "- Multiple filters: combine conditions with AND/OR\n"
+        "- Projection: return only selected columns\n"
+        "- Sorting + top-k: sort_by + sort_order + limit\n"
+        "- Pagination: limit + offset for next page\n"
+        "- Aggregation: count/sum/avg/min/max with optional filters\n"
+        "- Grouped aggregation: group_by (+ group_by_date_part for date columns)\n"
+        "- Multi-metric aggregation: metrics[] in one call\n\n"
+        "Usage guidance:\n"
+        "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
+        "- Provide exactly one matching payload block.\n"
+        "- Always use normalized column names from GET /tables/context."
     ),
 )
 def unified_query_endpoint(
     body: UnifiedQueryRequest = Body(
         ...,
+        description=(
+            "Single query payload. Set mode + matching block. "
+            "For user prompts like 'top 5 products by revenue', map to aggregate/group_by/limit. "
+            "For 'next 10 results', map to filter with limit + offset."
+        ),
         openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
     ),
 ):

@@ -175,13 +175,19 @@ def _delete_collection_safe(dataset_id: int) -> None:
 
 @router.get(
     "/tables",
-    summary="List all datasets",
+    operation_id="list_tables",
+    summary="List datasets",
     description=(
-        "Returns indexed datasets with IDs and metadata. "
-        "For query planning with columns/sample rows, call GET /tables/context."
+        "Returns dataset IDs and metadata. "
+        "Use this to discover available tables, then call GET /tables/context for column names and sample rows."
     ),
 )
-def list_tables(include_pending: bool = False):
+def list_tables(
+    include_pending: bool = Query(
+        default=False,
+        description="Include datasets that are still indexing. Default false returns only ready datasets.",
+    ),
+):
     return _list_tables_payload(
         include_pending=include_pending,
         include_context=False,
@@ -191,14 +197,19 @@ def list_tables(include_pending: bool = False):
 
 @router.get(
     "/tables/context",
-    summary="List datasets with columns and sample rows for query planning",
+    operation_id="list_tables_with_context",
+    summary="List datasets with query context",
     description=(
-        "Use this before POST /query. Returns dataset metadata plus query_context "
-        "with normalized/original columns and representative sample_rows."
+        "Recommended discovery endpoint before POST /query. Returns each dataset with query_context "
+        "(normalized/original columns plus sample rows). Use query_context.columns[].normalized_name "
+        "for filter, sort, and group_by fields in /query payloads."
     ),
 )
 def list_tables_with_context(
-    include_pending: bool = False,
+    include_pending: bool = Query(
+        default=False,
+        description="Include datasets that are still indexing. Default false returns only ready datasets.",
+    ),
     sample_rows: int = Query(
         default=5,
         ge=1,
@@ -252,8 +263,12 @@ def get_cols_for_dataset(dataset_id: int):
 
 @router.get(
     "/tables/{dataset_id}/slice",
-    summary="Browse raw rows from a dataset",
-    description="Returns rows in order by row index (or by sort_column when provided). Use sort_column + sort_direction for multipage sorting.",
+    operation_id="get_table_rows",
+    summary="Get rows from one dataset",
+    description=(
+        "Returns paginated raw rows for a dataset. Supports optional search and sorting by a normalized column. "
+        "Use this for previews or manual inspection."
+    ),
 )
 def get_table_slice(
     dataset_id: int,

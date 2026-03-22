@@ -202,6 +202,37 @@ class TestFiltering:
         assert body["row_count"] == 1
         assert body["rowsResult"][0]["row_data"]["product"] == "Widget"
 
+    def test_filter_multiple_conditions_or(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _filter_query(
+            client,
+            dataset_id=dataset_id,
+            filters=[
+                {"column": "region", "operator": "=", "value": "South"},
+                {"column": "region", "operator": "=", "value": "West", "logical_operator": "OR"},
+            ],
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["row_count"] == 2
+        regions = [row["row_data"]["region"] for row in body["rowsResult"]]
+        assert_rows_equal(regions, ["South", "West"])
+
+    def test_filter_in_operator(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _filter_query(
+            client,
+            dataset_id=dataset_id,
+            filters=[{"column": "region", "operator": "IN", "value": "North,East"}],
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["row_count"] == 4
+        regions = sorted(row["row_data"]["region"] for row in body["rowsResult"])
+        assert_rows_equal(regions, ["East", "East", "North", "North"])
+
 
 class TestProjection:
     def test_select_specific_columns(self, client, query_table_dataset_id):
@@ -307,6 +338,18 @@ class TestLimit:
         assert body["row_count"] == 2
         assert len(body["rowsResult"]) == 1
 
+    def test_pagination_next_results(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        first_page = _filter_query(client, dataset_id=dataset_id, filters=None, limit=2, offset=0)
+        second_page = _filter_query(client, dataset_id=dataset_id, filters=None, limit=2, offset=2)
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        first_products = [row["row_data"]["product"] for row in first_page.json()["rowsResult"]]
+        second_products = [row["row_data"]["product"] for row in second_page.json()["rowsResult"]]
+        assert_rows_equal(first_products, ["Widget", "Widget"])
+        assert_rows_equal(second_products, ["Gadget", "Gizmo"])
+
 
 class TestAggregation:
     def test_sum_metric(self, client, query_table_dataset_id):
@@ -346,6 +389,32 @@ class TestAggregation:
         assert resp.status_code == 200
         value = int(resp.json()["rowsResult"][0]["aggregate_value"])
         assert value == 6
+
+    def test_max_metric(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _aggregate_query(
+            client,
+            dataset_id=dataset_id,
+            operation="max",
+            metric_column="revenue",
+        )
+
+        assert resp.status_code == 200
+        value = float(resp.json()["rowsResult"][0]["aggregate_value"])
+        assert value == pytest.approx(200.0)
+
+    def test_min_metric(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _aggregate_query(
+            client,
+            dataset_id=dataset_id,
+            operation="min",
+            metric_column="revenue",
+        )
+
+        assert resp.status_code == 200
+        value = float(resp.json()["rowsResult"][0]["aggregate_value"])
+        assert value == pytest.approx(0.0)
 
 
 class TestGrouping:
@@ -549,6 +618,18 @@ class TestTimeBasedFiltering:
         body = resp.json()
         assert body["row_count"] == 3
 
+    def test_filter_date_between(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _filter_query(
+            client,
+            dataset_id=dataset_id,
+            filters=[{"column": "date", "operator": "BETWEEN", "value": "2024-01-01,2024-03-31"}],
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["row_count"] == 4
+
 
 class TestStringMatching:
     def test_filter_contains_string(self, client, query_table_dataset_id):
@@ -563,6 +644,19 @@ class TestStringMatching:
         body = resp.json()
         assert body["row_count"] == 4
         assert all("get" in row["row_data"]["product"].lower() for row in body["rowsResult"])
+
+    def test_filter_contains_operator(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _filter_query(
+            client,
+            dataset_id=dataset_id,
+            filters=[{"column": "product", "operator": "contains", "value": "giz"}],
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["row_count"] == 2
+        assert all("giz" in row["row_data"]["product"].lower() for row in body["rowsResult"])
 
 
 class TestEdgeCases:
@@ -582,7 +676,7 @@ class TestEdgeCases:
         resp = _filter_query(
             client,
             dataset_id=dataset_id,
-            filters=[{"column": "region", "operator": "CONTAINS", "value": "No"}],
+            filters=[{"column": "region", "operator": "MATCHES", "value": "No"}],
         )
 
         assert resp.status_code == 422
@@ -614,6 +708,18 @@ class TestEdgeCases:
         body = resp.json()
         assert body["row_count"] == 1
         assert body["rowsResult"][0]["row_data"]["region"] == "West"
+
+    def test_is_not_null_filter(self, client, query_table_dataset_id):
+        dataset_id = query_table_dataset_id
+        resp = _filter_query(
+            client,
+            dataset_id=dataset_id,
+            filters=[{"column": "revenue", "operator": "IS NOT NULL"}],
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["row_count"] == 5
 
 
 class TestTypeHandling:

@@ -12,6 +12,8 @@ FilterOperator = Literal[
     "<=",
     "LIKE",
     "NOT LIKE",
+    "CONTAINS",
+    "NOT CONTAINS",
     "IN",
     "BETWEEN",
     "IS NULL",
@@ -26,9 +28,58 @@ class FilterCondition(BaseModel):
     column: str = Field(
         description="Column name. Use normalized_name from GET /tables/context query_context.columns (not original_name)."
     )
-    operator: FilterOperator
-    value: Optional[str] = None  # None for IS NULL / IS NOT NULL
-    logical_operator: Literal["AND", "OR"] = "AND"
+    operator: FilterOperator = Field(
+        description=(
+            "Filter operator. Supported operators: =, !=, >, >=, <, <=, LIKE, NOT LIKE, "
+            "CONTAINS, NOT CONTAINS, IN, BETWEEN, IS NULL, IS NOT NULL."
+        )
+    )
+    value: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filter value. Not used for IS NULL / IS NOT NULL. "
+            "For IN use comma-separated values (for example: 'US,CA'). "
+            "For BETWEEN use 'low,high' or 'low AND high'."
+        ),
+    )
+    logical_operator: Literal["AND", "OR"] = Field(
+        default="AND",
+        description="Join operator to previous filter when multiple filters are provided.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_operator_aliases(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        data = dict(raw)
+
+        operator_raw = data.get("operator")
+        if isinstance(operator_raw, str):
+            token = " ".join(operator_raw.strip().replace("_", " ").split()).upper()
+            aliases = {
+                "==": "=",
+                "EQ": "=",
+                "<>": "!=",
+                "NE": "!=",
+                "NEQ": "!=",
+                "GT": ">",
+                "GTE": ">=",
+                "LT": "<",
+                "LTE": "<=",
+                "CONTAINS": "CONTAINS",
+                "NOT CONTAINS": "NOT CONTAINS",
+                "DOES NOT CONTAIN": "NOT CONTAINS",
+                "ISNULL": "IS NULL",
+                "NOT NULL": "IS NOT NULL",
+            }
+            data["operator"] = aliases.get(token, token)
+
+        logical_raw = data.get("logical_operator")
+        if isinstance(logical_raw, str):
+            data["logical_operator"] = logical_raw.strip().upper()
+
+        return data
 
 
 class QueryRequest(BaseModel):
@@ -204,8 +255,14 @@ class FilterRequest(BaseModel):
             "How to sort values: auto (infer), text, number, or date."
         ),
     )
-    limit: int = 50
-    offset: int = 0
+    limit: int = Field(
+        default=50,
+        description="Top-k row count to return (server clamps to safe bounds).",
+    )
+    offset: int = Field(
+        default=0,
+        description="Pagination offset for the next page of rows.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -235,7 +292,10 @@ class FilterRowIndicesRequest(BaseModel):
         description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
     )
     filters: Optional[List[FilterCondition]] = None
-    max_rows: int = 1000
+    max_rows: int = Field(
+        default=1000,
+        description="Maximum row indices to return in one call (for lightweight pagination/selection flows).",
+    )
 
 
 class UnifiedQueryRequest(BaseModel):
@@ -244,9 +304,9 @@ class UnifiedQueryRequest(BaseModel):
     mode: Optional[QueryMode] = Field(
         default=None,
         description=(
-            "Query mode. Use semantic for natural-language lookup, aggregate for grouped metrics, "
-            "filter for row retrieval, and filter_row_indices for row id resolution. "
-            "Optional when exactly one payload block is provided."
+            "Query mode. Use semantic for natural-language retrieval, aggregate for metrics "
+            "(count/sum/avg/min/max with optional group_by), filter for row filtering/projection/sorting/pagination, "
+            "and filter_row_indices for row-id resolution. Optional when exactly one payload block is provided."
         ),
     )
     semantic: Optional[QueryRequest] = Field(
@@ -338,6 +398,135 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
                 "metric_column": "revenue",
                 "group_by": "country",
                 "limit": 50,
+            },
+        },
+    },
+    "filter_top_k_sorted": {
+        "summary": "Top-k rows after filtering",
+        "description": "Example: top 5 products where revenue > 1000, sorted descending.",
+        "value": {
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "sales",
+                "filters": [
+                    {"column": "revenue", "operator": ">", "value": "1000"},
+                ],
+                "columns": ["product", "revenue"],
+                "sort_by": "revenue",
+                "sort_order": "desc",
+                "limit": 5,
+                "offset": 0,
+            },
+        },
+    },
+    "filter_multiple_conditions": {
+        "summary": "Multiple filters with AND/OR",
+        "description": "Example: revenue > 1000 AND region = US.",
+        "value": {
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "sales",
+                "filters": [
+                    {"column": "revenue", "operator": ">", "value": "1000"},
+                    {
+                        "column": "region",
+                        "operator": "=",
+                        "value": "US",
+                        "logical_operator": "AND",
+                    },
+                ],
+                "limit": 50,
+                "offset": 0,
+            },
+        },
+    },
+    "filter_date_range": {
+        "summary": "Date range filter",
+        "description": "Example: between January and March using BETWEEN.",
+        "value": {
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "sales",
+                "filters": [
+                    {
+                        "column": "date",
+                        "operator": "BETWEEN",
+                        "value": "2024-01-01,2024-03-31",
+                    }
+                ],
+                "limit": 50,
+                "offset": 0,
+            },
+        },
+    },
+    "filter_contains": {
+        "summary": "String contains filter",
+        "description": "Example: product contains 'phone'.",
+        "value": {
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "products",
+                "filters": [
+                    {"column": "product", "operator": "CONTAINS", "value": "phone"},
+                ],
+                "limit": 50,
+                "offset": 0,
+            },
+        },
+    },
+    "aggregate_total_revenue": {
+        "summary": "Aggregate without grouping",
+        "description": "Example: total revenue.",
+        "value": {
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_name": "sales",
+                "operation": "sum",
+                "metric_column": "revenue",
+                "limit": 1,
+            },
+        },
+    },
+    "aggregate_top_groups": {
+        "summary": "Group + aggregate + limit",
+        "description": "Example: top 5 products by revenue.",
+        "value": {
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_name": "sales",
+                "operation": "sum",
+                "metric_column": "revenue",
+                "group_by": "product",
+                "limit": 5,
+            },
+        },
+    },
+    "aggregate_multiple_metrics": {
+        "summary": "Multiple metrics per group",
+        "description": "Example: sum and average revenue per product.",
+        "value": {
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_name": "sales",
+                "group_by": "product",
+                "metrics": [
+                    {"column": "revenue", "agg": "sum"},
+                    {"column": "revenue", "agg": "avg"},
+                ],
+                "limit": 50,
+            },
+        },
+    },
+    "filter_pagination": {
+        "summary": "Pagination",
+        "description": "Example: next 10 results with offset.",
+        "value": {
+            "mode": "filter",
+            "filter": {
+                "dataset_name": "sales",
+                "filters": None,
+                "limit": 10,
+                "offset": 10,
             },
         },
     },
