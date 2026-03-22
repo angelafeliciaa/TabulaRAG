@@ -50,24 +50,26 @@ def test_tables_includes_columns_and_sample_rows(client):
     assert context["sample_rows"][0]["row_data"]["city"] == "London"
 
 
-def test_tables_supports_limit_and_offset_pagination(client):
+def test_tables_returns_all_datasets_by_default(client):
     first_id = _ingest_dataset(client, dataset_name="people_one")
     second_id = _ingest_dataset(client, dataset_name="people_two")
     third_id = _ingest_dataset(client, dataset_name="people_three")
 
-    page_one = client.get("/tables?limit=1&offset=0")
-    page_two = client.get("/tables?limit=1&offset=1")
+    response = client.get("/tables")
+    assert response.status_code == 200
+    ids = [int(item["dataset_id"]) for item in response.json()]
+    assert third_id in ids
+    assert second_id in ids
+    assert first_id in ids
 
-    assert page_one.status_code == 200
-    assert page_two.status_code == 200
 
-    first_page_items = page_one.json()
-    second_page_items = page_two.json()
-    assert len(first_page_items) == 1
-    assert len(second_page_items) == 1
-    assert int(first_page_items[0]["dataset_id"]) == third_id
-    assert int(second_page_items[0]["dataset_id"]) == second_id
-    assert first_id not in [int(item["dataset_id"]) for item in first_page_items]
+def test_tables_supports_optional_limit(client):
+    _ingest_dataset(client, dataset_name="people_one")
+    _ingest_dataset(client, dataset_name="people_two")
+
+    response = client.get("/tables?limit=1")
+    assert response.status_code == 200
+    assert len(response.json()) == 1
 
 
 def test_tables_rejects_invalid_limit(client):

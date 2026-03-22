@@ -200,6 +200,10 @@ def test_openapi_exposes_unified_query_only(client):
     assert "/tables" in table_paths
     assert "/tables/context" not in table_paths
     assert "/tables/{dataset_id}/context" not in table_paths
+    table_get = paths["/tables"]["get"]
+    param_names = {p.get("name") for p in table_get.get("parameters", [])}
+    assert "offset" not in param_names
+    assert "limit" in param_names
 
 
 def test_unified_query_infers_mode_from_single_payload(client):

@@ -136,14 +136,14 @@ def _build_query_context_from_db(
 def _list_tables_payload(
     include_pending: bool,
     sample_rows: int,
-    offset: int,
-    limit: int,
+    limit: Optional[int],
 ) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         query = select(Dataset).order_by(Dataset.id.desc())
         if not include_pending:
             query = query.where(Dataset.is_index_ready.is_(True))
-        query = query.offset(offset).limit(limit)
+        if limit is not None:
+            query = query.limit(limit)
         datasets = db.execute(query).scalars().all()
         items = []
         for d in datasets:
@@ -180,8 +180,9 @@ def _delete_collection_safe(dataset_id: int) -> None:
     summary="List datasets for MCP discovery",
     description=(
         "Primary and only MCP discovery endpoint. Returns each dataset with metadata, "
-        "column headers, and a 3-row query_context preview. Use limit/offset to page "
-        "through large catalogs. This endpoint pages datasets (catalog-level), while "
+        "column headers, and a 3-row query_context preview. Returns all ready datasets "
+        "by default. Use optional limit to cap catalog size when needed. "
+        "This endpoint is catalog-level discovery, while "
         "POST /query handles row-level pagination via filter.limit/filter.offset."
     ),
 )
@@ -190,22 +191,16 @@ def list_tables(
         default=False,
         description="Include datasets that are still indexing. Default false returns only ready datasets.",
     ),
-    offset: int = Query(
-        default=0,
-        ge=0,
-        description="Number of datasets to skip. Use with limit for pagination.",
-    ),
-    limit: int = Query(
-        default=50,
+    limit: Optional[int] = Query(
+        default=None,
         ge=1,
         le=200,
-        description="Number of datasets to return per page.",
+        description="Optional cap on number of datasets returned. If omitted, returns all ready datasets.",
     ),
 ):
     return _list_tables_payload(
         include_pending=include_pending,
         sample_rows=3,
-        offset=offset,
         limit=limit,
     )
 

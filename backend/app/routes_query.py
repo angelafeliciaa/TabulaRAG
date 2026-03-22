@@ -590,7 +590,7 @@ def _require_dataset_name_when_multiple() -> bool:
 
 
 def _list_tables_compact(include_ids: bool = True) -> List[Dict[str, Any]]:
-    tables = list_tables(include_pending=False, offset=0, limit=200)
+    tables = list_tables(include_pending=False, limit=None)
     compact: List[Dict[str, Any]] = []
     for table in tables:
         item = {
