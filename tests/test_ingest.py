@@ -61,6 +61,43 @@ def test_dataset_name_defaults_to_filename(client):
     assert response.json()["name"] == "people"
 
 
+def test_duplicate_dataset_name_is_rejected_case_insensitive(client):
+    first = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "Sales Data"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/ingest",
+        files=make_csv("a,b\n3,4\n"),
+        data={"dataset_name": "sales data"},
+    )
+    assert second.status_code == 409
+    assert "already exists" in second.json()["detail"]
+
+
+def test_rename_rejects_duplicate_dataset_name(client):
+    first = client.post(
+        "/ingest",
+        files=make_csv("a,b\n1,2\n"),
+        data={"dataset_name": "first_table"},
+    )
+    second = client.post(
+        "/ingest",
+        files=make_csv("a,b\n3,4\n"),
+        data={"dataset_name": "second_table"},
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    second_id = second.json()["dataset_id"]
+    rename = client.patch(f"/tables/{second_id}", json={"name": "First Table"})
+    assert rename.status_code == 409
+    assert "already exists" in rename.json()["detail"]
+
+
 def test_bom_utf8(client):
     content = "\ufeffname,age\nAlice,30\n".encode("utf-8-sig")
     response = client.post(
@@ -147,6 +184,21 @@ def test_db_columns_stored(client, test_engine):
         ).fetchall()
     assert [c.normalized_name for c in cols] == ["foo", "bar", "baz"]
     assert [c.original_name for c in cols] == ["foo", "bar", "baz"]
+
+
+def test_query_context_columns_include_inferred_type(client):
+    response = client.post(
+        "/ingest",
+        files=make_csv("name,age,amount,purchased_on\nAlice,30,$12.50,2024-01-10\n"),
+        data={"dataset_name": "typed_preview"},
+    )
+    assert response.status_code == 200
+    columns = response.json()["query_context"]["columns"]
+    by_name = {c["normalized_name"]: c for c in columns}
+    assert by_name["name"]["inferred_type"] == "text"
+    assert by_name["age"]["inferred_type"] == "number"
+    assert by_name["amount"]["inferred_type"] == "money"
+    assert by_name["purchased_on"]["inferred_type"] == "date"
 
 
 def test_list_tables_returns_ready_datasets_by_default(client):

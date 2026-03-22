@@ -30,6 +30,13 @@ def _find_dataset(payload, dataset_id: int):
     return None
 
 
+def _column_by_name(columns, normalized_name: str):
+    for col in columns:
+        if col.get("normalized_name") == normalized_name:
+            return col
+    return None
+
+
 def test_tables_includes_columns_and_sample_rows(client):
     dataset_id = _ingest_dataset(client)
 
@@ -47,6 +54,8 @@ def test_tables_includes_columns_and_sample_rows(client):
     assert len(context["sample_rows"]) == 3
     assert int(context["sample_row_count"]) == 3
     assert context["columns"][0]["normalized_name"] == "name"
+    assert _column_by_name(context["columns"], "name")["inferred_type"] == "text"
+    assert _column_by_name(context["columns"], "age")["inferred_type"] == "number"
     assert context["sample_rows"][0]["row_data"]["city"] == "London"
 
 
@@ -110,6 +119,31 @@ def test_tables_fallback_when_stored_context_missing(client, test_engine):
     assert item is not None
     assert len(item["query_context"]["sample_rows"]) == 3
     assert item["query_context"]["columns"][1]["normalized_name"] == "city"
+    assert _column_by_name(item["query_context"]["columns"], "age")["inferred_type"] == "number"
+
+
+def test_tables_infers_types_for_date_money_and_number(client):
+    csv_content = (
+        b"sale_date,amount,units\n"
+        b"2024-01-10,$12.50,3\n"
+        b"2024-02-01,$15.00,4\n"
+    )
+    response = client.post(
+        "/ingest",
+        files={"file": ("typed.csv", io.BytesIO(csv_content), "text/csv")},
+        data={"dataset_name": "typed_table"},
+    )
+    assert response.status_code == 200
+    dataset_id = response.json()["dataset_id"]
+
+    tables = client.get("/tables")
+    assert tables.status_code == 200
+    item = _find_dataset(tables.json(), dataset_id)
+    assert item is not None
+    columns = item["query_context"]["columns"]
+    assert _column_by_name(columns, "sale_date")["inferred_type"] == "date"
+    assert _column_by_name(columns, "amount")["inferred_type"] == "money"
+    assert _column_by_name(columns, "units")["inferred_type"] == "number"
 
 
 def test_legacy_context_endpoints_are_removed(client):

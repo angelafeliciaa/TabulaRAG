@@ -8,14 +8,33 @@ from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
-from app.normalization import strip_internal_fields
-from app.name_guard import normalize_dataset_name_or_raise
+from app.normalization import (
+    get_normalized_value,
+    get_typed_value,
+    normalize_text_value,
+    parse_date,
+    parse_measurement,
+    parse_money,
+    parse_number,
+    strip_internal_fields,
+)
+from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 
 router = APIRouter()
 
 
 class RenameRequest(BaseModel):
     name: str
+
+
+_QUERY_CONTEXT_TYPE_PRIORITY = {
+    "unknown": 0,
+    "text": 1,
+    "number": 2,
+    "date": 3,
+    "measurement": 4,
+    "money": 5,
+}
 
 
 def _slice_column_expr(column_name: str) -> str:
@@ -46,19 +65,23 @@ def _slice_order_by_clause(sort_column: str, sort_direction: str) -> str:
     return f"{numeric_expr} {dir_upper} {nulls}, {col} {dir_upper}"
 
 
-def _normalize_row_data(raw: Any) -> Dict[str, Any]:
+def _coerce_row_data_dict(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
-        return strip_internal_fields(raw)
+        return raw
     if isinstance(raw, str):
         try:
             parsed: Any = json.loads(raw)
             if isinstance(parsed, str):
                 parsed = json.loads(parsed)
             if isinstance(parsed, dict):
-                return strip_internal_fields(parsed)
+                return parsed
         except Exception:
             return {}
     return {}
+
+
+def _normalize_row_data(raw: Any) -> Dict[str, Any]:
+    return strip_internal_fields(_coerce_row_data_dict(raw))
 
 
 def _preview_cell_value(value: Any) -> Any:
@@ -70,6 +93,106 @@ def _preview_cell_value(value: Any) -> Any:
     return value
 
 
+def _infer_value_type(value: Any) -> Optional[str]:
+    text_value = normalize_text_value(value)
+    if text_value is None:
+        return None
+    if parse_date(value) is not None:
+        return "date"
+    if parse_money(value) is not None:
+        return "money"
+    if parse_measurement(value) is not None:
+        return "measurement"
+    if parse_number(text_value) is not None:
+        return "number"
+    return "text"
+
+
+def _finalize_column_type(type_counts: Dict[str, int]) -> str:
+    observed = sum(type_counts.values())
+    if observed <= 0:
+        return "unknown"
+    return max(
+        type_counts.items(),
+        key=lambda item: (item[1], _QUERY_CONTEXT_TYPE_PRIORITY.get(item[0], 0)),
+    )[0]
+
+
+def _infer_column_types_from_preview_rows(
+    columns: List[Dict[str, Any]],
+    sample_rows: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    counts: Dict[str, Dict[str, int]] = {}
+    for col in columns:
+        normalized_name = str(col.get("normalized_name") or "").strip()
+        if not normalized_name:
+            continue
+        counts[normalized_name] = {
+            "text": 0,
+            "number": 0,
+            "date": 0,
+            "money": 0,
+            "measurement": 0,
+        }
+
+    for row in sample_rows:
+        if not isinstance(row, dict):
+            continue
+        row_data = row.get("row_data")
+        if not isinstance(row_data, dict):
+            continue
+        for normalized_name, score in counts.items():
+            inferred = _infer_value_type(row_data.get(normalized_name))
+            if inferred:
+                score[inferred] += 1
+
+    return {name: _finalize_column_type(score) for name, score in counts.items()}
+
+
+def _infer_column_types_from_dataset_rows(
+    column_names: List[str],
+    raw_row_payloads: List[Any],
+) -> Dict[str, str]:
+    counts: Dict[str, Dict[str, int]] = {
+        name: {"text": 0, "number": 0, "date": 0, "money": 0, "measurement": 0}
+        for name in column_names
+    }
+
+    for payload in raw_row_payloads:
+        row_data = _coerce_row_data_dict(payload)
+        if not row_data:
+            continue
+        for column_name in column_names:
+            typed_item = get_typed_value(row_data, column_name)
+            typed_name = typed_item.get("type") if isinstance(typed_item, dict) else None
+            if typed_name in {"date", "money", "measurement", "number"}:
+                counts[column_name][typed_name] += 1
+                continue
+            inferred = _infer_value_type(get_normalized_value(row_data, column_name))
+            if inferred:
+                counts[column_name][inferred] += 1
+
+    return {name: _finalize_column_type(score) for name, score in counts.items()}
+
+
+def _enrich_columns_with_types(
+    columns: List[Dict[str, Any]],
+    fallback_types_by_name: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    enriched: List[Dict[str, Any]] = []
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        normalized_name = str(col.get("normalized_name") or "").strip()
+        inferred_type = col.get("inferred_type")
+        if inferred_type not in _QUERY_CONTEXT_TYPE_PRIORITY:
+            inferred_type = fallback_types_by_name.get(normalized_name, "unknown")
+        updated = dict(col)
+        updated["inferred_type"] = inferred_type
+        enriched.append(updated)
+    return enriched
+
+
 def _coerce_query_context(raw: Any, sample_rows: int) -> Optional[Dict[str, Any]]:
     if not isinstance(raw, dict):
         return None
@@ -78,8 +201,10 @@ def _coerce_query_context(raw: Any, sample_rows: int) -> Optional[Dict[str, Any]
     if not isinstance(columns, list) or not isinstance(rows, list):
         return None
     sliced_rows = rows[:sample_rows]
+    columns_payload: List[Dict[str, Any]] = [c for c in columns if isinstance(c, dict)]
+    inferred_types = _infer_column_types_from_preview_rows(columns_payload, sliced_rows)
     return {
-        "columns": columns,
+        "columns": _enrich_columns_with_types(columns_payload, inferred_types),
         "sample_rows": sliced_rows,
         "sample_row_count": len(sliced_rows),
     }
@@ -108,6 +233,20 @@ def _build_query_context_from_db(
         )
         .all()
     )
+    inference_payloads = (
+        db.execute(
+            select(DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(max(sample_rows, 200))
+        )
+        .scalars()
+        .all()
+    )
+    inferred_types = _infer_column_types_from_dataset_rows(
+        [c.normalized_name for c in columns],
+        inference_payloads,
+    )
     sample = []
     for row_index, row_data in rows:
         normalized = _normalize_row_data(row_data)
@@ -125,6 +264,7 @@ def _build_query_context_from_db(
                 "column_index": c.column_index,
                 "original_name": c.original_name,
                 "normalized_name": c.normalized_name,
+                "inferred_type": inferred_types.get(c.normalized_name, "unknown"),
             }
             for c in columns
         ],
@@ -459,6 +599,28 @@ def rename_table(dataset_id: int, body: RenameRequest):
         dataset = db.get(Dataset, dataset_id)
         if not dataset:
             raise HTTPException(status_code=404, detail="Table not found")
-        dataset.name = normalize_dataset_name_or_raise(body.name)
+        normalized_name = normalize_dataset_name_or_raise(body.name)
+        target_key = dataset_name_collision_key(normalized_name)
+        existing = db.execute(
+            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id)
+        ).all()
+        conflict = next(
+            (
+                row
+                for row in existing
+                if row[1] is not None
+                and dataset_name_collision_key(str(row[1])) == target_key
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Dataset name '{normalized_name}' already exists. "
+                    "Use a unique dataset name."
+                ),
+            )
+        dataset.name = normalized_name
         db.commit()
         return {"name": dataset.name}
