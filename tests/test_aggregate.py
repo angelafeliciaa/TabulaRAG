@@ -46,6 +46,10 @@ def test_aggregate_count_success(client):
     assert data["group_by_column"] is None
     assert len(data["rowsResult"]) == 1
     assert int(data["rowsResult"][0]["aggregate_value"]) == 2
+    assert isinstance(data["url"], str)
+    assert isinstance(data.get("final_response"), str)
+    assert data["url"] in data["final_response"]
+    assert "MANDATORY" in data.get("response_instructions", "")
 
 
 def test_aggregate_sum_group_by_success(client):

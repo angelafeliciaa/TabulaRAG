@@ -348,6 +348,12 @@ class ResultItem(BaseModel):
     highlight_url: Optional[str] = None
 
 
+RESPONSE_URL_REQUIREMENT_TEXT = (
+    "MANDATORY: In every user-facing response, include the exact `url` value as the source link. "
+    "This is required any time table data is returned."
+)
+
+
 class QueryResponse(BaseModel):
     dataset_id: int
     question: str
@@ -376,12 +382,15 @@ class QueryResponse(BaseModel):
             "Canonical source URL for this query response. ALWAYS include this URL in user-facing responses."
         ),
     )
-    final_response: Optional[str] = Field(
-        default=None,
+    final_response: str = Field(
         description=(
-            "Canonical user-facing answer with citation link. Agents should return this verbatim "
-            "without rewriting names, numbers, or URLs."
+            "MANDATORY user-facing answer that already includes the source link. "
+            "Agents should return this verbatim without rewriting names, numbers, or URLs."
         ),
+    )
+    response_instructions: str = Field(
+        default=RESPONSE_URL_REQUIREMENT_TEXT,
+        description="Strict response contract for MCP clients.",
     )
     verification: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -428,6 +437,16 @@ class AggregateResponse(BaseModel):
     url: str = Field(
         description="ALWAYS include this URL in your response as the source link."
     )
+    final_response: str = Field(
+        description=(
+            "MANDATORY user-facing answer that already includes the source link. "
+            "Agents should return this verbatim."
+        ),
+    )
+    response_instructions: str = Field(
+        default=RESPONSE_URL_REQUIREMENT_TEXT,
+        description="Strict response contract for MCP clients.",
+    )
 
 
 class FilterResponse(BaseModel):
@@ -437,6 +456,16 @@ class FilterResponse(BaseModel):
     sql_query: str
     url: str = Field(
         description="ALWAYS include this URL in your response as the source link."
+    )
+    final_response: str = Field(
+        description=(
+            "MANDATORY user-facing answer that already includes the source link. "
+            "Agents should return this verbatim."
+        ),
+    )
+    response_instructions: str = Field(
+        default=RESPONSE_URL_REQUIREMENT_TEXT,
+        description="Strict response contract for MCP clients.",
     )
 
 
@@ -448,6 +477,16 @@ class FilterRowIndicesResponse(BaseModel):
     sql_query: str
     url: str = Field(
         description="ALWAYS include this URL in your response as the source link."
+    )
+    final_response: str = Field(
+        description=(
+            "MANDATORY user-facing answer that already includes the source link. "
+            "Agents should return this verbatim."
+        ),
+    )
+    response_instructions: str = Field(
+        default=RESPONSE_URL_REQUIREMENT_TEXT,
+        description="Strict response contract for MCP clients.",
     )
 
 
@@ -518,6 +557,19 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
+
+
+def _with_mandatory_source_link(
+    final_response: Optional[str], url: str, fallback_message: str
+) -> str:
+    base = (final_response or "").strip()
+    if not base:
+        base = fallback_message.strip()
+    if url in base:
+        return base
+    if base:
+        return f"{base}\nSource link: {url}"
+    return f"Source link: {url}"
 
 def _enforce_list_tables_first() -> bool:
     return os.getenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "false").strip().lower() in {
@@ -619,6 +671,11 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
                 or dataset_url
             )
     payload["url"] = canonical_url
+    payload["final_response"] = _with_mandatory_source_link(
+        payload.get("final_response"),
+        canonical_url,
+        "Query completed.",
+    )
 
     payload["resolved_dataset"] = resolved_dataset
     if resolution_note:
@@ -926,6 +983,14 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
         rowsResult=rows,
         sql_query=_render_sql(sql, params),
         url=url,
+        final_response=_with_mandatory_source_link(
+            None,
+            url,
+            (
+                f"Aggregate query completed with {len(rows)} row(s). "
+                f"Operation: {metric_specs[0].get('agg') or 'count'}."
+            ),
+        ),
     )
 
 
@@ -1064,6 +1129,14 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         row_count=int(row_count_raw or 0),
         sql_query=_render_sql(sql, params),
         url=url,
+        final_response=_with_mandatory_source_link(
+            None,
+            url,
+            (
+                f"Filter query completed with {len(rows)} row(s) in this page "
+                f"out of {int(row_count_raw or 0)} total matching row(s)."
+            ),
+        ),
     )
 
 
@@ -1119,13 +1192,22 @@ def _run_filter_row_indices_query(
     total_match_count = int(row_count_raw or 0)
     truncated = total_match_count > len(row_indices)
 
+    table_url = build_dataset_table_url(resolved_dataset_id)
     return FilterRowIndicesResponse(
         dataset_id=resolved_dataset_id,
         row_indices=row_indices,
         total_match_count=total_match_count,
         truncated=truncated,
         sql_query=_render_sql(sql, params),
-        url=build_dataset_table_url(resolved_dataset_id),
+        url=table_url,
+        final_response=_with_mandatory_source_link(
+            None,
+            table_url,
+            (
+                f"Row-index query completed with {len(row_indices)} row index(es) returned "
+                f"out of {total_match_count} total matching row(s)."
+            ),
+        ),
     )
 
 
@@ -1157,6 +1239,8 @@ def _run_filter_row_indices_query(
         "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
         "- Provide exactly one matching payload block.\n"
         "- Choose dataset with dataset_name or dataset_id (dataset_name is recommended for MCP clients).\n"
+        "- RESPONSE CONTRACT (MANDATORY): include the returned `url` in every user-facing reply. "
+        "Prefer returning `final_response` verbatim.\n"
         "- Always use normalized column names from GET /tables/context."
     ),
 )

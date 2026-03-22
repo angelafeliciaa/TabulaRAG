@@ -54,6 +54,7 @@ def test_unified_query_semantic_explicit_and_inferred_match(client):
     assert inferred_resp.status_code == 200
     assert explicit_resp.json() == inferred_resp.json()
     assert explicit_resp.json()["url"].startswith("http")
+    assert explicit_resp.json()["url"] in explicit_resp.json()["final_response"]
 
 
 def test_unified_query_aggregate_explicit_and_inferred_match(client):
@@ -96,6 +97,7 @@ def test_unified_query_filter_explicit_and_inferred_match(client):
     assert inferred_resp.status_code == 200
     assert explicit_resp.json() == inferred_resp.json()
     assert explicit_resp.json()["url"].startswith("http")
+    assert explicit_resp.json()["url"] in explicit_resp.json()["final_response"]
 
 
 def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
@@ -180,12 +182,20 @@ def test_openapi_exposes_unified_query_only(client):
     assert "filtering" in description
     assert "pagination" in description
     assert "contains" in description
+    assert "response contract" in description
+    assert "final_response" in description
     request_body = post_query["requestBody"]["content"]["application/json"]
     assert "examples" in request_body
     assert "semantic_question" in request_body["examples"]
     assert "filter_top_k_sorted" in request_body["examples"]
     schema = request_body["schema"]
     assert "$ref" in schema
+
+    schemas = resp.json().get("components", {}).get("schemas", {})
+    assert "final_response" in schemas["FilterResponse"].get("required", [])
+    assert "url" in schemas["FilterResponse"].get("required", [])
+    assert "final_response" in schemas["AggregateResponse"].get("required", [])
+    assert "url" in schemas["AggregateResponse"].get("required", [])
 
 
 def test_unified_query_infers_mode_from_single_payload(client):

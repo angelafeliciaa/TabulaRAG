@@ -789,6 +789,10 @@ class TestResponseStructure:
         assert "rowsResult" in body
         assert "row_count" in body
         assert "sql_query" in body
+        assert "url" in body
+        assert isinstance(body.get("final_response"), str)
+        assert body["url"] in body["final_response"]
+        assert "MANDATORY" in body.get("response_instructions", "")
         row_data = body["rowsResult"][0]["row_data"]
         for expected_col in ("product", "revenue", "region", "date"):
             assert expected_col in row_data
