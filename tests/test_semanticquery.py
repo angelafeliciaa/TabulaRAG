@@ -54,6 +54,8 @@ def test_semantic_query_semantic_results(client):
     assert data["dataset_id"] == dataset_id
     assert isinstance(data.get("dataset_url"), str)
     assert data["dataset_url"].startswith("http")
+    assert isinstance(data.get("url"), str)
+    assert data["url"].startswith("http")
 
 
 def test_highlight_found(client):

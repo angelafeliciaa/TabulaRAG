@@ -87,12 +87,16 @@ class QueryRequest(BaseModel):
     dataset_id: Optional[int] = Field(
         default=None,
         description=(
-            "Optional dataset ID. Usually you should provide dataset_name instead."
+            "Optional dataset ID. Deterministic dataset selector when known. "
+            "You may also provide dataset_name for readability/disambiguation."
         ),
     )
     dataset_name: Optional[str] = Field(
         default=None,
-        description="Optional dataset name (for example 'Chocolate'). Helps automatic dataset resolution.",
+        description=(
+            "Optional dataset name (for example 'Chocolate'). Recommended for MCP clients, "
+            "especially when many datasets exist."
+        ),
     )
     top_k: int = Field(default=10, ge=1, le=100)
     filters: Optional[Dict[str, str]] = None
@@ -103,11 +107,17 @@ class AggregateRequest(BaseModel):
 
     dataset_id: Optional[int] = Field(
         default=None,
-        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+        description=(
+            "Optional dataset ID. Deterministic dataset selector when known. "
+            "You may also provide dataset_name for readability/disambiguation."
+        ),
     )
     dataset_name: Optional[str] = Field(
         default=None,
-        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
+        description=(
+            "Optional dataset name to resolve to an ID when dataset_id is omitted. "
+            "Recommended for MCP clients when many datasets exist."
+        ),
     )
     filters: Optional[List[FilterCondition]] = Field(default=None)
     operation: Optional[AggregateOperator] = None
@@ -228,11 +238,17 @@ class AggregateRequest(BaseModel):
 class FilterRequest(BaseModel):
     dataset_id: Optional[int] = Field(
         default=None,
-        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+        description=(
+            "Optional dataset ID. Deterministic dataset selector when known. "
+            "You may also provide dataset_name for readability/disambiguation."
+        ),
     )
     dataset_name: Optional[str] = Field(
         default=None,
-        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
+        description=(
+            "Optional dataset name to resolve to an ID when dataset_id is omitted. "
+            "Recommended for MCP clients when many datasets exist."
+        ),
     )
     filters: Optional[List[FilterCondition]] = Field(default=None)
     columns: Optional[List[str]] = Field(
@@ -285,11 +301,17 @@ class FilterRequest(BaseModel):
 class FilterRowIndicesRequest(BaseModel):
     dataset_id: Optional[int] = Field(
         default=None,
-        description="Optional dataset ID for backward compatibility. Usually provide dataset_name."
+        description=(
+            "Optional dataset ID. Deterministic dataset selector when known. "
+            "You may also provide dataset_name for readability/disambiguation."
+        ),
     )
     dataset_name: Optional[str] = Field(
         default=None,
-        description="Optional dataset name to resolve to an ID when dataset_id is omitted.",
+        description=(
+            "Optional dataset name to resolve to an ID when dataset_id is omitted. "
+            "Recommended for MCP clients when many datasets exist."
+        ),
     )
     filters: Optional[List[FilterCondition]] = None
     max_rows: int = Field(

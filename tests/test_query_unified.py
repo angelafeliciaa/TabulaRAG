@@ -53,6 +53,7 @@ def test_unified_query_semantic_explicit_and_inferred_match(client):
     assert explicit_resp.status_code == 200
     assert inferred_resp.status_code == 200
     assert explicit_resp.json() == inferred_resp.json()
+    assert explicit_resp.json()["url"].startswith("http")
 
 
 def test_unified_query_aggregate_explicit_and_inferred_match(client):
@@ -94,6 +95,7 @@ def test_unified_query_filter_explicit_and_inferred_match(client):
     assert explicit_resp.status_code == 200
     assert inferred_resp.status_code == 200
     assert explicit_resp.json() == inferred_resp.json()
+    assert explicit_resp.json()["url"].startswith("http")
 
 
 def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
@@ -113,6 +115,7 @@ def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
     assert explicit_resp.status_code == 200
     assert inferred_resp.status_code == 200
     assert explicit_resp.json() == inferred_resp.json()
+    assert explicit_resp.json()["url"].startswith("http")
 
 
 def test_query_table_alias_matches_query(client):
@@ -305,9 +308,31 @@ def test_unified_query_filter_auto_resolves_single_dataset_without_name(client):
     assert body["row_count"] == 1
 
 
-def test_unified_query_filter_dataset_id_requires_name_when_multiple(client):
+def test_unified_query_filter_dataset_id_works_when_multiple_by_default(client):
     people_id = _ingest_people(client)
     _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "dataset_id": people_id,
+                "filters": [{"column": "city", "operator": "=", "value": "London"}],
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == people_id
+    assert body["row_count"] == 1
+
+
+def test_unified_query_filter_dataset_id_requires_name_when_multiple_when_strict(client, monkeypatch):
+    people_id = _ingest_people(client)
+    _ingest_sales(client)
+    monkeypatch.setenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "true")
     resp = client.post(
         "/query",
         json={

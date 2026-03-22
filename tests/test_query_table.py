@@ -695,6 +695,8 @@ class TestEdgeCases:
         body = resp.json()
         assert body["row_count"] == 0
         assert body["rowsResult"] == []
+        assert isinstance(body["url"], str)
+        assert body["url"].startswith("http://localhost:5173/tables/virtual?q=")
 
     def test_null_values_handled_correctly(self, client, query_table_dataset_id):
         dataset_id = query_table_dataset_id

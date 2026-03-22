@@ -371,6 +371,11 @@ class QueryResponse(BaseModel):
         default=None,
         description="Frontend URL for the resolved table.",
     )
+    url: str = Field(
+        description=(
+            "Canonical source URL for this query response. ALWAYS include this URL in user-facing responses."
+        ),
+    )
     final_response: Optional[str] = Field(
         default=None,
         description=(
@@ -420,8 +425,7 @@ class AggregateResponse(BaseModel):
         description="Result of the aggregate query. In your response, mention both the group_value and aggregate_value."
     )
     sql_query: str
-    url: Optional[str] = Field(
-        default=None,
+    url: str = Field(
         description="ALWAYS include this URL in your response as the source link."
     )
 
@@ -431,9 +435,8 @@ class FilterResponse(BaseModel):
     rowsResult: List[Dict[str, Any]]
     row_count: int
     sql_query: str
-    url: Optional[str] = Field(
-        default=None,
-        description="Source URL for the filtered dataset.",
+    url: str = Field(
+        description="ALWAYS include this URL in your response as the source link."
     )
 
 
@@ -443,6 +446,9 @@ class FilterRowIndicesResponse(BaseModel):
     total_match_count: int
     truncated: bool
     sql_query: str
+    url: str = Field(
+        description="ALWAYS include this URL in your response as the source link."
+    )
 
 
 UnifiedQueryResponse = Union[
@@ -463,11 +469,19 @@ class HighlightResponse(BaseModel):
 
 
 PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
+
+
+def build_dataset_table_url(dataset_id: int) -> str:
+    return f"{PUBLIC_UI_BASE_URL}/tables/{dataset_id}"
+
+
 def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) -> str:
-    if body.operation == "max":
+    if not rows:
+        highlight_index = 0
+    elif body.operation == "max":
         highlight_index = 0
     elif body.operation == "min":
-        highlight_index = len(rows) - 1
+        highlight_index = max(0, len(rows) - 1)
     else:
         highlight_index = 0
     payload = {
@@ -515,7 +529,7 @@ def _enforce_list_tables_first() -> bool:
 
 
 def _require_dataset_name_when_multiple() -> bool:
-    return os.getenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "true").strip().lower() in {
+    return os.getenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "false").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -545,9 +559,10 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
         detail={
             "message": message,
             "guidance": (
-                "Call GET /tables/context first, then call POST /query with dataset_name."
+                "Call GET /tables/context first, then call POST /query with dataset_name "
+                "(or dataset_id + matching dataset_name for strict disambiguation)."
             ),
-            "available_tables": _list_tables_compact(include_ids=False),
+            "available_tables": _list_tables_compact(include_ids=True),
         },
     )
 
@@ -588,8 +603,23 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
         filters=body.filters,
         top_k=body.top_k,
     )
+    dataset_url = payload.get("dataset_url") or build_dataset_table_url(resolved_dataset_id)
+    payload["dataset_url"] = dataset_url
     if "source_url" not in resolved_dataset:
-        resolved_dataset["source_url"] = payload.get("dataset_url")
+        resolved_dataset["source_url"] = dataset_url
+
+    canonical_url = dataset_url
+    results = payload.get("results")
+    if isinstance(results, list) and results:
+        first = results[0]
+        if isinstance(first, dict):
+            canonical_url = (
+                first.get("highlight_url")
+                or first.get("source_url")
+                or dataset_url
+            )
+    payload["url"] = canonical_url
+
     payload["resolved_dataset"] = resolved_dataset
     if resolution_note:
         payload["resolution_note"] = resolution_note
@@ -882,7 +912,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
 
         rows.append(item)
 
-    url = build_virtual_table_url(body, rows) if rows else None
+    url = build_virtual_table_url(body, rows)
 
     first_metric_column = metric_specs[0].get("column")
     return AggregateResponse(
@@ -1026,7 +1056,7 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         row_index = int(item.get("row_index", 0))
         item["highlight_id"] = f"d{resolved_dataset_id}_r{row_index}_{highlight_column}"
         rows.append(item)
-    url = build_filter_virtual_table_url(body) if row_count_raw else None
+    url = build_filter_virtual_table_url(body)
 
     return FilterResponse(
         dataset_id=resolved_dataset_id,
@@ -1095,6 +1125,7 @@ def _run_filter_row_indices_query(
         total_match_count=total_match_count,
         truncated=truncated,
         sql_query=_render_sql(sql, params),
+        url=build_dataset_table_url(resolved_dataset_id),
     )
 
 
@@ -1125,6 +1156,7 @@ def _run_filter_row_indices_query(
         "Usage guidance:\n"
         "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
         "- Provide exactly one matching payload block.\n"
+        "- Choose dataset with dataset_name or dataset_id (dataset_name is recommended for MCP clients).\n"
         "- Always use normalized column names from GET /tables/context."
     ),
 )
