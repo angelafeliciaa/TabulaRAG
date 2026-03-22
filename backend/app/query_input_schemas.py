@@ -26,7 +26,10 @@ AggregateOperator = Literal["count", "sum", "avg", "min", "max"]
 
 class FilterCondition(BaseModel):
     column: str = Field(
-        description="Column name. Use normalized_name from GET /tables/context query_context.columns (not original_name)."
+        description=(
+            "Column name. Use normalized_name from GET /tables "
+            "query_context.columns (not original_name)."
+        )
     )
     operator: FilterOperator = Field(
         description=(
@@ -123,7 +126,10 @@ class AggregateRequest(BaseModel):
     operation: Optional[AggregateOperator] = None
     metric_column: Optional[str] = Field(
         default=None,
-        description="Column to aggregate (sum/avg/min/max). Use normalized_name from GET /tables/context query_context.columns.",
+        description=(
+            "Column to aggregate (sum/avg/min/max). Use normalized_name from "
+            "GET /tables query_context.columns."
+        ),
     )
     metrics: Optional[List[Dict[str, Any]]] = Field(
         default=None,
@@ -135,7 +141,10 @@ class AggregateRequest(BaseModel):
     )
     group_by: Optional[str] = Field(
         default=None,
-        description="Column to group by. Use normalized_name from GET /tables/context query_context.columns.",
+        description=(
+            "Column to group by. Use normalized_name from "
+            "GET /tables query_context.columns."
+        ),
     )
     group_by_date_part: Optional[Literal["month", "quarter", "year"]] = Field(
         default=None,

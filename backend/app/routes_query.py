@@ -590,7 +590,7 @@ def _require_dataset_name_when_multiple() -> bool:
 
 
 def _list_tables_compact(include_ids: bool = True) -> List[Dict[str, Any]]:
-    tables = list_tables()
+    tables = list_tables(include_pending=False, offset=0, limit=200)
     compact: List[Dict[str, Any]] = []
     for table in tables:
         item = {
@@ -611,8 +611,8 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
         detail={
             "message": message,
             "guidance": (
-                "Call GET /tables/context first, then call POST /query with dataset_name "
-                "(or dataset_id + matching dataset_name for strict disambiguation)."
+                "Call GET /tables first. If more than one dataset could match, do not guess: "
+                "ask the user to confirm a single dataset_name from available_tables, then call POST /query."
             ),
             "available_tables": _list_tables_compact(include_ids=True),
         },
@@ -1214,11 +1214,6 @@ def _run_filter_row_indices_query(
 # ── Endpoints ──────────────────────────────────────────────────────
 
 @router.post(
-    "/query_table",
-    response_model=UnifiedQueryResponse,
-    include_in_schema=False,
-)
-@router.post(
     "/query",
     response_model=UnifiedQueryResponse,
     operation_id="run_query",
@@ -1239,9 +1234,12 @@ def _run_filter_row_indices_query(
         "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
         "- Provide exactly one matching payload block.\n"
         "- Choose dataset with dataset_name or dataset_id (dataset_name is recommended for MCP clients).\n"
+        "- Dataset disambiguation rule: if dataset_name is missing/ambiguous and multiple datasets exist, "
+        "do not guess. Ask the user to choose one dataset from GET /tables.\n"
         "- RESPONSE CONTRACT (MANDATORY): include the returned `url` in every user-facing reply. "
         "Prefer returning `final_response` verbatim.\n"
-        "- Always use normalized column names from GET /tables/context."
+        "- Discovery flow for large catalogs: GET /tables -> POST /query.\n"
+        "- Always use normalized column names from query_context.columns."
     ),
 )
 def unified_query_endpoint(
@@ -1250,7 +1248,8 @@ def unified_query_endpoint(
         description=(
             "Single query payload. Set mode + matching block. "
             "For user prompts like 'top 5 products by revenue', map to aggregate/group_by/limit. "
-            "For 'next 10 results', map to filter with limit + offset."
+            "For 'next 10 results', map to filter with limit + offset. "
+            "When dataset choice is unclear across multiple tables, ask the user to confirm dataset_name before running /query."
         ),
         openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
     ),

@@ -135,13 +135,15 @@ def _build_query_context_from_db(
 
 def _list_tables_payload(
     include_pending: bool,
-    include_context: bool,
     sample_rows: int,
+    offset: int,
+    limit: int,
 ) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         query = select(Dataset).order_by(Dataset.id.desc())
         if not include_pending:
             query = query.where(Dataset.is_index_ready.is_(True))
+        query = query.offset(offset).limit(limit)
         datasets = db.execute(query).scalars().all()
         items = []
         for d in datasets:
@@ -154,13 +156,12 @@ def _list_tables_payload(
                 "column_count": d.column_count,
                 "created_at": d.created_at.isoformat(),
             }
-            if include_context:
-                stored = _coerce_query_context(d.query_context, sample_rows)
-                item["query_context"] = stored or _build_query_context_from_db(
-                    db,
-                    d.id,
-                    sample_rows,
-                )
+            stored = _coerce_query_context(d.query_context, sample_rows)
+            item["query_context"] = stored or _build_query_context_from_db(
+                db,
+                d.id,
+                sample_rows,
+            )
             items.append(item)
         return items
 
@@ -176,10 +177,12 @@ def _delete_collection_safe(dataset_id: int) -> None:
 @router.get(
     "/tables",
     operation_id="list_tables",
-    summary="List datasets",
+    summary="List datasets for MCP discovery",
     description=(
-        "Returns dataset IDs and metadata. "
-        "Use this to discover available tables, then call GET /tables/context for column names and sample rows."
+        "Primary and only MCP discovery endpoint. Returns each dataset with metadata, "
+        "column headers, and a 3-row query_context preview. Use limit/offset to page "
+        "through large catalogs. This endpoint pages datasets (catalog-level), while "
+        "POST /query handles row-level pagination via filter.limit/filter.offset."
     ),
 )
 def list_tables(
@@ -187,40 +190,23 @@ def list_tables(
         default=False,
         description="Include datasets that are still indexing. Default false returns only ready datasets.",
     ),
-):
-    return _list_tables_payload(
-        include_pending=include_pending,
-        include_context=False,
-        sample_rows=5,
-    )
-
-
-@router.get(
-    "/tables/context",
-    operation_id="list_tables_with_context",
-    summary="List datasets with query context",
-    description=(
-        "Recommended discovery endpoint before POST /query. Returns each dataset with query_context "
-        "(normalized/original columns plus sample rows). Use query_context.columns[].normalized_name "
-        "for filter, sort, and group_by fields in /query payloads."
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Number of datasets to skip. Use with limit for pagination.",
     ),
-)
-def list_tables_with_context(
-    include_pending: bool = Query(
-        default=False,
-        description="Include datasets that are still indexing. Default false returns only ready datasets.",
-    ),
-    sample_rows: int = Query(
-        default=5,
+    limit: int = Query(
+        default=50,
         ge=1,
-        le=20,
-        description="How many sample rows to include per dataset.",
+        le=200,
+        description="Number of datasets to return per page.",
     ),
 ):
     return _list_tables_payload(
         include_pending=include_pending,
-        include_context=True,
-        sample_rows=sample_rows,
+        sample_rows=3,
+        offset=offset,
+        limit=limit,
     )
 
 

@@ -120,7 +120,7 @@ def test_unified_query_filter_row_indices_explicit_and_inferred_match(client):
     assert explicit_resp.json()["url"].startswith("http")
 
 
-def test_query_table_alias_matches_query(client):
+def test_query_table_alias_removed(client):
     dataset_id = _ingest_people(client)
     payload = {
         "mode": "filter",
@@ -131,12 +131,9 @@ def test_query_table_alias_matches_query(client):
             "offset": 0,
         },
     }
-    resp_query = client.post("/query", json=payload)
     resp_alias = client.post("/query_table", json=payload)
 
-    assert resp_query.status_code == 200
-    assert resp_alias.status_code == 200
-    assert resp_alias.json() == resp_query.json()
+    assert resp_alias.status_code == 404
 
 
 def test_unified_query_requires_one_payload(client):
@@ -184,6 +181,8 @@ def test_openapi_exposes_unified_query_only(client):
     assert "contains" in description
     assert "response contract" in description
     assert "final_response" in description
+    assert "do not guess" in description
+    assert "ask the user" in description
     request_body = post_query["requestBody"]["content"]["application/json"]
     assert "examples" in request_body
     assert "semantic_question" in request_body["examples"]
@@ -196,6 +195,11 @@ def test_openapi_exposes_unified_query_only(client):
     assert "url" in schemas["FilterResponse"].get("required", [])
     assert "final_response" in schemas["AggregateResponse"].get("required", [])
     assert "url" in schemas["AggregateResponse"].get("required", [])
+
+    table_paths = set(paths.keys())
+    assert "/tables" in table_paths
+    assert "/tables/context" not in table_paths
+    assert "/tables/{dataset_id}/context" not in table_paths
 
 
 def test_unified_query_infers_mode_from_single_payload(client):
