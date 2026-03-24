@@ -96,6 +96,90 @@ def test_semantic_query_supports_column_projection_case_insensitive(client):
     assert row_data["age"] == "30"
 
 
+def test_semantic_query_filters_normalize_keys_and_reject_unknown(client):
+    dataset_id = _ingest(client)
+
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"name": "Alice", "city": "London", "age": "30"},
+                "text": "name: Alice | city: London | age: 30",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), patch(
+        "app.retrieval.embed_texts", return_value=[[0.1] * 384]
+    ):
+        ok = _query_semantic(
+            client,
+            {
+                "question": "Who lives in London?",
+                "dataset_id": dataset_id,
+                "filters": {"CITY": "London"},
+            },
+        )
+        assert ok.status_code == 200
+
+        bad = _query_semantic(
+            client,
+            {
+                "question": "Who lives in London?",
+                "dataset_id": dataset_id,
+                "filters": {"not_a_column": "x"},
+            },
+        )
+        assert bad.status_code == 400
+        assert "Invalid semantic filter column" in bad.json()["detail"]
+
+        dup = _query_semantic(
+            client,
+            {
+                "question": "Who lives in London?",
+                "dataset_id": dataset_id,
+                "filters": {"city": "London", "CITY": "Paris"},
+            },
+        )
+        assert dup.status_code == 400
+        assert "Conflicting semantic filter" in dup.json()["detail"]
+
+
+def test_semantic_query_filters_accept_original_csv_header(client):
+    csv_content = b"Full Name,city\nAlice,London\n"
+    ingest_resp = client.post(
+        "/ingest",
+        files={"file": ("people.csv", csv_content, "text/csv")},
+    )
+    assert ingest_resp.status_code == 200
+    dataset_id = ingest_resp.json()["dataset_id"]
+
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"full_name": "Alice", "city": "London"},
+                "text": "full_name: Alice | city: London",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), patch(
+        "app.retrieval.embed_texts", return_value=[[0.1] * 384]
+    ):
+        resp = _query_semantic(
+            client,
+            {
+                "question": "Who is in London?",
+                "dataset_id": dataset_id,
+                "filters": {"Full Name": "Alice"},
+            },
+        )
+    assert resp.status_code == 200
+
+
 def test_semantic_query_projection_rejects_invalid_column(client):
     dataset_id = _ingest(client)
 

@@ -102,7 +102,15 @@ class QueryRequest(BaseModel):
         ),
     )
     top_k: int = Field(default=10, ge=1, le=100)
-    filters: Optional[Dict[str, str]] = None
+    filters: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Optional exact-match pre-filters before semantic retrieval. "
+            "Keys must resolve to normalized_name from GET /tables query_context.columns "
+            "(same keys as row_data). Case-insensitive normalized_name is accepted; "
+            "unambiguous original_name (CSV header) is also accepted."
+        ),
+    )
     columns: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -161,8 +169,8 @@ class AggregateRequest(BaseModel):
     group_by: Optional[str] = Field(
         default=None,
         description=(
-            "Column to group by. Use normalized_name from "
-            "GET /tables query_context.columns."
+            "Column to group by. Prefer normalized_name from GET /tables; "
+            "case-insensitive normalized_name or unambiguous original_name accepted."
         ),
     )
     group_by_date_part: Optional[Literal["month", "quarter", "year"]] = Field(
@@ -303,7 +311,10 @@ class FilterRequest(BaseModel):
     )
     sort_by: Optional[str] = Field(
         default=None,
-        description="Optional sort column (normalized_name).",
+        description=(
+            "Optional sort column. Prefer normalized_name from GET /tables; "
+            "case-insensitive normalized_name or unambiguous original_name accepted."
+        ),
     )
     sort_order: Literal["asc", "desc"] = Field(
         default="asc",

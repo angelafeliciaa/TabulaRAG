@@ -215,12 +215,40 @@ def _build_casefold_column_lookup(columns: List[str]) -> Dict[str, List[str]]:
     return lookup
 
 
+def _build_original_name_casefold_lookup(
+    columns: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Map casefold(original CSV header) -> normalized_name when unambiguous."""
+    groups: Dict[str, List[str]] = {}
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        norm = col.get("normalized_name")
+        orig = col.get("original_name")
+        if not norm or orig is None:
+            continue
+        norm_s = str(norm).strip()
+        if not norm_s:
+            continue
+        key = str(orig).strip().casefold()
+        if not key:
+            continue
+        groups.setdefault(key, []).append(norm_s)
+    resolved: Dict[str, str] = {}
+    for key, norms in groups.items():
+        uniq = list(dict.fromkeys(norms))
+        if len(uniq) == 1:
+            resolved[key] = uniq[0]
+    return resolved
+
+
 def _resolve_column_case_insensitive(
     column_name: Optional[str],
     *,
     valid_columns: set[str],
     casefold_lookup: Dict[str, List[str]],
     field_label: str,
+    original_casefold_to_normalized: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     if column_name is None:
         return None
@@ -241,6 +269,10 @@ def _resolve_column_case_insensitive(
                 f"Matches: {', '.join(matches)}"
             ),
         )
+    if original_casefold_to_normalized is not None:
+        mapped = original_casefold_to_normalized.get(raw.casefold())
+        if mapped is not None and mapped in valid_columns:
+            return mapped
     return raw
 
 
@@ -249,6 +281,7 @@ def _resolve_filter_columns_case_insensitive(
     *,
     valid_columns: set[str],
     casefold_lookup: Dict[str, List[str]],
+    original_casefold_to_normalized: Optional[Dict[str, str]] = None,
 ) -> None:
     if not filters:
         return
@@ -258,7 +291,49 @@ def _resolve_filter_columns_case_insensitive(
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="filter column",
+            original_casefold_to_normalized=original_casefold_to_normalized,
         ) or item.column
+
+
+def _normalize_semantic_filter_dict(
+    filters: Optional[Dict[str, str]],
+    *,
+    valid_columns: set[str],
+    casefold_lookup: Dict[str, List[str]],
+    original_casefold_to_normalized: Dict[str, str],
+) -> Optional[Dict[str, str]]:
+    """Resolve filter object keys to normalized column names; reject unknown keys."""
+    if not filters:
+        return filters
+    out: Dict[str, str] = {}
+    for key, value in filters.items():
+        resolved_key = _resolve_column_case_insensitive(
+            str(key),
+            valid_columns=valid_columns,
+            casefold_lookup=casefold_lookup,
+            field_label="semantic filter column",
+            original_casefold_to_normalized=original_casefold_to_normalized,
+        )
+        nk = str(resolved_key).strip() if resolved_key is not None else ""
+        if nk not in valid_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid semantic filter column '{key}'. "
+                    "Use normalized_name from GET /tables query_context.columns "
+                    "(same keys as row_data)."
+                ),
+            )
+        if nk in out and out[nk] != value:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Conflicting semantic filter values for column '{nk}' "
+                    "after normalizing column names."
+                ),
+            )
+        out[nk] = value
+    return out
 
 
 def _build_where_clauses(
@@ -706,6 +781,26 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
+    cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
+    ordered_columns = [
+        col["normalized_name"]
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
+    ]
+    valid_columns = set(ordered_columns)
+    if not valid_columns:
+        raise HTTPException(status_code=400, detail="Dataset has no columns.")
+    casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
+
+    body.filters = _normalize_semantic_filter_dict(
+        body.filters,
+        valid_columns=valid_columns,
+        casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
+    )
+
     payload = smart_query(
         dataset_id=resolved_dataset_id,
         question=body.question,
@@ -715,16 +810,6 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
 
     projected_columns: Optional[List[str]] = None
     if body.columns is not None:
-        cols_payload = get_cols_for_dataset(resolved_dataset_id)
-        ordered_columns = [
-            col["normalized_name"]
-            for col in cols_payload["columns"]
-            if col.get("normalized_name")
-        ]
-        valid_columns = set(ordered_columns)
-        if not valid_columns:
-            raise HTTPException(status_code=400, detail="Dataset has no columns.")
-        casefold_lookup = _build_casefold_column_lookup(ordered_columns)
 
         deduped_columns = list(dict.fromkeys(body.columns))
         deduped_columns = [
@@ -733,6 +818,7 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="projection column",
+                original_casefold_to_normalized=original_lookup,
             )
             or col
             for col in deduped_columns
@@ -927,20 +1013,23 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
     if body.metric_column is not None:
         body.metric_column = _resolve_column_case_insensitive(
@@ -948,6 +1037,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="metric_column",
+            original_casefold_to_normalized=original_lookup,
         )
     if body.group_by is not None:
         body.group_by = _resolve_column_case_insensitive(
@@ -955,6 +1045,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="group_by",
+            original_casefold_to_normalized=original_lookup,
         )
     if body.metrics:
         for metric in body.metrics:
@@ -966,6 +1057,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="metric column",
+                original_casefold_to_normalized=original_lookup,
             )
             metric["column"] = resolved_metric_col
 
@@ -1146,20 +1238,23 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
 
     projected_columns: Optional[List[str]] = None
@@ -1171,6 +1266,7 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="projection column",
+                original_casefold_to_normalized=original_lookup,
             )
             or col
             for col in deduped_columns
@@ -1189,6 +1285,7 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
         field_label="sort_by column",
+        original_casefold_to_normalized=original_lookup,
     )
     body.sort_by = sort_by
     if sort_by is not None and sort_by not in valid_columns:
@@ -1318,20 +1415,23 @@ def _run_filter_row_indices_query(
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
 
     column_kinds = _infer_column_kinds(resolved_dataset_id, valid_columns)
@@ -1419,7 +1519,9 @@ def _run_filter_row_indices_query(
         "- RESPONSE CONTRACT (MANDATORY): include the returned `url` in every user-facing reply. "
         "Prefer returning `final_response` verbatim.\n"
         "- Discovery flow for large catalogs: GET /tables -> POST /query.\n"
-        "- Always use normalized column names from query_context.columns."
+        "- Column names: prefer normalized_name from GET /tables query_context.columns "
+        "(same keys as row_data). The server maps case-insensitive normalized names and "
+        "unambiguous original CSV headers to canonical normalized_name; invalid columns return 400."
     ),
 )
 def unified_query_endpoint(

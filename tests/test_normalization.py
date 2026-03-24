@@ -49,7 +49,19 @@ def test_normalize_headers_empty_becomes_col_index():
 
 
 def test_normalize_headers_collapse_internal_whitespace():
-    assert normalize_headers(["foo   bar", "baz"]) == ["foo bar", "baz"]
+    assert normalize_headers(["foo   bar", "baz"]) == ["foo_bar", "baz"]
+
+
+def test_normalize_headers_snake_case_mixed_separators():
+    assert normalize_headers(["Column-Name", "already_snake", "UPPER"]) == [
+        "column_name",
+        "already_snake",
+        "upper",
+    ]
+
+
+def test_normalize_headers_camel_case_boundary():
+    assert normalize_headers(["firstName", "userID"]) == ["first_name", "user_id"]
 
 
 def test_normalize_headers_strip_only():

@@ -283,7 +283,7 @@ def test_unified_query_aggregate_resolves_dataset_name(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["dataset_id"] == dataset_id
-    assert body["group_by_column"] == "Sales Person"
+    assert body["group_by_column"] == "sales_person"
 
 
 def test_unified_query_filter_missing_dataset_prompts_with_guidance(client):
@@ -437,5 +437,5 @@ def test_unified_query_aggregate_resolves_columns_case_insensitively(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["dataset_id"] == dataset_id
-    assert body["metric_column"] == "Boxes Shipped"
-    assert body["group_by_column"] == "Sales Person"
+    assert body["metric_column"] == "boxes_shipped"
+    assert body["group_by_column"] == "sales_person"
