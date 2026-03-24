@@ -387,3 +387,55 @@ def test_unified_query_filter_dataset_id_and_name_mismatch(client):
     assert resp.status_code == 409
     detail = resp.json()["detail"]
     assert "does not match dataset_name" in detail["message"]
+
+
+def test_unified_query_filter_resolves_columns_case_insensitively(client):
+    dataset_id = _ingest_people(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "filter",
+            "filter": {
+                "dataset_id": dataset_id,
+                "filters": [{"column": "CITY", "operator": "=", "value": "London"}],
+                "columns": ["NAME", "Age"],
+                "sort_by": "AGE",
+                "sort_order": "desc",
+                "limit": 10,
+                "offset": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["row_count"] == 1
+    assert len(body["rowsResult"]) == 1
+    row_data = body["rowsResult"][0]["row_data"]
+    assert "name" in row_data
+    assert "age" in row_data
+    assert row_data["name"] == "Alice"
+    assert row_data["age"] == "30"
+
+
+def test_unified_query_aggregate_resolves_columns_case_insensitively(client):
+    dataset_id = _ingest_sales(client)
+    resp = client.post(
+        "/query",
+        json={
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_id": dataset_id,
+                "operation": "sum",
+                "metric_column": "boxes shipped",
+                "group_by": "sales person",
+                "filters": [{"column": "country", "operator": "=", "value": "Canada"}],
+                "limit": 50,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["metric_column"] == "Boxes Shipped"
+    assert body["group_by_column"] == "Sales Person"
