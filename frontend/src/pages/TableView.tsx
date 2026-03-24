@@ -30,6 +30,14 @@ type QueryPayload =
     result_title?: string;
   }
   | {
+    mode: "semantic";
+    dataset_id: number;
+    row_indices: number[];
+    question?: string;
+    columns?: string[] | null;
+    result_title?: string;
+  }
+  | {
     dataset_id: number;
     operation: string;
     metric_column?: string;
@@ -41,6 +49,8 @@ type QueryPayload =
 type MultiHighlightSpec = {
   dataset_id: number;
   filters?: FilterConditionPayload[];
+  /** When set, highlight these dataset row indices in order (filter / semantic virtual results). */
+  row_indices?: number[];
   label?: string;
   max_rows?: number;
 };
@@ -216,6 +226,20 @@ function decodeMultiHighlightSpec(encoded: string): MultiHighlightSpec {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
+function parseExplicitRowIndices(spec: MultiHighlightSpec): number[] | null {
+  if (!Array.isArray(spec.row_indices) || spec.row_indices.length === 0) {
+    return null;
+  }
+  const out: number[] = [];
+  for (const r of spec.row_indices) {
+    if (typeof r !== "number" || !Number.isFinite(r) || r < 0 || r !== Math.trunc(r)) {
+      return null;
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 function formatFilterSummary(filters?: FilterConditionPayload[]): string {
   if (!filters || filters.length === 0) {
     return "no filters";
@@ -234,13 +258,30 @@ function formatFilterSummary(filters?: FilterConditionPayload[]): string {
     .join(" ");
 }
 
+/** Virtual table URLs may put the payload in `?q=` and/or `#q=` (same as AggregateTable). */
+function getVirtualTableEncodedQ(returnPath: string): string | null {
+  try {
+    const parsed = new URL(returnPath, window.location.origin);
+    const fromSearch = parsed.searchParams.get("q");
+    if (fromSearch) {
+      return fromSearch;
+    }
+    if (parsed.hash.length > 1) {
+      const hashParams = new URLSearchParams(parsed.hash.slice(1));
+      return hashParams.get("q");
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function buildQueryContextTitle(returnPath: string): string | null {
   if (!returnPath || returnPath === "/") {
     return null;
   }
   try {
-    const parsed = new URL(returnPath, window.location.origin);
-    const encoded = parsed.searchParams.get("q");
+    const encoded = getVirtualTableEncodedQ(returnPath);
     if (!encoded) {
       return null;
     }
@@ -250,8 +291,21 @@ function buildQueryContextTitle(returnPath: string): string | null {
         typeof payload.result_title === "string" ? payload.result_title.trim() : "";
       return providedTitle || `Filter result: ${formatFilterSummary(payload.filters)}`;
     }
+    if ("mode" in payload && payload.mode === "semantic") {
+      const providedTitle =
+        typeof payload.result_title === "string" ? payload.result_title.trim() : "";
+      const n = Array.isArray(payload.row_indices) ? payload.row_indices.length : 0;
+      if (providedTitle) {
+        return providedTitle;
+      }
+      const q = typeof payload.question === "string" ? payload.question.trim() : "";
+      return q ? `Semantic results: ${q}` : `Semantic results (${n} row${n === 1 ? "" : "s"})`;
+    }
 
-    const aggregatePayload = payload as Exclude<QueryPayload, { mode: "filter" }>;
+    const aggregatePayload = payload as Exclude<
+      QueryPayload,
+      { mode: "filter" } | { mode: "semantic" }
+    >;
     const operationLabel =
       aggregatePayload.operation.charAt(0).toUpperCase() + aggregatePayload.operation.slice(1);
     const metricCol = aggregatePayload.metric_column ?? "aggregate_value";
@@ -272,22 +326,25 @@ export default function TableView() {
   const highlightedRow = parseNonNegativeInt(queryParams.get("highlight_row"));
   const highlightMode = queryParams.get("highlight_mode");
   const encodedHighlightSpec = queryParams.get("highlight_spec");
+  const highlightCursorParam = parseNonNegativeInt(queryParams.get("highlight_cursor"));
   const isMultiHighlightMode = highlightMode === "multi" && !!encodedHighlightSpec;
   const returnPath = resolveReturnPath(location.search);
   const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
-  const returnQueryMode = useMemo<"filter" | "aggregate" | null>(() => {
+  const returnQueryMode = useMemo<"filter" | "aggregate" | "semantic" | null>(() => {
     if (!returnPath || returnPath === "/") {
       return null;
     }
     try {
-      const parsed = new URL(returnPath, window.location.origin);
-      const encoded = parsed.searchParams.get("q");
+      const encoded = getVirtualTableEncodedQ(returnPath);
       if (!encoded) {
         return null;
       }
       const payload = decodePayload(encoded);
       if ("mode" in payload && payload.mode === "filter") {
         return "filter";
+      }
+      if ("mode" in payload && payload.mode === "semantic") {
+        return "semantic";
       }
       return "aggregate";
     } catch {
@@ -410,8 +467,36 @@ export default function TableView() {
     }
 
     const maxRows = Math.max(1, Math.min(parsedMultiSpec.max_rows ?? DEFAULT_MULTI_MAX_ROWS, DEFAULT_MULTI_MAX_ROWS));
+    const explicitIndices = parseExplicitRowIndices(parsedMultiSpec);
+
+    if (explicitIndices !== null) {
+      setHighlightErr(null);
+      const truncated = explicitIndices.length > maxRows;
+      const indices = truncated ? explicitIndices.slice(0, maxRows) : explicitIndices;
+      const initialCursor = Math.min(
+        highlightCursorParam ?? 0,
+        Math.max(0, indices.length - 1),
+      );
+      setMultiHighlightRows(indices);
+      setMultiHighlightTotal(explicitIndices.length);
+      setMultiHighlightTruncated(truncated);
+      setActiveHighlightCursor(initialCursor);
+      setMultiHighlightLabel(parsedMultiSpec.label || "Query results");
+      if (indices.length > 0) {
+        const targetRow = indices[initialCursor];
+        const initialHighlightPage = Math.floor(targetRow / ROWS_PER_PAGE) + 1;
+        pageChangeSourceRef.current = "highlight";
+        setCurrentPage(initialHighlightPage);
+        setPageInput(String(initialHighlightPage));
+      }
+      return;
+    }
+
     let mounted = true;
     setHighlightErr(null);
+    pageChangeSourceRef.current = "table";
+    setCurrentPage(1);
+    setPageInput("1");
     filterRowIndices({
       dataset_id: parsedMultiSpec.dataset_id,
       filters: parsedMultiSpec.filters,
@@ -424,10 +509,15 @@ export default function TableView() {
         setMultiHighlightRows(result.row_indices);
         setMultiHighlightTotal(result.total_match_count);
         setMultiHighlightTruncated(result.truncated);
-        setActiveHighlightCursor(0);
+        const initialCursor = Math.min(
+          highlightCursorParam ?? 0,
+          Math.max(0, result.row_indices.length - 1),
+        );
+        setActiveHighlightCursor(initialCursor);
         setMultiHighlightLabel(parsedMultiSpec.label || "All matching rows");
         if (result.row_indices.length > 0) {
-          const initialHighlightPage = Math.floor(result.row_indices[0] / ROWS_PER_PAGE) + 1;
+          const targetRow = result.row_indices[initialCursor];
+          const initialHighlightPage = Math.floor(targetRow / ROWS_PER_PAGE) + 1;
           pageChangeSourceRef.current = "highlight";
           setCurrentPage(initialHighlightPage);
           setPageInput(String(initialHighlightPage));
@@ -448,14 +538,11 @@ export default function TableView() {
     return () => {
       mounted = false;
     };
-  }, [isMultiHighlightMode, parsedMultiSpec, numericDatasetId]);
+  }, [isMultiHighlightMode, parsedMultiSpec, numericDatasetId, highlightCursorParam]);
 
   useEffect(() => {
     const initialPage = highlightedRow !== null ? Math.floor(highlightedRow / ROWS_PER_PAGE) + 1 : 1;
     if (isMultiHighlightMode) {
-      pageChangeSourceRef.current = "table";
-      setCurrentPage(1);
-      setPageInput("1");
       setSearchQuery("");
       return;
     }
@@ -570,6 +657,12 @@ export default function TableView() {
   const headerTitle = useMemo(() => {
     if (isMultiHighlightMode) {
       const label = (multiHighlightLabel || parsedMultiSpec?.label || "Result").trim();
+      if (returnQueryMode === "filter") {
+        return sourceQueryTitle || `Filter result: ${label}`;
+      }
+      if (returnQueryMode === "semantic") {
+        return sourceQueryTitle || `Semantic result: ${label}`;
+      }
       return `Aggregate Result: ${label}`;
     }
     if (highlightedRow !== null && returnQueryMode === "filter") {
@@ -582,7 +675,15 @@ export default function TableView() {
       return sourceQueryTitle;
     }
     return tableName || "Table";
-  }, [highlightedRow, isMultiHighlightMode, multiHighlightLabel, parsedMultiSpec?.label, returnQueryMode, sourceQueryTitle, tableName]);
+  }, [
+    highlightedRow,
+    isMultiHighlightMode,
+    multiHighlightLabel,
+    parsedMultiSpec?.label,
+    returnQueryMode,
+    sourceQueryTitle,
+    tableName,
+  ]);
   const dateColumns = useMemo(
     () => (data ? detectDateColumns(resolvedRows, data.columns) : new Set<string>()),
     [data, resolvedRows],

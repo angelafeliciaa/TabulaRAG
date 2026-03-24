@@ -56,6 +56,7 @@ def test_semantic_query_semantic_results(client):
     assert data["dataset_url"].startswith("http")
     assert isinstance(data.get("url"), str)
     assert data["url"].startswith("http")
+    assert "/tables/virtual" in data["url"]
     assert isinstance(data.get("final_response"), str)
     assert data["url"] in data["final_response"]
     assert "MANDATORY" in data.get("response_instructions", "")

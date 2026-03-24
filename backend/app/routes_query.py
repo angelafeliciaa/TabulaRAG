@@ -650,6 +650,25 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
 
 
+def build_semantic_virtual_table_url(
+    *,
+    dataset_id: int,
+    row_indices: List[int],
+    question: str,
+    columns: Optional[List[str]] = None,
+) -> str:
+    """Virtual table URL showing the top semantic hits (same page shell as filter/aggregate)."""
+    payload: Dict[str, Any] = {
+        "mode": "semantic",
+        "dataset_id": int(dataset_id),
+        "row_indices": [int(i) for i in row_indices],
+        "question": (question or "").strip()[:2000],
+        "columns": columns,
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
+
+
 def _with_mandatory_source_link(
     final_response: Optional[str], url: str, fallback_message: str
 ) -> str:
@@ -764,16 +783,25 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
     if "source_url" not in resolved_dataset:
         resolved_dataset["source_url"] = dataset_url
 
-    canonical_url = dataset_url
+    row_indices_ordered: List[int] = []
     results = payload.get("results")
-    if isinstance(results, list) and results:
-        first = results[0]
-        if isinstance(first, dict):
-            canonical_url = (
-                first.get("highlight_url")
-                or first.get("source_url")
-                or dataset_url
-            )
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and item.get("row_index") is not None:
+                try:
+                    row_indices_ordered.append(int(item["row_index"]))
+                except (TypeError, ValueError):
+                    continue
+
+    if row_indices_ordered:
+        canonical_url = build_semantic_virtual_table_url(
+            dataset_id=resolved_dataset_id,
+            row_indices=row_indices_ordered,
+            question=body.question,
+            columns=body.columns,
+        )
+    else:
+        canonical_url = dataset_url
     payload["url"] = canonical_url
     payload["final_response"] = _with_mandatory_source_link(
         payload.get("final_response"),

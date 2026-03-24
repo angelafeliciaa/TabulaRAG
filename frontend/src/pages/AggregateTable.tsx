@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   aggregate,
   filterRows,
+  fetchRowsByIndices,
   type AggregateResponse,
   type FilterResponse,
 } from "../api";
@@ -33,6 +34,15 @@ type FilterPayload = {
   filters?: FilterConditionPayload[];
   limit?: number;
   offset?: number;
+  result_title?: string;
+};
+
+type SemanticPayload = {
+  mode: "semantic";
+  dataset_id: number;
+  row_indices: number[];
+  question?: string;
+  columns?: string[] | null;
   result_title?: string;
 };
 
@@ -92,7 +102,9 @@ function encodePayload(value: unknown): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function decodePayload(encoded: string): AggregatePayload | FilterPayload {
+function decodePayload(
+  encoded: string,
+): AggregatePayload | FilterPayload | SemanticPayload {
   const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
   const pad = normalized.length % 4;
   const padded = pad ? normalized + "=".repeat(4 - pad) : normalized;
@@ -137,14 +149,26 @@ export default function VirtualTableView() {
       encoded = hashParams.get("q");
     }
     if (!encoded) {
-      return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
+      return {
+        payload: null as AggregatePayload | FilterPayload | SemanticPayload | null,
+        error: "This URL is not valid or no longer valid",
+      };
     }
     try {
       return { payload: decodePayload(encoded), error: null as string | null };
     } catch {
-      return { payload: null as AggregatePayload | FilterPayload | null, error: "This URL is not valid or no longer valid" };
+      return {
+        payload: null as AggregatePayload | FilterPayload | SemanticPayload | null,
+        error: "This URL is not valid or no longer valid",
+      };
     }
   }, [location.search, location.hash]);
+
+  /** Include hash so `return_to` replays virtual URLs that only carry `q` in `#q=` (see parsedQuery). */
+  const virtualReturnTo = useMemo(
+    () => `${location.pathname}${location.search}${location.hash}`,
+    [location.pathname, location.search, location.hash],
+  );
 
   useEffect(() => {
     if (parsedQuery.error) {
@@ -157,6 +181,51 @@ export default function VirtualTableView() {
     }
 
     const payload = parsedQuery.payload;
+
+    if ("mode" in payload && payload.mode === "semantic") {
+      const sp = payload as SemanticPayload;
+      if (!Array.isArray(sp.row_indices) || sp.row_indices.length === 0) {
+        void Promise.resolve().then(() =>
+          setErr("Semantic URL is missing row_indices"),
+        );
+        return;
+      }
+      fetchRowsByIndices(
+        sp.dataset_id,
+        sp.row_indices,
+        sp.columns === undefined || sp.columns === null ? null : sp.columns,
+      )
+        .then((result: FilterResponse) => {
+          setErr(null);
+          const providedTitle =
+            typeof sp.result_title === "string" ? sp.result_title.trim() : "";
+          const q =
+            typeof sp.question === "string" ? sp.question.trim() : "";
+          setResultTitle(
+            providedTitle ||
+              `Semantic results (${sp.row_indices.length} row${sp.row_indices.length === 1 ? "" : "s"})`,
+          );
+          setResultSubtitle(q ? `Question: ${q}` : "");
+
+          const columnSet = new Set<string>();
+          for (const item of result.rowsResult) {
+            for (const key of Object.keys(item.row_data || {})) {
+              columnSet.add(key);
+            }
+          }
+          setColumns(Array.from(columnSet));
+
+          const mappedRows: TableRow[] = result.rowsResult.map((item) => ({
+            __row_index: item.row_index,
+            __dataset_id: result.dataset_id,
+            __highlight_id: item.highlight_id,
+            ...(item.row_data || {}),
+          }));
+          setRows(mappedRows);
+        })
+        .catch((error: unknown) => setErr(getErrorMessage(error)));
+      return;
+    }
 
     if ("mode" in payload && payload.mode === "filter") {
       filterRows(payload)
@@ -374,7 +443,7 @@ export default function VirtualTableView() {
               sortable
               onRowClick={
               hasRowDrilldown
-                ? ({ row }) => {
+                ? ({ row, rowIndex }) => {
                   const sourceDataset =
                     typeof row.__dataset_id === "number"
                       ? row.__dataset_id
@@ -394,14 +463,27 @@ export default function VirtualTableView() {
                       max_rows: MAX_MULTI_HIGHLIGHT_ROWS,
                     });
                     navigate(
-                      `/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`,
+                      `/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&return_to=${encodeURIComponent(virtualReturnTo)}`,
                     );
                     return;
                   }
 
                   if (sourceDataset !== null && sourceRow !== null) {
+                    if (filtered.rowIndices.length > 1) {
+                      const cursor = Math.max(0, filtered.rowIndices.indexOf(rowIndex));
+                      const spec = encodePayload({
+                        dataset_id: sourceDataset,
+                        row_indices: filtered.rowIndices,
+                        label: resultTitle.trim() || "Query results",
+                        max_rows: MAX_MULTI_HIGHLIGHT_ROWS,
+                      });
+                      navigate(
+                        `/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&highlight_cursor=${cursor}&return_to=${encodeURIComponent(virtualReturnTo)}`,
+                      );
+                      return;
+                    }
                     navigate(
-                      `/tables/${sourceDataset}?highlight_row=${sourceRow}&return_to=${encodeURIComponent(`${location.pathname}${location.search}`)}`,
+                      `/tables/${sourceDataset}?highlight_row=${sourceRow}&return_to=${encodeURIComponent(virtualReturnTo)}`,
                     );
                   }
                 }

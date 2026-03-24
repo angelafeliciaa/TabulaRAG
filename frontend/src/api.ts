@@ -513,6 +513,27 @@ export async function filterRows(params: unknown): Promise<FilterResponse> {
   return res.json();
 }
 
+/** Same row shape as filter virtual table; used for semantic search result replay. */
+export async function fetchRowsByIndices(
+  datasetId: number,
+  rowIndices: number[],
+  columns?: string[] | null,
+): Promise<FilterResponse> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/rows_by_indices`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        row_indices: rowIndices,
+        columns: columns ?? null,
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export type FilterRowIndicesResponse = {
   dataset_id: number;
   row_indices: number[];

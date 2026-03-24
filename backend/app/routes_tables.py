@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy import delete, func, select, text
 
@@ -11,6 +11,7 @@ from app.index_jobs import clear_index_job, get_index_jobs
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
 from app.normalization import (
+    flatten_row_data_to_original,
     get_normalized_value,
     get_typed_value,
     normalize_text_value,
@@ -33,6 +34,48 @@ SLICE_RESPONSE_URL_REQUIREMENT_TEXT = (
 
 class RenameRequest(BaseModel):
     name: str
+
+
+SEMANTIC_ROWS_BY_INDICES_MAX = 100
+
+
+class RowsByIndicesRequest(BaseModel):
+    """Fetch specific rows by row_index for semantic virtual table replay."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    row_indices: List[int] = Field(..., min_length=1)
+    columns: Optional[List[str]] = None
+
+    @field_validator("row_indices")
+    @classmethod
+    def _non_negative(cls, value: List[int]) -> List[int]:
+        for idx in value:
+            if idx < 0:
+                raise ValueError("row_indices must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def _cap_length(self) -> "RowsByIndicesRequest":
+        if len(self.row_indices) > SEMANTIC_ROWS_BY_INDICES_MAX:
+            raise ValueError(
+                f"At most {SEMANTIC_ROWS_BY_INDICES_MAX} row_indices allowed."
+            )
+        return self
+
+
+def _flatten_stored_row_data(row_data: Any) -> Dict[str, Any]:
+    if isinstance(row_data, dict):
+        return flatten_row_data_to_original(row_data)
+    if isinstance(row_data, str):
+        try:
+            parsed = json.loads(row_data)
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+            return flatten_row_data_to_original(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 _QUERY_CONTEXT_TYPE_PRIORITY = {
@@ -427,6 +470,111 @@ def get_cols_for_dataset(dataset_id: int):
             }
             for c in columns
         ],
+    }
+
+
+@router.post(
+    "/tables/{dataset_id}/rows_by_indices",
+    summary="Fetch dataset rows by row_index list",
+    description=(
+        "Returns full row payloads in the order of row_indices (for semantic search virtual table URLs). "
+        f"At most {SEMANTIC_ROWS_BY_INDICES_MAX} indices per request."
+    ),
+    include_in_schema=False,
+)
+def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest):
+    ordered_indices = list(body.row_indices)
+    unique_set = set(ordered_indices)
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+
+        columns_meta = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        ordered_column_names = [c.normalized_name for c in columns_meta]
+        if not ordered_column_names:
+            raise HTTPException(status_code=400, detail="Dataset has no columns.")
+        highlight_column = ordered_column_names[0]
+
+        valid_columns = set(ordered_column_names)
+        projected: Optional[List[str]] = None
+        if body.columns is not None:
+            if len(body.columns) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="columns, when set, must be a non-empty list.",
+                )
+            projected = [c for c in body.columns if c in valid_columns]
+            invalid = [c for c in body.columns if c not in valid_columns]
+            if invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown columns: {', '.join(invalid)}",
+                )
+            if not projected:
+                raise HTTPException(
+                    status_code=400,
+                    detail="columns must list at least one valid column name.",
+                )
+
+        rows_db = (
+            db.execute(
+                select(DatasetRow).where(
+                    DatasetRow.dataset_id == dataset_id,
+                    DatasetRow.row_index.in_(unique_set),
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    by_index = {int(r.row_index): r for r in rows_db}
+    missing = [i for i in unique_set if i not in by_index]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Row index(es) not found for this dataset: {', '.join(str(m) for m in sorted(missing)[:10])}"
+            + ("…" if len(missing) > 10 else ""),
+        )
+
+    rows_out: List[Dict[str, Any]] = []
+    for row_index in ordered_indices:
+        row = by_index.get(row_index)
+        if row is None:
+            continue
+        flattened = _flatten_stored_row_data(row.row_data)
+        if projected is not None:
+            row_data_out = {col: flattened.get(col) for col in projected}
+        else:
+            row_data_out = flattened
+        rows_out.append(
+            {
+                "row_index": int(row_index),
+                "row_data": row_data_out,
+                "highlight_id": f"d{dataset_id}_r{int(row_index)}_{highlight_column}",
+            }
+        )
+
+    in_list = ",".join(str(i) for i in sorted(unique_set))
+    sql_display = (
+        f"SELECT row_index, row_data FROM dataset_rows "
+        f"WHERE dataset_id = {dataset_id} AND row_index IN ({in_list})"
+    )
+
+    return {
+        "dataset_id": dataset_id,
+        "rowsResult": rows_out,
+        "row_count": len(rows_out),
+        "sql_query": sql_display,
+        "url": None,
     }
 
 
