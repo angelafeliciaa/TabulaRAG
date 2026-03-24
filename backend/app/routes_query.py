@@ -712,6 +712,53 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
         filters=body.filters,
         top_k=body.top_k,
     )
+
+    projected_columns: Optional[List[str]] = None
+    if body.columns is not None:
+        cols_payload = get_cols_for_dataset(resolved_dataset_id)
+        ordered_columns = [
+            col["normalized_name"]
+            for col in cols_payload["columns"]
+            if col.get("normalized_name")
+        ]
+        valid_columns = set(ordered_columns)
+        if not valid_columns:
+            raise HTTPException(status_code=400, detail="Dataset has no columns.")
+        casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+
+        deduped_columns = list(dict.fromkeys(body.columns))
+        deduped_columns = [
+            _resolve_column_case_insensitive(
+                col,
+                valid_columns=valid_columns,
+                casefold_lookup=casefold_lookup,
+                field_label="projection column",
+            )
+            or col
+            for col in deduped_columns
+        ]
+        deduped_columns = list(dict.fromkeys(deduped_columns))
+        invalid_projection = [col for col in deduped_columns if col not in valid_columns]
+        if invalid_projection:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid projection columns: {', '.join(invalid_projection)}",
+            )
+        projected_columns = deduped_columns
+        body.columns = projected_columns
+
+    if projected_columns is not None:
+        raw_results = payload.get("results")
+        if isinstance(raw_results, list):
+            for item in raw_results:
+                if not isinstance(item, dict):
+                    continue
+                row_data = item.get("row_data")
+                if isinstance(row_data, dict):
+                    item["row_data"] = {
+                        col: row_data.get(col) for col in projected_columns
+                    }
+
     dataset_url = payload.get("dataset_url") or build_dataset_table_url(resolved_dataset_id)
     payload["dataset_url"] = dataset_url
     if "source_url" not in resolved_dataset:

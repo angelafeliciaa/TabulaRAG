@@ -103,6 +103,25 @@ class QueryRequest(BaseModel):
     )
     top_k: int = Field(default=10, ge=1, le=100)
     filters: Optional[Dict[str, str]] = None
+    columns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional projection list for semantic result rows. "
+            "Use normalized_name from GET /tables query_context.columns."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        data = dict(raw)
+
+        if data.get("columns") is None and data.get("select") is not None:
+            data["columns"] = data.get("select")
+
+        return data
 
 
 class AggregateRequest(BaseModel):
@@ -431,6 +450,19 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
                 "question": "Who lives in London?",
                 "dataset_name": "people",
                 "top_k": 10,
+            },
+        },
+    },
+    "semantic_with_projection": {
+        "summary": "Semantic lookup with selected columns",
+        "description": "Find rows relevant to a question and return only selected columns in row_data.",
+        "value": {
+            "mode": "semantic",
+            "semantic": {
+                "question": "Who lives in London?",
+                "dataset_name": "people",
+                "columns": ["name", "city"],
+                "top_k": 5,
             },
         },
     },

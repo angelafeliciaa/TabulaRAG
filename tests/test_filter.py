@@ -200,6 +200,44 @@ def test_filter_virtual_url_uses_list_filters_for_compatibility(client):
     assert replay_resp.status_code == 200
 
 
+def test_filter_virtual_url_preserves_sort_and_limit(client):
+    dataset_id = _ingest(client)
+
+    resp = _query_filter(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "filters": None,
+            "sort_by": "age",
+            "sort_order": "desc",
+            "limit": 1,
+            "offset": 0,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["rowsResult"]) == 1
+    assert body["rowsResult"][0]["row_data"]["name"] == "Alice"
+
+    parsed = urlparse(body["url"])
+    encoded = parse_qs(parsed.query).get("q", [None])[0]
+    assert encoded is not None
+    pad = "=" * (-len(encoded) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
+    )
+    assert payload["sort_by"] == "age"
+    assert payload["sort_order"] == "desc"
+    assert payload["limit"] == 1
+    assert payload["offset"] == 0
+
+    replay_resp = _query_filter(client, payload)
+    assert replay_resp.status_code == 200
+    replay_rows = replay_resp.json()["rowsResult"]
+    assert len(replay_rows) == 1
+    assert replay_rows[0]["row_data"]["name"] == "Alice"
+
+
 def test_filter_row_indices_success(client):
     dataset_id = _ingest(client)
 

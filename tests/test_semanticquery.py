@@ -61,6 +61,71 @@ def test_semantic_query_semantic_results(client):
     assert "MANDATORY" in data.get("response_instructions", "")
 
 
+def test_semantic_query_supports_column_projection_case_insensitive(client):
+    dataset_id = _ingest(client)
+
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"name": "Alice", "city": "London", "age": "30"},
+                "text": "name: Alice | city: London | age: 30",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), patch(
+        "app.retrieval.embed_texts", return_value=[[0.1] * 384]
+    ):
+        resp = _query_semantic(
+            client,
+            {
+                "question": "Who lives in London?",
+                "dataset_id": dataset_id,
+                "columns": ["NAME", "Age"],
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["results"]) == 1
+    row_data = data["results"][0]["row_data"]
+    assert set(row_data.keys()) == {"name", "age"}
+    assert row_data["name"] == "Alice"
+    assert row_data["age"] == "30"
+
+
+def test_semantic_query_projection_rejects_invalid_column(client):
+    dataset_id = _ingest(client)
+
+    mock_hits = [
+        {
+            "id": 0,
+            "score": 0.92,
+            "payload": {
+                "row_data": {"name": "Alice", "city": "London", "age": "30"},
+                "text": "name: Alice | city: London | age: 30",
+            },
+        },
+    ]
+
+    with patch("app.retrieval.search_vectors", return_value=mock_hits), patch(
+        "app.retrieval.embed_texts", return_value=[[0.1] * 384]
+    ):
+        resp = _query_semantic(
+            client,
+            {
+                "question": "Who lives in London?",
+                "dataset_id": dataset_id,
+                "columns": ["not_a_real_column"],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "Invalid projection columns" in resp.json()["detail"]
+
+
 def test_highlight_found(client):
     dataset_id = _ingest(client)
 
