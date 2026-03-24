@@ -2,7 +2,7 @@
 # from mcp.server.transport_security import TransportSecuritySettings
 
 # from app.routes_tables import list_tables, get_table_slice
-# from app.retrieval import get_highlight, hybrid_search
+# from app.retrieval import get_highlight, semantic_search
 
 # mcp = FastMCP(
 #     "TabulaRAG",
@@ -33,8 +33,8 @@
 #     question: str,
 #     top_k: int = 10,
 # ) -> dict:
-#     """Query a dataset using hybrid search and return matching rows with highlights."""
-#     results = hybrid_search(
+#     """Query a dataset using vector (Qdrant) search and return matching rows with highlights."""
+#     results = semantic_search(
 #         dataset_id=dataset_id,
 #         question=question,
 #         top_k=top_k,

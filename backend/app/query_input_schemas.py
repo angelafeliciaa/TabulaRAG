@@ -85,8 +85,13 @@ class FilterCondition(BaseModel):
         return data
 
 
-class QueryRequest(BaseModel):
-    question: str = Field(description="Natural language question to search the dataset with")
+class SemanticRequest(BaseModel):
+    question: str = Field(
+        description=(
+            "Natural-language query for vector similarity search (Qdrant) over embedded table rows. "
+            "Put constraints in the question text; use filter mode for exact SQL-style row selection."
+        )
+    )
     dataset_id: Optional[int] = Field(
         default=None,
         description=(
@@ -102,15 +107,6 @@ class QueryRequest(BaseModel):
         ),
     )
     top_k: int = Field(default=10, ge=1, le=100)
-    filters: Optional[Dict[str, str]] = Field(
-        default=None,
-        description=(
-            "Optional exact-match pre-filters before semantic retrieval. "
-            "Keys must resolve to normalized_name from GET /tables query_context.columns "
-            "(same keys as row_data). Case-insensitive normalized_name is accepted; "
-            "unambiguous original_name (CSV header) is also accepted."
-        ),
-    )
     columns: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -125,6 +121,13 @@ class QueryRequest(BaseModel):
         if not isinstance(raw, dict):
             return raw
         data = dict(raw)
+
+        if data.get("filters") is not None:
+            raise ValueError(
+                "Semantic mode does not support 'filters'. "
+                'Use mode="filter" or "filter_row_indices" for SQL-backed row selection; '
+                "semantic mode only performs vector retrieval (Qdrant) over embedded rows."
+            )
 
         if data.get("columns") is None and data.get("select") is not None:
             data["columns"] = data.get("select")
@@ -381,14 +384,15 @@ class UnifiedQueryRequest(BaseModel):
     mode: Optional[QueryMode] = Field(
         default=None,
         description=(
-            "Query mode. Use semantic for natural-language retrieval, aggregate for metrics "
-            "(count/sum/avg/min/max with optional group_by), filter for row filtering/projection/sorting/pagination, "
-            "and filter_row_indices for row-id resolution. Optional when exactly one payload block is provided."
+            "Query mode. Use semantic for vector (Qdrant) similarity search over embedded rows only; "
+            "use aggregate for metrics (count/sum/avg/min/max with optional group_by); "
+            "use filter for SQL-backed row filtering/projection/sorting/pagination; "
+            "use filter_row_indices for row-id resolution. Optional when exactly one payload block is provided."
         ),
     )
-    semantic: Optional[QueryRequest] = Field(
+    semantic: Optional[SemanticRequest] = Field(
         default=None,
-        description="Payload for semantic mode.",
+        description="Payload for semantic (vector) mode — Qdrant retrieval only, no structured filters.",
     )
     aggregate: Optional[AggregateRequest] = Field(
         default=None,

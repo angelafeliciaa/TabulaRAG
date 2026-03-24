@@ -271,24 +271,6 @@ def _public_api_base_url() -> str:
     return base.rstrip("/")
 
 
-def _verification_enabled() -> bool:
-    return os.getenv("QUERY_ENABLE_VERIFICATION", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _fail_closed_on_verification_error() -> bool:
-    return os.getenv("QUERY_FAIL_CLOSED_ON_VERIFY_ERROR", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def _public_ui_base_url() -> str:
     base = (
         os.getenv("PUBLIC_UI_BASE_URL")
@@ -591,70 +573,6 @@ def semantic_search(
                 results.append(r)
                 if len(results) >= top_k:
                     break
-
-    return results
-
-
-def exact_search(
-    dataset_id: int,
-    filters: Dict[str, str],
-    question: str = "",
-) -> List[Dict[str, Any]]:
-    """Exact match on row_data fields. Fetches rows and filters in Python
-    to handle double-serialized JSON and work across DB backends."""
-    if not filters:
-        return []
-
-    with SessionLocal() as db:
-        result = db.execute(
-            text(
-                "SELECT row_index, row_data FROM dataset_rows "
-                "WHERE dataset_id = :dataset_id ORDER BY row_index"
-            ),
-            {"dataset_id": dataset_id},
-        )
-        rows = result.fetchall()
-
-    results = []
-    for row in rows:
-        row_index = row[0]
-        row_data = _deserialize_row_data(row[1])
-        if all(get_normalized_value(row_data, col) == val for col, val in filters.items()):
-            results.append(
-                _build_result_item(
-                    dataset_id=dataset_id,
-                    row_index=int(row_index),
-                    row_data=row_data,
-                    score=1.0,
-                    question=question,
-                    match_type="exact",
-                )
-            )
-    return results
-
-
-def hybrid_search(
-    dataset_id: int,
-    question: str,
-    filters: Optional[Dict[str, str]] = None,
-    top_k: int = 10,
-) -> List[Dict[str, Any]]:
-    """Combine exact matches (score 1.0) with semantic results, deduplicated."""
-    seen_indices = set()
-    results = []
-
-    # Exact matches first
-    if filters:
-        for r in exact_search(dataset_id, filters, question=question):
-            if r["row_index"] not in seen_indices:
-                seen_indices.add(r["row_index"])
-                results.append(r)
-
-    # Then semantic results
-    for r in semantic_search(dataset_id, question, top_k=top_k):
-        if r["row_index"] not in seen_indices:
-            seen_indices.add(r["row_index"])
-            results.append(r)
 
     return results
 
@@ -1716,16 +1634,11 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 def smart_query(
     dataset_id: int,
     question: str,
-    filters: Optional[Dict[str, str]] = None,
     top_k: int = 10,
 ) -> Dict[str, Any]:
+    """Semantic (vector) retrieval only via Qdrant. Use filter / aggregate modes for SQL-style table access."""
     top_k = max(1, top_k)
-    results = hybrid_search(
-        dataset_id=dataset_id,
-        question=question,
-        filters=filters,
-        top_k=top_k,
-    )
+    results = semantic_search(dataset_id, question, top_k=top_k)
 
     response: Dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -1737,11 +1650,8 @@ def smart_query(
     aggregate_answer = _infer_aggregate_answer(dataset_id, question)
     if not aggregate_answer:
         response["final_response"] = _build_final_response(response)
-        if _verification_enabled():
-            verification = _verify_response(response)
-            response["verification"] = verification
-            if verification["status"] != "pass" and _fail_closed_on_verification_error():
-                response["final_response"] = "I could not verify this answer against source rows."
+        verification = _verify_response(response)
+        response["verification"] = verification
         return response
 
     source_result = aggregate_answer.get("source_result")
@@ -1754,15 +1664,8 @@ def smart_query(
     response["answer_type"] = aggregate_answer["answer_type"]
     response["answer_details"] = aggregate_answer["answer_details"]
     response["final_response"] = _build_final_response(response)
-    if _verification_enabled():
-        verification = _verify_response(response)
-        response["verification"] = verification
-        if verification["status"] != "pass" and _fail_closed_on_verification_error():
-            fallback_lines = [
-                "I could not verify this answer against source rows.",
-                f"Open table: {response.get('dataset_url')}",
-            ]
-            response["final_response"] = "\n".join(fallback_lines)
+    verification = _verify_response(response)
+    response["verification"] = verification
     return response
 
 

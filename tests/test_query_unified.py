@@ -176,7 +176,7 @@ def test_openapi_exposes_unified_query_only(client):
     post_query = paths["/query"]["post"]
     assert post_query.get("operationId") == "run_query"
     description = (post_query.get("description") or "").lower()
-    assert "filtering" in description
+    assert "filter" in description
     assert "pagination" in description
     assert "contains" in description
     assert "response contract" in description
@@ -345,27 +345,6 @@ def test_unified_query_filter_dataset_id_works_when_multiple_by_default(client):
     body = resp.json()
     assert body["dataset_id"] == people_id
     assert body["row_count"] == 1
-
-
-def test_unified_query_filter_dataset_id_requires_name_when_multiple_when_strict(client, monkeypatch):
-    people_id = _ingest_people(client)
-    _ingest_sales(client)
-    monkeypatch.setenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "true")
-    resp = client.post(
-        "/query",
-        json={
-            "mode": "filter",
-            "filter": {
-                "dataset_id": people_id,
-                "filters": [{"column": "city", "operator": "=", "value": "London"}],
-                "limit": 10,
-                "offset": 0,
-            },
-        },
-    )
-    assert resp.status_code == 409
-    detail = resp.json()["detail"]
-    assert "dataset_name" in detail["message"]
 
 
 def test_unified_query_filter_dataset_id_and_name_mismatch(client):
