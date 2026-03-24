@@ -179,7 +179,9 @@ def test_table_slice_includes_source_link_contract(client):
     assert payload["filters"] == []
     assert payload["limit"] == 2
     assert payload["offset"] == 0
+    assert payload["result_title"] == "Table slice result: Rows 1-2"
     assert isinstance(body.get("final_response"), str)
+    assert "Table slice result: Rows 1-2" in body["final_response"]
     assert body["url"] in body["final_response"]
     assert isinstance(body.get("response_instructions"), str)
 

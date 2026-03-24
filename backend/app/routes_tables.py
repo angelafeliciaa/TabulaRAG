@@ -84,6 +84,7 @@ def _build_slice_virtual_table_url(
     offset: int,
     sort_column: Optional[str],
     sort_direction: str,
+    result_title: str,
 ) -> str:
     payload = {
         "mode": "filter",
@@ -95,6 +96,7 @@ def _build_slice_virtual_table_url(
         "sort_as": "auto",
         "limit": max(1, int(limit)),
         "offset": max(0, int(offset)),
+        "result_title": result_title,
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
@@ -535,6 +537,14 @@ def get_table_slice(
             .all()
         )
 
+        if rows:
+            start_row_display = offset + 1
+            end_row_display = offset + len(rows)
+        else:
+            start_row_display = 0
+            end_row_display = 0
+        slice_result_title = f"Table slice result: Rows {start_row_display}-{end_row_display}"
+
         if search_trimmed:
             table_url = _build_dataset_table_url(dataset_id)
         else:
@@ -544,6 +554,7 @@ def get_table_slice(
                 offset=offset,
                 sort_column=sort_column,
                 sort_direction=normalized_sort_direction,
+                result_title=slice_result_title,
             )
         return {
             "dataset_id": dataset_id,
@@ -568,10 +579,7 @@ def get_table_slice(
             "final_response": _with_source_link(
                 None,
                 table_url,
-                (
-                    f"Table slice returned {len(rows)} row(s) "
-                    f"from offset {offset}."
-                ),
+                f"{slice_result_title}. Returned {len(rows)} row(s).",
             ),
             "response_instructions": SLICE_RESPONSE_URL_REQUIREMENT_TEXT,
         }
