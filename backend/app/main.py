@@ -142,7 +142,7 @@ def _normalize_dataset_description(raw: str | None) -> str | None:
     if not cleaned:
         return None
     # Keep descriptions lightweight for storage/indexing.
-    return cleaned[:1024]
+    return cleaned[:100]
 
 
 QUERY_CONTEXT_SAMPLE_ROWS = max(1, int(os.getenv("QUERY_CONTEXT_SAMPLE_ROWS", "5")))

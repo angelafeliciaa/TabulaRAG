@@ -444,6 +444,7 @@ export default function TableView() {
   const [err, setErr] = useState<string | null>(null);
   const [highlightErr, setHighlightErr] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
+  const [tableDescription, setTableDescription] = useState<string>("");
   const [tableNotFound, setTableNotFound] = useState(false);
   const awaitingCatalog =
     isPlainDatasetView && tableName === null && !tableNotFound;
@@ -490,6 +491,7 @@ export default function TableView() {
     setErr(null);
     setData(null);
     setTableName(null);
+    setTableDescription("");
     setTableNotFound(false);
     setServerError(false);
     setTableRowCount(0);
@@ -507,6 +509,7 @@ export default function TableView() {
           return;
         }
         setTableName(table.name);
+        setTableDescription((table.description || "").trim());
         if (typeof table.row_count === "number") {
           setTableRowCount(Math.max(0, table.row_count));
         }
@@ -1346,11 +1349,26 @@ export default function TableView() {
   }
 
   const pendingEditHint =
-    isPlainDatasetView && (pendingEdits.size + pendingColumnEdits.size) > 0
-      ? ` • ${pendingEdits.size + pendingColumnEdits.size} unsaved change${pendingEdits.size + pendingColumnEdits.size === 1 ? "" : "s"}`
+    isPlainDatasetView
+      && (pendingEdits.size + pendingColumnEdits.size) > 0
+      ? ` • ${
+          pendingEdits.size
+          + pendingColumnEdits.size
+        } unsaved change${
+          pendingEdits.size
+          + pendingColumnEdits.size
+          === 1
+            ? ""
+            : "s"
+        }`
       : "";
+  const effectiveDescription = tableDescription.trim();
   const hasUnsavedChanges =
-    isPlainDatasetView && (pendingEdits.size > 0 || pendingColumnEdits.size > 0);
+    isPlainDatasetView
+    && (
+      pendingEdits.size > 0
+      || pendingColumnEdits.size > 0
+    );
 
   useEffect(() => {
     if (!hasUnsavedChanges) {
@@ -1421,9 +1439,14 @@ export default function TableView() {
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
+            {effectiveDescription && (
+              <div className="table-view-description-text" title={effectiveDescription}>
+                {effectiveDescription}
+              </div>
+            )}
           </div>
           <div className="table-view-tools">
-            {isPlainDatasetView && (pendingEdits.size > 0 || pendingColumnEdits.size > 0) && (
+            {isPlainDatasetView && hasUnsavedChanges && (
               <div className="table-view-save-edits-wrap">
                 <button
                   type="button"

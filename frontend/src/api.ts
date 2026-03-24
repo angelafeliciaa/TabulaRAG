@@ -489,6 +489,24 @@ export async function patchTableColumnName(
   };
 }
 
+export async function patchTableDescription(
+  datasetId: number,
+  description: string | null,
+): Promise<{ dataset_id: number; description: string | null }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/description`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as { dataset_id: number; description: string | null };
+}
+
 export async function renameTable(
   datasetId: number,
   name: string,

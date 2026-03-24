@@ -71,3 +71,20 @@ def test_patch_table_column_name_updates_slice_columns(client):
     assert "full_name" in payload["columns"]
     row0 = payload["rows"][0]["data"]
     assert "full_name" in row0
+
+
+def test_patch_table_description(client):
+    csv_content = b"name,age\nAlice,30\n"
+    resp = client.post(
+        "/ingest",
+        files={"file": ("t.csv", csv_content, "text/csv")},
+    )
+    assert resp.status_code == 200
+    dataset_id = resp.json()["dataset_id"]
+
+    r = client.patch(
+        f"/tables/{dataset_id}/description",
+        json={"description": "People table for QA"},
+    )
+    assert r.status_code == 200
+    assert r.json()["description"] == "People table for QA"

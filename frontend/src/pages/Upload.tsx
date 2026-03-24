@@ -18,6 +18,7 @@ import {
   getSlice,
   listIndexStatus,
   listTables,
+  patchTableDescription,
   renameTable,
   uploadTable,
   type TableIndexStatus,
@@ -40,7 +41,7 @@ const SUCCESS_TOAST_MS = 2800;
 const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
 const SAFE_TABLE_NAME_MAX_LENGTH = 64;
-const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 1024;
+const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 100;
 const PREVIEW_ROWS_PER_PAGE = 100;
 
 type ToastState = { id: number; kind: "success"; message: string };
@@ -390,6 +391,7 @@ export default function Upload() {
   const [uploadedAtBottom, setUploadedAtBottom] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [editingDescription, setEditingDescription] = useState("");
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
@@ -1225,8 +1227,14 @@ export default function Upload() {
 
     try {
       await renameTable(datasetId, nextName);
+      const nextDescription = sanitizeTableDescriptionInput(editingDescription).trim();
+      await patchTableDescription(
+        datasetId,
+        nextDescription.length > 0 ? nextDescription : null,
+      );
       setEditingId(null);
       setEditingName("");
+      setEditingDescription("");
       setRenameHintId(null);
       await refresh();
     } catch (error: unknown) {
@@ -2289,65 +2297,92 @@ export default function Upload() {
                         }`}
                     >
                       {editingId === table.dataset_id ? (
-                        <input
-                          ref={renameInputRef}
-                          value={editingName}
-                          onChange={(event) => {
-                            setEditingName(sanitizeTableNameInput(event.target.value));
-                            if (renameHintId === table.dataset_id) {
-                              setRenameHintId(null);
+                        <div className="uploaded-table-main">
+                          <input
+                            ref={renameInputRef}
+                            value={editingName}
+                            onChange={(event) => {
+                              setEditingName(sanitizeTableNameInput(event.target.value));
+                              if (renameHintId === table.dataset_id) {
+                                setRenameHintId(null);
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void onRename(table.dataset_id);
+                              }
+                            }}
+                            className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
+                              }`}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                            placeholder={
+                              renameHintId === table.dataset_id
+                                ? "Name cannot be empty."
+                                : "Enter table name"
                             }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              void onRename(table.dataset_id);
-                            }
-                          }}
-                          className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
-                            }`}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                          placeholder={
-                            renameHintId === table.dataset_id
-                              ? "Name cannot be empty."
-                              : "Enter table name"
-                          }
-                          disabled={busy}
-                          aria-label={`Rename ${table.name}`}
-                          aria-invalid={renameHintId === table.dataset_id}
-                        />
+                            disabled={busy}
+                            aria-label={`Rename ${table.name}`}
+                            aria-invalid={renameHintId === table.dataset_id}
+                          />
+                          <input
+                            value={editingDescription}
+                            onChange={(event) => {
+                              setEditingDescription(
+                                sanitizeTableDescriptionInput(event.target.value),
+                              );
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void onRename(table.dataset_id);
+                              }
+                            }}
+                            className="rename-input uploaded-table-description-input"
+                            maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                            placeholder="Add table description"
+                            disabled={busy}
+                            aria-label={`Edit description for ${table.name}`}
+                          />
+                        </div>
                       ) : (
-                        <button
-                          type="button"
-                          className="list-button"
-                          onClick={() => {
-                            if (activeTableId === table.dataset_id) {
-                              // Toggle off when clicking the currently selected table.
-                              setActiveTableId(null);
-                              setPreview(null);
-                              setPreviewErr(null);
-                              setPreviewBusy(false);
-                              setPreviewPage(1);
-                              setPreviewRowCount(0);
-                              setPreviewSearchQuery("");
-                              setPreviewSortColumn(null);
-                              setPreviewSortDirection("asc");
-                              return;
-                            }
-                            void loadPreview(table.dataset_id, 1, {
-                              sortColumn: null,
-                              sortDirection: "asc",
-                            });
-                          }}
-                          aria-pressed={activeTableId === table.dataset_id}
-                        >
-                          <span className="uploaded-table-name">{table.name}</span>{" "}
-                          <span className="small uploaded-table-meta">
-                            ({table.row_count} rows, {table.column_count} cols)
-                          </span>
-                        </button>
+                        <div className="uploaded-table-main">
+                          <button
+                            type="button"
+                            className="list-button"
+                            onClick={() => {
+                              if (activeTableId === table.dataset_id) {
+                                // Toggle off when clicking the currently selected table.
+                                setActiveTableId(null);
+                                setPreview(null);
+                                setPreviewErr(null);
+                                setPreviewBusy(false);
+                                setPreviewPage(1);
+                                setPreviewRowCount(0);
+                                setPreviewSearchQuery("");
+                                setPreviewSortColumn(null);
+                                setPreviewSortDirection("asc");
+                                return;
+                              }
+                              void loadPreview(table.dataset_id, 1, {
+                                sortColumn: null,
+                                sortDirection: "asc",
+                              });
+                            }}
+                            aria-pressed={activeTableId === table.dataset_id}
+                          >
+                            <span className="uploaded-table-name">{table.name}</span>{" "}
+                            <span className="small uploaded-table-meta">
+                              ({table.row_count} rows, {table.column_count} cols)
+                            </span>
+                          </button>
+                          {table.description?.trim() ? (
+                            <div className="small uploaded-table-description">
+                              {table.description.trim()}
+                            </div>
+                          ) : null}
+                        </div>
                       )}
                     </div>
 
@@ -2385,11 +2420,14 @@ export default function Upload() {
                         } else {
                           setEditingId(table.dataset_id);
                           setEditingName(table.name);
+                          setEditingDescription(
+                            sanitizeTableDescriptionInput(table.description || ""),
+                          );
                           setRenameHintId(null);
                         }
                       }}
-                      aria-label={editingId === table.dataset_id ? "Save name" : `Rename ${table.name}`}
-                      title={editingId === table.dataset_id ? "Save" : "Rename"}
+                      aria-label={editingId === table.dataset_id ? "Save table updates" : `Edit ${table.name}`}
+                      title={editingId === table.dataset_id ? "Save" : "Edit"}
                       disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
                     >
                       {editingId === table.dataset_id ? (

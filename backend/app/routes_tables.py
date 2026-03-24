@@ -56,6 +56,10 @@ class ColumnRenameRequest(BaseModel):
     name: str
 
 
+class DescriptionUpdateRequest(BaseModel):
+    description: Optional[str] = None
+
+
 ROW_EDIT_INFERENCE_SAMPLE_LIMIT = 2000
 
 
@@ -97,6 +101,17 @@ def _inference_string_rows(
     if not replaced:
         out.append(list(target_strings))
     return out
+
+
+def _normalize_dataset_description(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    cleaned = "".join(
+        ch for ch in str(raw) if ord(ch) >= 32 or ch in {"\n", "\t", "\r"}
+    ).strip()
+    if not cleaned:
+        return None
+    return cleaned[:100]
 
 
 SEMANTIC_ROWS_BY_INDICES_MAX = 100
@@ -1082,3 +1097,18 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
         "column": new_column,
         "original_name": requested_name,
     }
+
+
+@router.patch("/tables/{dataset_id}/description", include_in_schema=False)
+def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest):
+    normalized_description = _normalize_dataset_description(body.description)
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+        dataset.description = normalized_description
+        db.commit()
+        return {
+            "dataset_id": dataset_id,
+            "description": dataset.description,
+        }

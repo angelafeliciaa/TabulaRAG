@@ -1827,6 +1827,24 @@ ul {
   margin-left: 2px;
 }
 
+.uploaded-table-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.uploaded-table-description {
+  margin-top: 2px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploaded-table-description-input {
+  margin-top: 4px;
+}
+
 .list-item:hover .uploaded-table-name,
 .list-button:hover .uploaded-table-name,
 .list-item.selected .uploaded-table-name,
@@ -2418,6 +2436,28 @@ a.sort-toggle-button.preview-open-link {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.table-view-description-input {
+  width: min(720px, 100%);
+  min-height: 54px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.table-view-description-text {
+  max-width: min(720px, 100%);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .table-view-search-wrap {
