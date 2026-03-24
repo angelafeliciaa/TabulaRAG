@@ -35,6 +35,7 @@ type QueryPayload =
     metric_column?: string;
     group_by?: string;
     filters?: FilterConditionPayload[];
+    sort_order?: "asc" | "desc";
     limit?: number;
   };
 type MultiHighlightSpec = {

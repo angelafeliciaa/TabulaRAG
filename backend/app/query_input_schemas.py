@@ -150,6 +150,13 @@ class AggregateRequest(BaseModel):
         default=None,
         description="When group_by is a date column (ISO YYYY-MM-DD), group by this part instead of full date: month (YYYY-MM), quarter (YYYY-QN), or year (YYYY).",
     )
+    sort_order: Literal["asc", "desc"] = Field(
+        default="desc",
+        description=(
+            "Sort direction for grouped aggregate rows by aggregate_value. "
+            "Use desc for top-N and asc for bottom-N. Ignored when group_by is omitted."
+        ),
+    )
     highlight_index: Optional[int] = Field(
         default=None,
         description=(
@@ -165,6 +172,15 @@ class AggregateRequest(BaseModel):
             return raw
 
         data = dict(raw)
+        if data.get("sort_order") is None and data.get("order") is not None:
+            data["sort_order"] = data.get("order")
+        # Keep aggregate payload strict while still accepting known aliases.
+        data.pop("order", None)
+
+        sort_order_raw = data.get("sort_order")
+        if isinstance(sort_order_raw, str):
+            data["sort_order"] = sort_order_raw.strip().lower()
+
         op_value = data.get("operation")
         if isinstance(op_value, dict):
             group_by_value = op_value.get("group_by")
@@ -528,6 +544,21 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
                 "operation": "sum",
                 "metric_column": "revenue",
                 "group_by": "product",
+                "limit": 5,
+            },
+        },
+    },
+    "aggregate_bottom_groups": {
+        "summary": "Bottom groups by metric",
+        "description": "Example: bottom 5 products by revenue.",
+        "value": {
+            "mode": "aggregate",
+            "aggregate": {
+                "dataset_name": "sales",
+                "operation": "sum",
+                "metric_column": "revenue",
+                "group_by": "product",
+                "sort_order": "asc",
                 "limit": 5,
             },
         },

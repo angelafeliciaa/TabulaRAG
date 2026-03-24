@@ -117,6 +117,34 @@ def test_aggregate_count_group_by_orders_desc(client):
     assert data["url"].startswith("http://localhost:5173/tables/virtual?q=")
 
 
+def test_aggregate_sum_group_by_sort_order_asc_returns_bottom_rows(client):
+    dataset_id = _ingest_sales(client)
+
+    resp = _query_aggregate(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "operation": "sum",
+            "metric_column": "Boxes Shipped",
+            "group_by": "Sales Person",
+            "sort_order": "asc",
+            "limit": 2,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["group_by_column"] == "Sales Person"
+    assert len(data["rowsResult"]) == 2
+    first = data["rowsResult"][0]
+    second = data["rowsResult"][1]
+    assert first["group_value"] == "Alice"
+    assert float(first["aggregate_value"]) == 100.0
+    assert second["group_value"] == "Bob"
+    assert float(second["aggregate_value"]) == 350.0
+    assert "ORDER BY aggregate_value ASC" in data["sql_query"]
+
+
 def test_aggregate_group_by_date_part_month(client):
     csv_content = (
         b"sale_date,amount\n"
@@ -276,6 +304,8 @@ def test_aggregate_virtual_url_uses_list_filters_for_compatibility(client):
         base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
     )
     assert payload["filters"] == []
+    assert payload["sort_order"] == "desc"
+    assert payload["limit"] == 50
 
     # Replay payload exactly as the frontend virtual view does.
     replay_resp = _query_aggregate(client, payload)

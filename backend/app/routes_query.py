@@ -586,11 +586,12 @@ def build_virtual_table_url(body: AggregateRequest, rows: List[Dict[str, Any]]) 
         "metrics": body.metrics,
         "group_by": body.group_by,
         "group_by_date_part": body.group_by_date_part,
+        "sort_order": body.sort_order,
         # Keep filters as a list (not null) so older clients/validators that require
         # a list keep working when they replay this payload back to /aggregate.
         "filters": [f.model_dump() for f in body.filters] if body.filters else [],
         "highlight_index": highlight_index,
-        "limit": 500,
+        "limit": max(1, min(int(body.limit), 500)),
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     # Put payload in both query and hash so link still works if query string is stripped (e.g. by some clients after normalization)
@@ -979,10 +980,11 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
             group_expr = base_col_expr
         select_parts.append(f"{group_expr} AS group_value")
         group_by_sql = f" GROUP BY {group_expr}"
+        order_direction = "ASC" if body.sort_order == "asc" else "DESC"
         order_by_sql = (
-            " ORDER BY aggregate_value DESC NULLS LAST"
+            f" ORDER BY aggregate_value {order_direction} NULLS LAST"
             if not _is_sqlite()
-            else " ORDER BY aggregate_value DESC"
+            else f" ORDER BY aggregate_value {order_direction}"
         )
     else:
         order_by_sql = ""
@@ -1359,6 +1361,7 @@ def _run_filter_row_indices_query(
         "- Pagination: limit + offset for next page\n"
         "- Aggregation: count/sum/avg/min/max with optional filters\n"
         "- Grouped aggregation: group_by (+ group_by_date_part for date columns)\n"
+        "- Aggregate ranking: sort_order=desc for top-N, sort_order=asc for bottom-N\n"
         "- Multi-metric aggregation: metrics[] in one call\n\n"
         "Usage guidance:\n"
         "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
