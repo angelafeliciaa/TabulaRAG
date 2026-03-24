@@ -1,5 +1,6 @@
 """Tests for app.auth – JWT creation, decoding, require_auth, and OAuth flows."""
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -105,19 +106,17 @@ def test_require_auth_invalid_token():
 # ── exchange_github_code ──────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_exchange_github_code_not_configured():
+def test_exchange_github_code_not_configured():
     from app.auth import exchange_github_code
     from fastapi import HTTPException
     with patch("app.auth.GITHUB_CLIENT_ID", ""), patch("app.auth.GITHUB_CLIENT_SECRET", ""):
         with pytest.raises(HTTPException) as exc_info:
-            await exchange_github_code("some-code")
+            asyncio.run(exchange_github_code("some-code"))
         assert exc_info.value.status_code == 500
         assert "not configured" in exc_info.value.detail
 
 
-@pytest.mark.asyncio
-async def test_exchange_github_code_token_exchange_fails():
+def test_exchange_github_code_token_exchange_fails():
     from app.auth import exchange_github_code
     from fastapi import HTTPException
 
@@ -133,12 +132,11 @@ async def test_exchange_github_code_token_exchange_fails():
          patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await exchange_github_code("bad-code")
+            asyncio.run(exchange_github_code("bad-code"))
         assert exc_info.value.status_code == 502
 
 
-@pytest.mark.asyncio
-async def test_exchange_github_code_no_access_token():
+def test_exchange_github_code_no_access_token():
     from app.auth import exchange_github_code
     from fastapi import HTTPException
 
@@ -155,13 +153,12 @@ async def test_exchange_github_code_no_access_token():
          patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await exchange_github_code("bad-code")
+            asyncio.run(exchange_github_code("bad-code"))
         assert exc_info.value.status_code == 401
         assert "bad code" in exc_info.value.detail
 
 
-@pytest.mark.asyncio
-async def test_exchange_github_code_user_fetch_fails():
+def test_exchange_github_code_user_fetch_fails():
     from app.auth import exchange_github_code
     from fastapi import HTTPException
 
@@ -182,12 +179,11 @@ async def test_exchange_github_code_user_fetch_fails():
          patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            await exchange_github_code("good-code")
+            asyncio.run(exchange_github_code("good-code"))
         assert exc_info.value.status_code == 502
 
 
-@pytest.mark.asyncio
-async def test_exchange_github_code_success():
+def test_exchange_github_code_success():
     from app.auth import exchange_github_code
 
     token_resp = MagicMock()
@@ -207,5 +203,5 @@ async def test_exchange_github_code_success():
     with patch("app.auth.GITHUB_CLIENT_ID", "id"), \
          patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
-        result = await exchange_github_code("good-code")
+        result = asyncio.run(exchange_github_code("good-code"))
         assert result["login"] == "octocat"

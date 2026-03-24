@@ -53,8 +53,9 @@ def test_normalize_headers_collapse_internal_whitespace():
 
 
 def test_normalize_headers_snake_case_mixed_separators():
-    assert normalize_headers(["Column-Name", "already_snake", "UPPER"]) == [
+    assert normalize_headers(["Column Name", "Column-Name", "already_snake", "UPPER"]) == [
         "column_name",
+        "column_name_2",
         "already_snake",
         "upper",
     ]
