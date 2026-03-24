@@ -68,6 +68,15 @@ def test_normalize_headers_strip_only():
     assert normalize_headers(["  a  ", "b"]) == ["a", "b"]
 
 
+def test_normalize_headers_titlecase_lowercased():
+    assert normalize_headers(["Name", "", "Name", "  Age  "]) == [
+        "name",
+        "col_2",
+        "name_2",
+        "age",
+    ]
+
+
 # ─── Text values ───────────────────────────────────────────────────────────────
 
 
