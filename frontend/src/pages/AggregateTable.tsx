@@ -41,7 +41,8 @@ type SemanticPayload = {
   mode: "semantic";
   dataset_id: number;
   row_indices: number[];
-  question?: string;
+  /** Retrieval limit from semantic search (matches backend `top_k`). */
+  top_k?: number;
   columns?: string[] | null;
   result_title?: string;
 };
@@ -199,13 +200,12 @@ export default function VirtualTableView() {
           setErr(null);
           const providedTitle =
             typeof sp.result_title === "string" ? sp.result_title.trim() : "";
-          const q =
-            typeof sp.question === "string" ? sp.question.trim() : "";
-          setResultTitle(
-            providedTitle ||
-              `Semantic results (${sp.row_indices.length} row${sp.row_indices.length === 1 ? "" : "s"})`,
-          );
-          setResultSubtitle(q ? `Question: ${q}` : "");
+          const topK =
+            typeof sp.top_k === "number" && Number.isFinite(sp.top_k) && sp.top_k >= 1
+              ? Math.trunc(sp.top_k)
+              : sp.row_indices.length;
+          setResultTitle(providedTitle || "Semantic matches");
+          setResultSubtitle(`Display: top ${topK} semantic matches.`);
 
           const columnSet = new Set<string>();
           for (const item of result.rowsResult) {

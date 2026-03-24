@@ -654,7 +654,7 @@ def build_semantic_virtual_table_url(
     *,
     dataset_id: int,
     row_indices: List[int],
-    question: str,
+    top_k: int,
     columns: Optional[List[str]] = None,
 ) -> str:
     """Virtual table URL showing the top semantic hits (same page shell as filter/aggregate)."""
@@ -662,7 +662,7 @@ def build_semantic_virtual_table_url(
         "mode": "semantic",
         "dataset_id": int(dataset_id),
         "row_indices": [int(i) for i in row_indices],
-        "question": (question or "").strip()[:2000],
+        "top_k": max(1, int(top_k)),
         "columns": columns,
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
@@ -797,7 +797,7 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
         canonical_url = build_semantic_virtual_table_url(
             dataset_id=resolved_dataset_id,
             row_indices=row_indices_ordered,
-            question=body.question,
+            top_k=body.top_k,
             columns=body.columns,
         )
     else:

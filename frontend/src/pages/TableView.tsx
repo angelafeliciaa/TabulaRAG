@@ -33,7 +33,7 @@ type QueryPayload =
     mode: "semantic";
     dataset_id: number;
     row_indices: number[];
-    question?: string;
+    top_k?: number;
     columns?: string[] | null;
     result_title?: string;
   }
@@ -294,12 +294,18 @@ function buildQueryContextTitle(returnPath: string): string | null {
     if ("mode" in payload && payload.mode === "semantic") {
       const providedTitle =
         typeof payload.result_title === "string" ? payload.result_title.trim() : "";
-      const n = Array.isArray(payload.row_indices) ? payload.row_indices.length : 0;
       if (providedTitle) {
         return providedTitle;
       }
-      const q = typeof payload.question === "string" ? payload.question.trim() : "";
-      return q ? `Semantic results: ${q}` : `Semantic results (${n} row${n === 1 ? "" : "s"})`;
+      const k =
+        typeof payload.top_k === "number" && Number.isFinite(payload.top_k)
+          ? Math.max(1, Math.trunc(payload.top_k))
+          : null;
+      const n = Array.isArray(payload.row_indices) ? payload.row_indices.length : 0;
+      if (k != null) {
+        return `Semantic results (top ${k})`;
+      }
+      return `Semantic results (${n} row${n === 1 ? "" : "s"})`;
     }
 
     const aggregatePayload = payload as Exclude<
