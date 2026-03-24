@@ -419,7 +419,7 @@ export default function VirtualTableView() {
                     key: location.search,
                     value: event.target.value,
                   })}
-                placeholder="Search for values"
+                placeholder="Search"
                 aria-label="Search results rows"
               />
             </div>

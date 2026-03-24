@@ -37,6 +37,7 @@ from app.normalization import (
     infer_money_columns,
     normalize_headers,
     normalize_text_value,
+    parse_date,
     parse_date_with_format,
     parse_measurement,
     parse_money,
@@ -273,6 +274,94 @@ def _detect_delimiter(filename: str | None) -> str:
     if filename and filename.lower().endswith(".csv"):
         return ","
     return ","
+
+
+def _cell_looks_like_data(cell: Optional[str]) -> bool:
+    """True if the cell plausibly holds a typed data value (number, date, money), not a column label."""
+    if cell is None:
+        return False
+    s = str(cell).strip()
+    if not s:
+        return False
+    if parse_number(s) is not None:
+        return True
+    if parse_date(s) is not None:
+        return True
+    if parse_money(s) is not None:
+        return True
+    return False
+
+
+def _infer_has_header_single_row(row: List[str]) -> bool:
+    """
+    Single-line file: ambiguous. Prefer header when the line looks like names only (no data-like
+    cells), so header-only CSVs yield 0 data rows; otherwise treat as one data row (headerless).
+    """
+    cells = [(c or "").strip() for c in row]
+    if not any(cells):
+        return True
+    if any(_cell_looks_like_data(c) for c in cells):
+        return False
+    return True
+
+
+def _row_data_fraction(row: List[str]) -> float:
+    cells = [(c or "").strip() for c in row]
+    if not cells:
+        return 0.0
+    return sum(1 for c in cells if _cell_looks_like_data(c)) / len(cells)
+
+
+def _infer_has_header_two_rows(row1: List[str], row2: List[str]) -> bool:
+    """Compare first data line to second: header row is usually more label-like, less data-like."""
+    n = max(len(row1), len(row2))
+    r1 = [row1[i] if i < len(row1) else "" for i in range(n)]
+    r2 = [row2[i] if i < len(row2) else "" for i in range(n)]
+    header_votes = 0
+    for j in range(n):
+        a, b = r1[j], r2[j]
+        da, db = _cell_looks_like_data(a), _cell_looks_like_data(b)
+        if not da and db:
+            header_votes += 1
+    if header_votes >= 1:
+        return True
+    f1, f2 = _row_data_fraction(r1), _row_data_fraction(r2)
+    if f1 >= 0.4 and f2 >= 0.4 and abs(f1 - f2) <= 0.18:
+        return False
+    if f2 - f1 >= 0.18:
+        return True
+    return False
+
+
+def _infer_has_header_from_sample(row1: List[str], row2: Optional[List[str]]) -> bool:
+    if not row1:
+        return True
+    if row2 is None:
+        return _infer_has_header_single_row(row1)
+    return _infer_has_header_two_rows(row1, row2)
+
+
+_HEADER_SNIFF_BYTES = 256 * 1024
+
+
+def _peek_infer_has_header(upload: UploadFile) -> bool:
+    """Read the first two CSV rows from a prefix of the file, then reset for _iter_rows."""
+    validate_filename(upload.filename or "")
+    _validate_upload_content(upload)
+    delim = _detect_delimiter(upload.filename)
+    if delim not in [",", "\t"]:
+        raise HTTPException(status_code=400, detail="Delimiter must be comma or tab.")
+    upload.file.seek(0)
+    chunk = upload.file.read(_HEADER_SNIFF_BYTES)
+    upload.file.seek(0)
+    text = chunk.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(text), delimiter=delim)
+    try:
+        row1 = next(reader)
+    except StopIteration:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    row2 = next(reader, None)
+    return _infer_has_header_from_sample(row1, row2)
 
 
 def _validate_upload_content(upload: UploadFile) -> None:
@@ -546,11 +635,14 @@ def ingest_table(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     dataset_description: str | None = Form(None),
-    has_header: bool = Form(True),
+    has_header: Optional[bool] = Form(None),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
     validate_filename(file.filename)
+
+    if has_header is None:
+        has_header = _peek_infer_has_header(file)
 
     raw_headers, normalized_headers, rows_iter, detected_delimiter = _iter_rows(file, has_header)
 

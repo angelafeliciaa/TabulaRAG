@@ -402,6 +402,8 @@ export default function TableView() {
   const encodedHighlightSpec = queryParams.get("highlight_spec");
   const highlightCursorParam = parseNonNegativeInt(queryParams.get("highlight_cursor"));
   const isMultiHighlightMode = highlightMode === "multi" && !!encodedHighlightSpec;
+  /** Physical dataset view (`/tables/:id`) without multi-highlight: load all rows, no pagination. */
+  const isPlainDatasetView = !isMultiHighlightMode;
   const returnPath = resolveReturnPath(location.search);
   const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
   const returnQueryMode = useMemo<"filter" | "aggregate" | "semantic" | null>(() => {
@@ -441,6 +443,8 @@ export default function TableView() {
   const [highlightErr, setHighlightErr] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
   const [tableNotFound, setTableNotFound] = useState(false);
+  const awaitingCatalog =
+    isPlainDatasetView && tableName === null && !tableNotFound;
   const [serverError, setServerError] = useState(false);
   const [tableRowCount, setTableRowCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
@@ -706,19 +710,34 @@ export default function TableView() {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
       return;
     }
+    if (tableNotFound) {
+      return;
+    }
+    if (awaitingCatalog) {
+      return;
+    }
 
     let mounted = true;
     setErr(null);
     setLoading(true);
 
-    const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
-    const pageEndExclusive = pageOffset + ROWS_PER_PAGE;
     const sort =
       sortColumn != null
         ? { sortColumn, sortDirection }
         : null;
 
-    getSlice(numericDatasetId, pageOffset, pageEndExclusive, { flatten: false, sort })
+    let rowFrom: number;
+    let rowTo: number;
+    if (isMultiHighlightMode) {
+      const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
+      rowFrom = pageOffset;
+      rowTo = pageOffset + ROWS_PER_PAGE;
+    } else {
+      rowFrom = 0;
+      rowTo = Math.max(1, tableRowCount);
+    }
+
+    getSlice(numericDatasetId, rowFrom, rowTo, { flatten: false, sort })
       .then((slice) => {
         if (!mounted) {
           return;
@@ -727,9 +746,14 @@ export default function TableView() {
         setData(slice);
         setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
 
-        const fetchedTotalPages = Math.max(1, Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE));
-        if (currentPage > fetchedTotalPages) {
-          setCurrentPage(fetchedTotalPages);
+        if (isMultiHighlightMode) {
+          const fetchedTotalPages = Math.max(
+            1,
+            Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE),
+          );
+          if (currentPage > fetchedTotalPages) {
+            setCurrentPage(fetchedTotalPages);
+          }
         }
       })
       .catch((error: unknown) => {
@@ -752,11 +776,22 @@ export default function TableView() {
     return () => {
       mounted = false;
     };
-  }, [numericDatasetId, currentPage, sortColumn, sortDirection]);
+  }, [
+    numericDatasetId,
+    isMultiHighlightMode ? currentPage : 0,
+    sortColumn,
+    sortDirection,
+    isMultiHighlightMode,
+    awaitingCatalog,
+    tableNotFound,
+    tableRowCount,
+  ]);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const effectiveRowCount = Math.max(tableRowCount, Math.max(0, data?.row_count || 0));
-  const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
+  const totalPages = isPlainDatasetView
+    ? 1
+    : Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const hasQueryContext = returnPath !== "/";
   const effectiveHighlightRow = isMultiHighlightMode ? activeMultiHighlightedRow : highlightedRow;
@@ -942,13 +977,16 @@ export default function TableView() {
   }, [displayRows.length, data?.columns.length, data?.offset, loading, err, dateViewMode]);
 
   useEffect(() => {
+    if (isPlainDatasetView) {
+      return;
+    }
     const container = tableAreaRef.current;
     const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
     if (!element) {
       return;
     }
     element.scrollTo({ top: 0, behavior: "auto" });
-  }, [currentPage]);
+  }, [currentPage, isPlainDatasetView]);
 
   useEffect(() => {
     setPageInput(String(safeCurrentPage));
@@ -1017,6 +1055,23 @@ export default function TableView() {
 
   function jumpToHighlight() {
     if (effectiveHighlightRow === null) {
+      return;
+    }
+    if (isPlainDatasetView) {
+      const targetElement = document.querySelector(
+        `[data-row-index="${effectiveHighlightRow}"]`,
+      ) as HTMLElement | null;
+      const container = tableAreaRef.current?.querySelector(".table-scroll") as HTMLDivElement | null;
+      if (targetElement && container) {
+        const targetRect = targetElement.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const scrollOffset =
+          container.scrollTop +
+          (targetRect.top - containerRect.top) +
+          targetRect.height / 2 -
+          container.clientHeight / 2;
+        container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
+      }
       return;
     }
     const highlightPage = Math.floor(effectiveHighlightRow / ROWS_PER_PAGE) + 1;
@@ -1148,26 +1203,15 @@ export default function TableView() {
 
   return (
     <div
-      className={`page-stack full-table-page${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}`}
+      className={`page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}`}
     >
-      {hasQueryContext ? (
-        (isMultiHighlightMode || highlightedRow !== null) && (
-          <div className="table-view-back-row">
-            <Link className="table-view-context-btn" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
-              </svg>
-              Back to Query Results
-            </Link>
-          </div>
-        )
-      ) : (
+      {hasQueryContext && (isMultiHighlightMode || highlightedRow !== null) && (
         <div className="table-view-back-row">
-          <Link className="table-view-context-btn" to="/" aria-label="Back to home" title="Back to home">
+          <Link className="table-view-context-btn" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
             </svg>
-            Back to Home
+            Back to Query Results
           </Link>
         </div>
       )}
@@ -1202,10 +1246,12 @@ export default function TableView() {
             )}
             {!isMultiHighlightMode && highlightedRow === null && (
               <div className="small table-view-header-status" role="status" aria-live="polite" aria-atomic="true">
-                {loading
+                {loading || awaitingCatalog
                   ? "Loading table page..."
                   : data && data.rows.length > 0
-                    ? `Showing rows ${(data.offset + 1).toLocaleString()}-${(data.offset + data.rows.length).toLocaleString()} of ${effectiveRowCount.toLocaleString()}${normalizedSearch ? ` • ${filtered.rows.length.toLocaleString()} matches on this page` : ""}`
+                    ? normalizedSearch
+                      ? `${filtered.rows.length.toLocaleString()} match${filtered.rows.length === 1 ? "" : "es"} (search) • ${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded`
+                      : `${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded`
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
@@ -1231,7 +1277,7 @@ export default function TableView() {
                 className="table-view-search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search for values"
+                placeholder="Search"
                 aria-label="Search rows"
               />
             </div>
@@ -1318,7 +1364,11 @@ export default function TableView() {
                 setCurrentPage(1);
                 setPageInput("1");
               }}
-              caption={`${tableName || "Table"} page ${safeCurrentPage}. ${displayRows.length} row${displayRows.length === 1 ? "" : "s"} shown.`}
+              caption={
+                isPlainDatasetView
+                  ? `${tableName || "Table"}. ${displayRows.length.toLocaleString()} row${displayRows.length === 1 ? "" : "s"} shown.`
+                  : `${tableName || "Table"} page ${safeCurrentPage}. ${displayRows.length} row${displayRows.length === 1 ? "" : "s"} shown.`
+              }
               onCellContextMenu={(event, payload) => {
                 if (!dateColumns.has(payload.column) || !parseDateToDate(payload.value)) {
                   return;
@@ -1342,7 +1392,7 @@ export default function TableView() {
           </div>
         </div>
       )}
-      {data && effectiveRowCount > 0 && (
+      {data && effectiveRowCount > 0 && isMultiHighlightMode && (
         <div className="table-view-pagination" aria-label="Full table pagination">
           <div className="table-view-pagination-controls">
             <button

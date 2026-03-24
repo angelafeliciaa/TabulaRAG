@@ -49,6 +49,7 @@
   --blur-saturate: 180%;
   --page-bg: #E4E6EA;
   --page-bg-dots: radial-gradient(circle, rgba(100, 120, 150, 0.2) 1px, transparent 1px);
+  --search-bar-max-width: 260px;
 
   color-scheme: light;
   font-family: var(--font-sans);
@@ -197,6 +198,14 @@ h3 {
 .content {
   flex: 1 1 auto;
   overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.content > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .page {
@@ -1138,11 +1147,13 @@ h3 {
   border-width: 2.5px;
 }
 
-:root:not([data-theme="dark"]) .tables-search-input {
+:root:not([data-theme="dark"]) .tables-search-input,
+:root:not([data-theme="dark"]) .table-view-search {
   border-color: var(--border);
 }
 
-:root:not([data-theme="dark"]) .tables-search-icon {
+:root:not([data-theme="dark"]) .tables-search-icon,
+:root:not([data-theme="dark"]) .table-view-search-icon {
   color: var(--border-soft);
 }
 
@@ -1508,19 +1519,27 @@ ul {
   position: relative;
   display: inline-flex;
   align-items: center;
-  width: min(360px, 100%);
+  width: min(var(--search-bar-max-width), 100%);
 }
 
-.tables-search-input {
-  width: 100%;
+/* Shared with .table-view-search — same look as home (tables list + preview search). */
+.tables-search-input,
+.table-view-search {
   height: 34px;
   padding: 6px 10px 6px 32px;
   background: var(--surface-blur-bg);
   border: 1px solid var(--surface-blur-border);
   border-radius: 12px;
+  color: var(--text);
+  box-sizing: border-box;
 }
 
-.tables-search-icon {
+.tables-search-input {
+  width: 100%;
+}
+
+.tables-search-icon,
+.table-view-search-icon {
   position: absolute;
   left: 10px;
   width: 18px;
@@ -1529,17 +1548,20 @@ ul {
   pointer-events: none;
 }
 
-:root[data-theme="dark"] .tables-search-input {
+:root[data-theme="dark"] .tables-search-input,
+:root[data-theme="dark"] .table-view-search {
   background: var(--surface-blur-bg);
   border-color: var(--surface-blur-border);
   color: var(--text);
 }
 
-:root[data-theme="dark"] .tables-search-input::placeholder {
+:root[data-theme="dark"] .tables-search-input::placeholder,
+:root[data-theme="dark"] .table-view-search::placeholder {
   color: var(--text-muted);
 }
 
-:root[data-theme="dark"] .tables-search-icon {
+:root[data-theme="dark"] .tables-search-icon,
+:root[data-theme="dark"] .table-view-search-icon {
   color: var(--text-muted);
 }
 
@@ -2145,12 +2167,14 @@ ul {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
   min-width: 0;
 }
 
-.preview-search-wrap {
-  width: min(200px, 100%);
+.preview-header-right .tables-search-input-wrap {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .preview-table-name {
@@ -2200,6 +2224,7 @@ ul {
 
 /* View Full Table link: same design as .sort-toggle-button */
 a.sort-toggle-button.preview-open-link {
+  flex-shrink: 0;
   text-decoration: none;
   white-space: nowrap;
   transition:
@@ -2304,29 +2329,14 @@ a.sort-toggle-button.preview-open-link {
 .table-view-search-wrap {
   display: inline-flex;
   align-items: center;
-  width: 340px;
-  min-width: 240px;
+  width: min(var(--search-bar-max-width), 100%);
+  min-width: 0;
   position: relative;
-}
-
-.table-view-search-icon {
-  position: absolute;
-  left: 12px;
-  width: 18px;
-  height: 18px;
-  color: var(--text-muted);
-  pointer-events: none;
 }
 
 .table-view-search-wrap .table-view-search {
   width: 100%;
   min-width: 0;
-  padding-left: 38px;
-}
-
-.table-view-search {
-  width: 340px;
-  min-width: 240px;
 }
 
 .table-view-context-btn {
@@ -2583,6 +2593,36 @@ a.sort-toggle-button.preview-open-link {
 
 .full-table-page {
   padding-top: 72px;
+}
+
+/* Physical `/tables/:id` view: full viewport width and fill remaining height */
+.page-stack.full-table-page.full-table-page-dataset-wide {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-area-outer {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area .card.table-card {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* Error / empty states (404, 500, offline): large centred card */

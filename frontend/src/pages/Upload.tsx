@@ -491,7 +491,7 @@ export default function Upload() {
       const delimiter = nextFile.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
       const headerLine = lines.find((line) => line.trim().length > 0) || "";
       const estimatedCols = headerLine ? countDelimitedColumns(headerLine, delimiter) : null;
-      // In this UI we always upload with has_header=true.
+      // Row estimate assumes a header row when subtracting 1 (actual header detection is server-side).
       return {
         rows: Math.max(0, estimatedTotalLines - 1),
         cols: estimatedCols,
@@ -941,7 +941,7 @@ export default function Upload() {
     }
   }, [activeTableId, tables]);
 
-  // Restore selected table from localStorage when returning to the page (e.g. after View Full Table → Back to Home).
+  // Restore selected table from localStorage when returning to the page (e.g. after closing a View Full Table tab).
   useEffect(() => {
     if (tables.length === 0) return;
     try {
@@ -2452,7 +2452,7 @@ export default function Upload() {
           </div>
           <div className="preview-header-right">
             {preview && (
-              <label className="tables-search-input-wrap preview-search-wrap" aria-label="Search in preview">
+              <label className="tables-search-input-wrap" aria-label="Search in preview">
                 <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
                   <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
                 </svg>
@@ -2470,8 +2470,10 @@ export default function Upload() {
               <Link
                 className="sort-toggle-button preview-open-link"
                 to={`/tables/${activeTableId}`}
-                aria-label="View Full Table"
-                title="View Full Table"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="View Full Table (opens in new tab)"
+                title="View Full Table (new tab)"
               >
                 <img src={openIcon} alt="" className="preview-open-link-icon" aria-hidden="true" />
                 <span className="sort-toggle-text">View Full Table</span>

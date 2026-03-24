@@ -215,7 +215,6 @@ export async function uploadTable(
 ): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
-  form.append("has_header", "true");
 
   const trimmed = name.trim();
   if (trimmed) {

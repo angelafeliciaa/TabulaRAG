@@ -44,6 +44,28 @@ def test_no_header(client):
     assert body["columns"] == 3
 
 
+def test_auto_detect_header_when_omitted(client):
+    response = client.post(
+        "/ingest",
+        files=make_csv("name,age,city\nAlice,30,London\n"),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_header"] is True
+    assert body["rows"] == 1
+
+
+def test_auto_detect_headerless_when_omitted(client):
+    response = client.post(
+        "/ingest",
+        files=make_csv("Alice,30,London\nBob,25,Paris\n"),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_header"] is False
+    assert body["rows"] == 2
+
+
 def test_custom_dataset_name(client):
     response = client.post(
         "/ingest",
