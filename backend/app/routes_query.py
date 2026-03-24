@@ -654,7 +654,9 @@ def build_semantic_virtual_table_url(
     *,
     dataset_id: int,
     row_indices: List[int],
+    row_scores: Optional[List[float]] = None,
     top_k: int,
+    question: Optional[str] = None,
     columns: Optional[List[str]] = None,
 ) -> str:
     """Virtual table URL showing the top semantic hits (same page shell as filter/aggregate)."""
@@ -662,7 +664,9 @@ def build_semantic_virtual_table_url(
         "mode": "semantic",
         "dataset_id": int(dataset_id),
         "row_indices": [int(i) for i in row_indices],
+        "row_scores": [float(s) for s in row_scores] if row_scores is not None else None,
         "top_k": max(1, int(top_k)),
+        "question": question,
         "columns": columns,
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
@@ -784,12 +788,15 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
         resolved_dataset["source_url"] = dataset_url
 
     row_indices_ordered: List[int] = []
+    row_scores_ordered: List[float] = []
     results = payload.get("results")
     if isinstance(results, list):
         for item in results:
             if isinstance(item, dict) and item.get("row_index") is not None:
                 try:
                     row_indices_ordered.append(int(item["row_index"]))
+                    score_raw = item.get("score")
+                    row_scores_ordered.append(float(score_raw) if score_raw is not None else 0.0)
                 except (TypeError, ValueError):
                     continue
 
@@ -797,7 +804,9 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
         canonical_url = build_semantic_virtual_table_url(
             dataset_id=resolved_dataset_id,
             row_indices=row_indices_ordered,
+            row_scores=row_scores_ordered if len(row_scores_ordered) == len(row_indices_ordered) else None,
             top_k=body.top_k,
+            question=body.question,
             columns=body.columns,
         )
     else:

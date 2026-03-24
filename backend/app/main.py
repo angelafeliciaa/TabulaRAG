@@ -326,6 +326,11 @@ def _infer_has_header_two_rows(row1: List[str], row2: List[str]) -> bool:
     if header_votes >= 1:
         return True
     f1, f2 = _row_data_fraction(r1), _row_data_fraction(r2)
+    # Ambiguous all-text files (no number/date/money signals in either row) are
+    # usually standard CSVs with a header row (e.g. "city\\nParis\\n...").
+    # Prefer header=True to keep name-based filtering/grouping stable.
+    if f1 == 0.0 and f2 == 0.0:
+        return True
     if f1 >= 0.4 and f2 >= 0.4 and abs(f1 - f2) <= 0.18:
         return False
     if f2 - f1 >= 0.18:

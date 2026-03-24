@@ -1217,6 +1217,15 @@ h3 {
 .table-scroll {
   flex: 1 1 auto;
   overflow: auto;
+  scrollbar-color: rgba(0, 0, 0, 0.28) transparent;
+}
+
+.table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-theme="dark"] .table-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
 }
 
 .page-stack {
@@ -1282,6 +1291,14 @@ h3 {
 
 .virtual-results-page {
   padding-top: 76px;
+}
+
+.virtual-results-page > .card {
+  min-width: 1000px;
+}
+
+.virtual-results-page .table-area .card.table-card {
+  min-width: 1000px;
 }
 
 .table-area {
@@ -2615,6 +2632,36 @@ a.sort-toggle-button.preview-open-link {
   color: var(--text);
 }
 
+.page-stack.full-table-page {
+  position: relative;
+}
+
+.page-stack.full-table-page .table-view-back-row {
+  position: absolute;
+  top: 50px;
+  left: 24px;
+  z-index: 2;
+}
+
+.table-view-context-btn.table-view-context-btn-text {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.table-view-context-btn.table-view-context-btn-text:hover,
+.table-view-context-btn.table-view-context-btn-text:focus,
+.table-view-context-btn.table-view-context-btn-text:focus-visible {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
 .table-view-format-button {
   height: 38px;
   padding: 0 14px;
@@ -3215,6 +3262,10 @@ tr:hover th[scope="row"] {
   background: rgba(253, 224, 71, 0.5) !important;
 }
 
+.aggregate-results-table {
+  position: relative;
+}
+
 .aggregate-view-full-table-note {
   margin: 32px 0 0 0;
   font-size: 0.9125rem;
@@ -3261,14 +3312,81 @@ tr:hover th[scope="row"] {
   color: #e8dc44;
 }
 
+.aggregate-row-hint-popover {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 120;
+  max-width: min(360px, calc(100% - 24px));
+  background: color-mix(in srgb, var(--surface-blur-bg-strong) 68%, transparent);
+  border: 1px solid var(--surface-blur-border);
+  border-radius: 12px;
+  padding: 10px 12px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.aggregate-row-hint-popover::after {
+  content: "";
+  position: absolute;
+  right: 18px;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  border-right: 1px solid var(--surface-blur-border);
+  border-bottom: 1px solid var(--surface-blur-border);
+  transform: rotate(45deg);
+}
+
+.aggregate-row-hint-text {
+  margin-right: 18px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.aggregate-row-hint-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+  transition: none;
+}
+
+.aggregate-row-hint-close:hover {
+  color: var(--text);
+}
+
+.aggregate-row-hint-never {
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  transition: none;
+}
+
+.aggregate-row-hint-never:hover {
+  color: var(--text);
+}
+
 tr.table-row-highlighted td,
 tr.table-row-highlighted th[scope="row"] {
-  background: rgba(253, 224, 71, 0.5) !important;
+  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
 }
 
 .table-row-highlighted td,
 .table-row-highlighted th[scope="row"] {
-  background: rgba(253, 224, 71, 0.5) !important;
+  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
 }
 
 .hl {
@@ -3279,7 +3397,7 @@ tr.table-row-highlighted th[scope="row"] {
 
 .table-row-highlighted td.hl,
 .table-row-highlighted th[scope="row"].hl {
-  background: rgba(253, 224, 71, 0.5) !important;
+  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
   border-radius: 0;
 }
 
@@ -3295,7 +3413,7 @@ tr:hover th[scope="row"].hl {
 
 tr.table-row-highlighted:hover td,
 tr.table-row-highlighted:hover th[scope="row"] {
-  background: rgba(253, 224, 71, 0.5) !important;
+  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
 }
 
 /* Multi-highlight: current row strong; other highlighted rows subtler */
@@ -3420,6 +3538,14 @@ input:focus-visible,
 
   .virtual-results-page {
     padding-top: 82px;
+  }
+
+  .virtual-results-page > .card {
+    min-width: 0;
+  }
+
+  .virtual-results-page .table-area .card.table-card {
+    min-width: 0;
   }
 
   .list-row {

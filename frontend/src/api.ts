@@ -507,6 +507,21 @@ export async function patchTableDescription(
   return (await res.json()) as { dataset_id: number; description: string | null };
 }
 
+export async function getTableColumns(
+  datasetId: number,
+): Promise<{ dataset_id: number; columns: Array<{ column_index: number; original_name: string | null; normalized_name: string }> }> {
+  const res = await authFetch(`${API_BASE}/tables/${datasetId}/columns`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    columns: Array<{ column_index: number; original_name: string | null; normalized_name: string }>;
+  };
+}
+
 export async function renameTable(
   datasetId: number,
   name: string,

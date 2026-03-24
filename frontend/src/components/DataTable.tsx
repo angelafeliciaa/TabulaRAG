@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useMemo, useState } from "react";
+import { type CSSProperties, type MouseEvent, type ReactNode, useMemo, useState } from "react";
 
 type DataTableProps = {
   columns: string[];
@@ -13,6 +13,8 @@ type DataTableProps = {
     cols: string[];
     /** When multiple rows are highlighted, the row that should use the stronger accent (e.g. active multi-highlight). */
     primaryRow?: number | null;
+    /** Optional per-row highlight opacity (0..1), keyed by absolute row index. */
+    rowOpacityByIndex?: ReadonlyMap<number, number>;
   };
   rowOffset?: number;
   rowIndices?: number[];
@@ -453,10 +455,12 @@ export default function DataTable({
           <tbody>
             {displayRows.map(({ row, absoluteRowIndex }) => {
               const isHighlightedRow = highlightedRows.has(absoluteRowIndex);
+              const rowHighlightOpacity = highlight?.rowOpacityByIndex?.get(absoluteRowIndex);
               const usePrimarySecondary =
                 highlight != null
                 && highlight.primaryRow != null
-                && (highlight.rows?.length ?? 0) > 1;
+                && (highlight.rows?.length ?? 0) > 1
+                && highlight.rowOpacityByIndex == null;
               const isPrimaryHighlight =
                 usePrimarySecondary && absoluteRowIndex === highlight.primaryRow;
               const rowHighlightClass = !isHighlightedRow
@@ -472,6 +476,11 @@ export default function DataTable({
                   key={absoluteRowIndex}
                   data-row-index={absoluteRowIndex}
                   aria-current={isPrimaryHighlight ? "true" : undefined}
+                  style={
+                    typeof rowHighlightOpacity === "number"
+                      ? ({ "--table-row-highlight-alpha": Math.max(0, Math.min(1, rowHighlightOpacity)) } as CSSProperties)
+                      : undefined
+                  }
                   className={
                     `${rowHighlightClass} ${onRowClick ? "table-row-selectable" : ""}`.trim()
                   }

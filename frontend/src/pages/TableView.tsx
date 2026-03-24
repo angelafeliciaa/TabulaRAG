@@ -37,6 +37,7 @@ type QueryPayload =
     dataset_id: number;
     row_indices: number[];
     top_k?: number;
+    question?: string;
     columns?: string[] | null;
     result_title?: string;
   }
@@ -54,6 +55,12 @@ type MultiHighlightSpec = {
   filters?: FilterConditionPayload[];
   /** When set, highlight these dataset row indices in order (filter / semantic virtual results). */
   row_indices?: number[];
+  /** Optional semantic similarity scores aligned with row_indices. */
+  row_scores?: number[];
+  /** Semantic query top_k (retrieval limit), for display. */
+  top_k?: number;
+  /** Semantic query question, for display heading. */
+  question?: string;
   /** Semantic full-table: navigate ▲/▼ in ascending row_index order; filter results keep virtual order. */
   sort_highlight_nav_by_row_index?: boolean;
   label?: string;
@@ -336,20 +343,11 @@ function buildQueryContextTitle(returnPath: string): string | null {
       return providedTitle || `Filter result: ${formatFilterSummary(payload.filters)}`;
     }
     if ("mode" in payload && payload.mode === "semantic") {
-      const providedTitle =
-        typeof payload.result_title === "string" ? payload.result_title.trim() : "";
-      if (providedTitle) {
-        return providedTitle;
+      const question = typeof payload.question === "string" ? payload.question.trim() : "";
+      if (question) {
+        return `Semantic results: ${question}`;
       }
-      const k =
-        typeof payload.top_k === "number" && Number.isFinite(payload.top_k)
-          ? Math.max(1, Math.trunc(payload.top_k))
-          : null;
-      const n = Array.isArray(payload.row_indices) ? payload.row_indices.length : 0;
-      if (k != null) {
-        return `Semantic results (top ${k})`;
-      }
-      return `Semantic results (${n} row${n === 1 ? "" : "s"})`;
+      return "Semantic results";
     }
 
     const aggregatePayload = payload as Exclude<
@@ -927,6 +925,74 @@ export default function TableView({ valueMode }: TableViewProps) {
     : highlightedRow !== null
       ? [highlightedRow]
       : [];
+  const semanticMultiHighlightTopK = useMemo(() => {
+    if (!isMultiHighlightMode || returnQueryMode !== "semantic") {
+      return null;
+    }
+    if (
+      parsedMultiSpec != null
+      && typeof parsedMultiSpec.top_k === "number"
+      && Number.isFinite(parsedMultiSpec.top_k)
+    ) {
+      return Math.max(1, Math.trunc(parsedMultiSpec.top_k));
+    }
+    try {
+      const encoded = getVirtualTableEncodedQ(returnPath);
+      if (!encoded) {
+        return null;
+      }
+      const payload = decodePayload(encoded);
+      if (
+        "mode" in payload
+        && payload.mode === "semantic"
+        && typeof payload.top_k === "number"
+        && Number.isFinite(payload.top_k)
+      ) {
+        return Math.max(1, Math.trunc(payload.top_k));
+      }
+    } catch {
+      // ignore
+    }
+    const n = parsedMultiSpec?.row_indices?.length;
+    if (typeof n === "number" && n > 0) {
+      return n;
+    }
+    return null;
+  }, [isMultiHighlightMode, returnQueryMode, parsedMultiSpec, returnPath]);
+
+  const semanticRowOpacityByIndex = useMemo(() => {
+    if (
+      !isMultiHighlightMode
+      || !parsedMultiSpec
+      || !Array.isArray(parsedMultiSpec.row_indices)
+      || !Array.isArray(parsedMultiSpec.row_scores)
+    ) {
+      return undefined;
+    }
+    const { row_indices: rowIndices, row_scores: rowScores } = parsedMultiSpec;
+    const pairs: Array<{ rowIndex: number; score: number }> = [];
+    for (let i = 0; i < Math.min(rowIndices.length, rowScores.length); i += 1) {
+      const rowIndex = Number(rowIndices[i]);
+      const score = Number(rowScores[i]);
+      if (Number.isFinite(rowIndex) && Number.isFinite(score)) {
+        pairs.push({ rowIndex, score });
+      }
+    }
+    if (pairs.length === 0) {
+      return undefined;
+    }
+    const maxScore = Math.max(...pairs.map((pair) => pair.score));
+    const minScore = Math.min(...pairs.map((pair) => pair.score));
+    const scoreRange = maxScore - minScore;
+    const minAlpha = 0.18;
+    const maxAlpha = 0.5;
+    const map = new Map<number, number>();
+    for (const { rowIndex, score } of pairs) {
+      const normalized = scoreRange > 1e-9 ? (score - minScore) / scoreRange : 1;
+      map.set(rowIndex, minAlpha + normalized * (maxAlpha - minAlpha));
+    }
+    return map;
+  }, [isMultiHighlightMode, parsedMultiSpec]);
   const pageInputWidthCh = Math.max(2, String(totalPages).length + 1);
   const resolvedRows = useMemo(
     () => (data ? flattenRowsByValueMode(data.rows, valueMode) : []),
@@ -938,14 +1004,13 @@ export default function TableView({ valueMode }: TableViewProps) {
   );
   const headerTitle = useMemo(() => {
     if (isMultiHighlightMode) {
-      const label = (multiHighlightLabel || parsedMultiSpec?.label || "Result").trim();
       if (returnQueryMode === "filter") {
-        return sourceQueryTitle || `Filter result: ${label}`;
+        return "Filter Result";
       }
       if (returnQueryMode === "semantic") {
-        return sourceQueryTitle || `Semantic result: ${label}`;
+        return "Semantic Result";
       }
-      return `Aggregate Result: ${label}`;
+      return "Aggregate Result";
     }
     if (highlightedRow !== null && returnQueryMode === "filter") {
       if (sourceQueryTitle) {
@@ -960,8 +1025,6 @@ export default function TableView({ valueMode }: TableViewProps) {
   }, [
     highlightedRow,
     isMultiHighlightMode,
-    multiHighlightLabel,
-    parsedMultiSpec?.label,
     returnQueryMode,
     sourceQueryTitle,
     tableName,
@@ -1373,7 +1436,7 @@ export default function TableView({ valueMode }: TableViewProps) {
     >
       {hasQueryContext && (isMultiHighlightMode || highlightedRow !== null) && (
         <div className="table-view-back-row">
-          <Link className="table-view-context-btn" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
+          <Link className="table-view-context-btn table-view-context-btn-text" to={returnPath} aria-label="Back to Query Results" title="Back to Query Results">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
             </svg>
@@ -1388,10 +1451,11 @@ export default function TableView({ valueMode }: TableViewProps) {
             {isMultiHighlightMode && (
               <div className="table-view-row-meta table-view-header-status">
                 <span>
-                  {multiHighlightLabel}: {multiHighlightTotal.toLocaleString()} results
-                  {multiHighlightTruncated ? ` (showing first ${DEFAULT_MULTI_MAX_ROWS.toLocaleString()})` : ""}
-                  {multiHighlightRows.length > 0
-                    ? ` • Selected ${Math.min(activeHighlightCursor + 1, multiHighlightRows.length)} of ${multiHighlightRows.length}`
+                  {returnQueryMode === "semantic"
+                    ? `${(multiHighlightLabel || parsedMultiSpec?.question || "Query").trim()}: top-${semanticMultiHighlightTopK ?? Math.max(1, multiHighlightRows.length)} results`
+                    : `${(multiHighlightLabel || parsedMultiSpec?.label || "Result").trim()}: ${multiHighlightTotal.toLocaleString()} results`}
+                  {returnQueryMode !== "semantic" && multiHighlightTruncated
+                    ? ` (showing first ${DEFAULT_MULTI_MAX_ROWS.toLocaleString()})`
                     : ""}
                 </span>
               </div>
@@ -1533,6 +1597,7 @@ export default function TableView({ valueMode }: TableViewProps) {
                   ? {
                       rows: highlightedRows,
                       cols: data.columns,
+                      ...(semanticRowOpacityByIndex ? { rowOpacityByIndex: semanticRowOpacityByIndex } : {}),
                       ...(isMultiHighlightMode && multiHighlightRows.length > 1 && effectiveHighlightRow !== null
                         ? { primaryRow: effectiveHighlightRow }
                         : {}),

@@ -176,7 +176,7 @@ def _slice_column_expr(column_name: str) -> str:
 
 
 def _slice_search_like_pattern(search: str) -> str:
-    """Escape search string for use in a LIKE pattern (%, _, \)."""
+    """Escape search string for use in a LIKE pattern (%, _, \\)."""
     s = (search or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{s}%"
 

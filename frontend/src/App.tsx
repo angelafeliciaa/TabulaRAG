@@ -144,7 +144,7 @@ export default function App() {
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Upload valueMode={valueMode} />} />
-          <Route path="/tables/virtual" element={<AggregateTableView />} />
+          <Route path="/tables/virtual" element={<AggregateTableView valueMode={valueMode} />} />
           <Route path="/tables/:datasetId" element={<TableView valueMode={valueMode} />} />
           <Route path="/highlight/:highlightId" element={<HighlightView />} />
           <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
