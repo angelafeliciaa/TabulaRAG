@@ -1,4 +1,6 @@
+import base64
 import json
+import os
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -8,14 +10,39 @@ from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
-from app.normalization import strip_internal_fields
-from app.name_guard import normalize_dataset_name_or_raise
+from app.normalization import (
+    get_normalized_value,
+    get_typed_value,
+    normalize_text_value,
+    parse_date,
+    parse_measurement,
+    parse_money,
+    parse_number,
+    strip_internal_fields,
+)
+from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 
 router = APIRouter()
+
+PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
+SLICE_RESPONSE_URL_REQUIREMENT_TEXT = (
+    "MANDATORY: In every user-facing response, include the exact `url` value as the source link. "
+    "This is required any time table data is returned."
+)
 
 
 class RenameRequest(BaseModel):
     name: str
+
+
+_QUERY_CONTEXT_TYPE_PRIORITY = {
+    "unknown": 0,
+    "text": 1,
+    "number": 2,
+    "date": 3,
+    "measurement": 4,
+    "money": 5,
+}
 
 
 def _slice_column_expr(column_name: str) -> str:
@@ -46,19 +73,285 @@ def _slice_order_by_clause(sort_column: str, sort_direction: str) -> str:
     return f"{numeric_expr} {dir_upper} {nulls}, {col} {dir_upper}"
 
 
-def _normalize_row_data(raw: Any) -> Dict[str, Any]:
+def _build_dataset_table_url(dataset_id: int) -> str:
+    return f"{PUBLIC_UI_BASE_URL}/tables/{dataset_id}"
+
+
+def _build_slice_virtual_table_url(
+    *,
+    dataset_id: int,
+    limit: int,
+    offset: int,
+    sort_column: Optional[str],
+    sort_direction: str,
+    result_title: str,
+) -> str:
+    payload = {
+        "mode": "filter",
+        "dataset_id": dataset_id,
+        "filters": [],
+        "columns": None,
+        "sort_by": sort_column,
+        "sort_order": sort_direction,
+        "sort_as": "auto",
+        "limit": max(1, int(limit)),
+        "offset": max(0, int(offset)),
+        "result_title": result_title,
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
+
+
+def _with_source_link(final_response: Optional[str], url: str, fallback_message: str) -> str:
+    base = (final_response or "").strip()
+    if not base:
+        base = fallback_message.strip()
+    if url in base:
+        return base
+    if base:
+        return f"{base}\nSource link: {url}"
+    return f"Source link: {url}"
+
+
+def _coerce_row_data_dict(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
-        return strip_internal_fields(raw)
+        return raw
     if isinstance(raw, str):
         try:
             parsed: Any = json.loads(raw)
             if isinstance(parsed, str):
                 parsed = json.loads(parsed)
             if isinstance(parsed, dict):
-                return strip_internal_fields(parsed)
+                return parsed
         except Exception:
             return {}
     return {}
+
+
+def _normalize_row_data(raw: Any) -> Dict[str, Any]:
+    return strip_internal_fields(_coerce_row_data_dict(raw))
+
+
+def _preview_cell_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("original") not in (None, ""):
+            return value.get("original")
+        if "normalized" in value:
+            return value.get("normalized")
+    return value
+
+
+def _infer_value_type(value: Any) -> Optional[str]:
+    text_value = normalize_text_value(value)
+    if text_value is None:
+        return None
+    if parse_date(value) is not None:
+        return "date"
+    if parse_money(value) is not None:
+        return "money"
+    if parse_measurement(value) is not None:
+        return "measurement"
+    if parse_number(text_value) is not None:
+        return "number"
+    return "text"
+
+
+def _finalize_column_type(type_counts: Dict[str, int]) -> str:
+    observed = sum(type_counts.values())
+    if observed <= 0:
+        return "unknown"
+    return max(
+        type_counts.items(),
+        key=lambda item: (item[1], _QUERY_CONTEXT_TYPE_PRIORITY.get(item[0], 0)),
+    )[0]
+
+
+def _infer_column_types_from_preview_rows(
+    columns: List[Dict[str, Any]],
+    sample_rows: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    counts: Dict[str, Dict[str, int]] = {}
+    for col in columns:
+        normalized_name = str(col.get("normalized_name") or "").strip()
+        if not normalized_name:
+            continue
+        counts[normalized_name] = {
+            "text": 0,
+            "number": 0,
+            "date": 0,
+            "money": 0,
+            "measurement": 0,
+        }
+
+    for row in sample_rows:
+        if not isinstance(row, dict):
+            continue
+        row_data = row.get("row_data")
+        if not isinstance(row_data, dict):
+            continue
+        for normalized_name, score in counts.items():
+            inferred = _infer_value_type(row_data.get(normalized_name))
+            if inferred:
+                score[inferred] += 1
+
+    return {name: _finalize_column_type(score) for name, score in counts.items()}
+
+
+def _infer_column_types_from_dataset_rows(
+    column_names: List[str],
+    raw_row_payloads: List[Any],
+) -> Dict[str, str]:
+    counts: Dict[str, Dict[str, int]] = {
+        name: {"text": 0, "number": 0, "date": 0, "money": 0, "measurement": 0}
+        for name in column_names
+    }
+
+    for payload in raw_row_payloads:
+        row_data = _coerce_row_data_dict(payload)
+        if not row_data:
+            continue
+        for column_name in column_names:
+            typed_item = get_typed_value(row_data, column_name)
+            typed_name = typed_item.get("type") if isinstance(typed_item, dict) else None
+            if typed_name in {"date", "money", "measurement", "number"}:
+                counts[column_name][typed_name] += 1
+                continue
+            inferred = _infer_value_type(get_normalized_value(row_data, column_name))
+            if inferred:
+                counts[column_name][inferred] += 1
+
+    return {name: _finalize_column_type(score) for name, score in counts.items()}
+
+
+def _enrich_columns_with_types(
+    columns: List[Dict[str, Any]],
+    fallback_types_by_name: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    enriched: List[Dict[str, Any]] = []
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        normalized_name = str(col.get("normalized_name") or "").strip()
+        inferred_type = col.get("inferred_type")
+        if inferred_type not in _QUERY_CONTEXT_TYPE_PRIORITY:
+            inferred_type = fallback_types_by_name.get(normalized_name, "unknown")
+        updated = dict(col)
+        updated["inferred_type"] = inferred_type
+        enriched.append(updated)
+    return enriched
+
+
+def _coerce_query_context(raw: Any, sample_rows: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    columns = raw.get("columns")
+    rows = raw.get("sample_rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return None
+    sliced_rows = rows[:sample_rows]
+    columns_payload: List[Dict[str, Any]] = [c for c in columns if isinstance(c, dict)]
+    inferred_types = _infer_column_types_from_preview_rows(columns_payload, sliced_rows)
+    return {
+        "columns": _enrich_columns_with_types(columns_payload, inferred_types),
+        "sample_rows": sliced_rows,
+        "sample_row_count": len(sliced_rows),
+    }
+
+
+def _build_query_context_from_db(
+    db,
+    dataset_id: int,
+    sample_rows: int,
+) -> Dict[str, Any]:
+    columns = (
+        db.execute(
+            select(DatasetColumn)
+            .where(DatasetColumn.dataset_id == dataset_id)
+            .order_by(DatasetColumn.column_index)
+        )
+        .scalars()
+        .all()
+    )
+    rows = (
+        db.execute(
+            select(DatasetRow.row_index, DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(sample_rows)
+        )
+        .all()
+    )
+    inference_payloads = (
+        db.execute(
+            select(DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(max(sample_rows, 200))
+        )
+        .scalars()
+        .all()
+    )
+    inferred_types = _infer_column_types_from_dataset_rows(
+        [c.normalized_name for c in columns],
+        inference_payloads,
+    )
+    sample = []
+    for row_index, row_data in rows:
+        normalized = _normalize_row_data(row_data)
+        sample.append(
+            {
+                "row_index": int(row_index),
+                "row_data": {
+                    key: _preview_cell_value(value) for key, value in normalized.items()
+                },
+            }
+        )
+    return {
+        "columns": [
+            {
+                "column_index": c.column_index,
+                "original_name": c.original_name,
+                "normalized_name": c.normalized_name,
+                "inferred_type": inferred_types.get(c.normalized_name, "unknown"),
+            }
+            for c in columns
+        ],
+        "sample_rows": sample,
+        "sample_row_count": len(sample),
+    }
+
+
+def _list_tables_payload(
+    include_pending: bool,
+    sample_rows: int,
+    limit: Optional[int],
+) -> List[Dict[str, Any]]:
+    with SessionLocal() as db:
+        query = select(Dataset).order_by(Dataset.id.desc())
+        if not include_pending:
+            query = query.where(Dataset.is_index_ready.is_(True))
+        if limit is not None:
+            query = query.limit(limit)
+        datasets = db.execute(query).scalars().all()
+        items = []
+        for d in datasets:
+            item = {
+                "dataset_id": d.id,
+                "name": d.name,
+                "description": d.description,
+                "source_filename": d.source_filename,
+                "row_count": d.row_count,
+                "column_count": d.column_count,
+                "created_at": d.created_at.isoformat(),
+            }
+            stored = _coerce_query_context(d.query_context, sample_rows)
+            item["query_context"] = stored or _build_query_context_from_db(
+                db,
+                d.id,
+                sample_rows,
+            )
+            items.append(item)
+        return items
 
 
 def _delete_collection_safe(dataset_id: int) -> None:
@@ -71,33 +364,40 @@ def _delete_collection_safe(dataset_id: int) -> None:
 
 @router.get(
     "/tables",
-    summary="List all datasets",
-    description="Returns indexed datasets with their IDs, names, and metadata. Pending uploads are omitted unless include_pending=true.",
+    operation_id="list_tables",
+    summary="List datasets for MCP discovery",
+    description=(
+        "Primary and only MCP discovery endpoint. Returns each dataset with metadata, "
+        "column headers, and a 3-row query_context preview. Returns all ready datasets "
+        "by default. Use optional limit to cap catalog size when needed. "
+        "This endpoint is catalog-level discovery, while "
+        "POST /query handles row-level pagination via filter.limit/filter.offset."
+    ),
 )
-def list_tables(include_pending: bool = False):
-    with SessionLocal() as db:
-        query = select(Dataset).order_by(Dataset.id.desc())
-        if not include_pending:
-            query = query.where(Dataset.is_index_ready.is_(True))
-        datasets = db.execute(query).scalars().all()
-        return [
-            {
-                "dataset_id": d.id,
-                "name": d.name,
-                "description": d.description,
-                "source_filename": d.source_filename,
-                "row_count": d.row_count,
-                "column_count": d.column_count,
-                "created_at": d.created_at.isoformat(),
-            }
-            for d in datasets
-        ]
+def list_tables(
+    include_pending: bool = Query(
+        default=False,
+        description="Include datasets that are still indexing. Default false returns only ready datasets.",
+    ),
+    limit: Optional[int] = Query(
+        default=None,
+        ge=1,
+        le=200,
+        description="Optional cap on number of datasets returned. If omitted, returns all ready datasets.",
+    ),
+):
+    return _list_tables_payload(
+        include_pending=include_pending,
+        sample_rows=3,
+        limit=limit,
+    )
 
 
 @router.get(
     "/tables/{dataset_id}/columns",
     summary="List all columns for a dataset",
     description="Returns column names and indexes for a dataset. Always call this to understand the data structure and actual column names before querying.",
+    include_in_schema=False,
 )
 def get_cols_for_dataset(dataset_id: int):
     with SessionLocal() as db:
@@ -132,8 +432,12 @@ def get_cols_for_dataset(dataset_id: int):
 
 @router.get(
     "/tables/{dataset_id}/slice",
-    summary="Browse raw rows from a dataset",
-    description="Returns rows in order by row index (or by sort_column when provided). Use sort_column + sort_direction for multipage sorting.",
+    operation_id="get_table_rows",
+    summary="Get rows from one dataset",
+    description=(
+        "Returns paginated raw rows for a dataset. Supports optional search and sorting by a normalized column. "
+        "Use this for previews or manual inspection."
+    ),
 )
 def get_table_slice(
     dataset_id: int,
@@ -164,6 +468,7 @@ def get_table_slice(
 
         search_trimmed = search.strip() if search else None
         like_pattern = _slice_search_like_pattern(search_trimmed) if search_trimmed else None
+        normalized_sort_direction = "asc"
 
         if engine.dialect.name == "sqlite":
             search_filter = (
@@ -208,6 +513,7 @@ def get_table_slice(
             if not col_match:
                 raise HTTPException(status_code=400, detail=f"Unknown sort_column: {sort_column}")
             dir_norm = sort_direction.lower() in ("desc", "descending") and "desc" or "asc"
+            normalized_sort_direction = dir_norm
             order_sql = _slice_order_by_clause(sort_column, dir_norm)
             query = base_query.order_by(text(order_sql)).offset(offset).limit(limit)
             if like_pattern is not None:
@@ -231,6 +537,25 @@ def get_table_slice(
             .all()
         )
 
+        if rows:
+            start_row_display = offset + 1
+            end_row_display = offset + len(rows)
+        else:
+            start_row_display = 0
+            end_row_display = 0
+        slice_result_title = f"Table slice result: Rows {start_row_display}-{end_row_display}"
+
+        if search_trimmed:
+            table_url = _build_dataset_table_url(dataset_id)
+        else:
+            table_url = _build_slice_virtual_table_url(
+                dataset_id=dataset_id,
+                limit=limit,
+                offset=offset,
+                sort_column=sort_column,
+                sort_direction=normalized_sort_direction,
+                result_title=slice_result_title,
+            )
         return {
             "dataset_id": dataset_id,
             "offset": offset,
@@ -250,6 +575,13 @@ def get_table_slice(
                 {"original_name": c.original_name, "normalized_name": c.normalized_name}
                 for c in columns
             ],
+            "url": table_url,
+            "final_response": _with_source_link(
+                None,
+                table_url,
+                f"{slice_result_title}. Returned {len(rows)} row(s).",
+            ),
+            "response_instructions": SLICE_RESPONSE_URL_REQUIREMENT_TEXT,
         }
 
 
@@ -343,6 +675,28 @@ def rename_table(dataset_id: int, body: RenameRequest):
         dataset = db.get(Dataset, dataset_id)
         if not dataset:
             raise HTTPException(status_code=404, detail="Table not found")
-        dataset.name = normalize_dataset_name_or_raise(body.name)
+        normalized_name = normalize_dataset_name_or_raise(body.name)
+        target_key = dataset_name_collision_key(normalized_name)
+        existing = db.execute(
+            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id)
+        ).all()
+        conflict = next(
+            (
+                row
+                for row in existing
+                if row[1] is not None
+                and dataset_name_collision_key(str(row[1])) == target_key
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Dataset name '{normalized_name}' already exists. "
+                    "Use a unique dataset name."
+                ),
+            )
+        dataset.name = normalized_name
         db.commit()
         return {"name": dataset.name}

@@ -374,7 +374,7 @@ export default function DataTable({
                     scope="row"
                     className={`mono ${isHighlightedRow ? "hl" : ""}`}
                   >
-                    {absoluteRowIndex}
+                    {absoluteRowIndex + 1}
                   </th>
                   {columns.map((column) => {
                     const isHighlightedCell =

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
     ensure_dataset_description_column,
+    ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     set_dataset_index_ready,
@@ -35,9 +36,14 @@ from app.normalization import (
     infer_measurement_columns,
     infer_money_columns,
     normalize_headers,
+    normalize_text_value,
+    parse_date_with_format,
+    parse_measurement,
+    parse_money,
+    parse_number,
     normalize_row_obj,
 )
-from app.name_guard import normalize_dataset_name_or_raise
+from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 from app.auth import require_auth, exchange_github_code, create_jwt, GITHUB_CLIENT_ID
 
 
@@ -53,6 +59,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_columns_normalized_columns()
     ensure_dataset_index_ready_column()
     ensure_dataset_description_column()
+    ensure_dataset_query_context_column()
     try:
         from app.embeddings import get_model
         get_model()
@@ -135,6 +142,114 @@ def _normalize_dataset_description(raw: str | None) -> str | None:
         return None
     # Keep descriptions lightweight for storage/indexing.
     return cleaned[:1024]
+
+
+QUERY_CONTEXT_SAMPLE_ROWS = max(1, int(os.getenv("QUERY_CONTEXT_SAMPLE_ROWS", "5")))
+QUERY_CONTEXT_TYPE_SCAN_ROWS = max(1, int(os.getenv("QUERY_CONTEXT_TYPE_SCAN_ROWS", "500")))
+
+_QUERY_CONTEXT_TYPE_PRIORITY = {
+    "unknown": 0,
+    "text": 1,
+    "number": 2,
+    "date": 3,
+    "measurement": 4,
+    "money": 5,
+}
+
+
+def _infer_query_context_column_types(
+    normalized_headers: List[str],
+    rows: List[List[str]],
+    *,
+    date_format_by_column: Optional[dict] = None,
+    money_columns: Optional[set] = None,
+    measurement_columns: Optional[set] = None,
+    max_rows: int = QUERY_CONTEXT_TYPE_SCAN_ROWS,
+) -> dict[int, str]:
+    scores = {
+        i: {"text": 0, "number": 0, "date": 0, "money": 0, "measurement": 0}
+        for i in range(len(normalized_headers))
+    }
+
+    for row in rows[:max_rows]:
+        for i in range(len(normalized_headers)):
+            raw = row[i] if i < len(row) else None
+            text_value = normalize_text_value(raw)
+            if text_value is None:
+                continue
+
+            fmt = (date_format_by_column or {}).get(i)
+            if parse_date_with_format(raw, fmt) is not None:
+                scores[i]["date"] += 1
+                continue
+
+            is_money_col = money_columns is not None and i in money_columns
+            if parse_money(raw) is not None and (money_columns is None or is_money_col):
+                scores[i]["money"] += 1
+                continue
+            if is_money_col and parse_number(text_value) is not None:
+                scores[i]["money"] += 1
+                continue
+
+            is_measurement_col = (
+                measurement_columns is not None and i in measurement_columns
+            )
+            if (
+                is_measurement_col
+                and parse_measurement(raw) is not None
+            ):
+                scores[i]["measurement"] += 1
+                continue
+
+            if parse_number(text_value) is not None:
+                scores[i]["number"] += 1
+                continue
+
+            scores[i]["text"] += 1
+
+    inferred: dict[int, str] = {}
+    for i, type_scores in scores.items():
+        observed = sum(type_scores.values())
+        if observed <= 0:
+            inferred[i] = "unknown"
+            continue
+        inferred[i] = max(
+            type_scores.items(),
+            key=lambda item: (item[1], _QUERY_CONTEXT_TYPE_PRIORITY.get(item[0], 0)),
+        )[0]
+    return inferred
+
+
+def _build_dataset_query_context(
+    raw_headers: List[str],
+    normalized_headers: List[str],
+    rows: List[List[str]],
+    inferred_types_by_column: Optional[dict[int, str]] = None,
+    sample_rows: int = QUERY_CONTEXT_SAMPLE_ROWS,
+) -> dict:
+    columns = [
+        {
+            "column_index": i,
+            "original_name": (raw_headers[i] or None) if i < len(raw_headers) else None,
+            "normalized_name": normalized_headers[i],
+            "inferred_type": (inferred_types_by_column or {}).get(i, "unknown"),
+        }
+        for i in range(len(normalized_headers))
+    ]
+
+    preview_rows = []
+    for row_index, row in enumerate(rows[:sample_rows]):
+        row_data = {}
+        for i, col_name in enumerate(normalized_headers):
+            value = row[i] if i < len(row) else None
+            row_data[col_name] = value if value not in ("", None) else None
+        preview_rows.append({"row_index": row_index, "row_data": row_data})
+
+    return {
+        "columns": columns,
+        "sample_rows": preview_rows,
+        "sample_row_count": len(preview_rows),
+    }
 
 
 ROW_INSERT_BATCH_SIZE = int(os.getenv("ROW_INSERT_BATCH_SIZE", "20000"))
@@ -443,11 +558,49 @@ def ingest_table(
         dataset_name or os.path.splitext(file.filename)[0]
     )
     dataset_description_value = _normalize_dataset_description(dataset_description)
+    rows_list = list(rows_iter)
+    date_format_by_column = infer_date_formats_for_columns(normalized_headers, rows_list)
+    money_columns = infer_money_columns(normalized_headers, rows_list)
+    measurement_columns = infer_measurement_columns(normalized_headers, rows_list)
+    inferred_types_by_column = _infer_query_context_column_types(
+        normalized_headers=normalized_headers,
+        rows=rows_list,
+        date_format_by_column=date_format_by_column,
+        money_columns=money_columns,
+        measurement_columns=measurement_columns,
+    )
+    dataset_query_context = _build_dataset_query_context(
+        raw_headers=raw_headers,
+        normalized_headers=normalized_headers,
+        rows=rows_list,
+        inferred_types_by_column=inferred_types_by_column,
+    )
 
     with SessionLocal() as db:
+        requested_key = dataset_name_collision_key(dataset_display_name)
+        existing_rows = db.execute(select(Dataset.id, Dataset.name)).all()
+        conflicting = next(
+            (
+                (int(row[0]), str(row[1]))
+                for row in existing_rows
+                if row[1] is not None
+                and dataset_name_collision_key(str(row[1])) == requested_key
+            ),
+            None,
+        )
+        if conflicting is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Dataset name '{dataset_display_name}' already exists. "
+                    "Use a unique dataset name."
+                ),
+            )
+
         dataset = Dataset(
             name=dataset_display_name,
             description=dataset_description_value,
+            query_context=dataset_query_context,
             source_filename=file.filename,
             delimiter=detected_delimiter,
             has_header=has_header,
@@ -472,13 +625,10 @@ def ingest_table(
         dataset_id = dataset.id
         dataset_name_value = dataset.name
         dataset_description_value = dataset.description
+        dataset_query_context_value = dataset.query_context
         dataset_delimiter = dataset.delimiter
         dataset_has_header = dataset.has_header
 
-    rows_list = list(rows_iter)
-    date_format_by_column = infer_date_formats_for_columns(normalized_headers, rows_list)
-    money_columns = infer_money_columns(normalized_headers, rows_list)
-    measurement_columns = infer_measurement_columns(normalized_headers, rows_list)
     row_count = 0
     try:
         if engine.dialect.name == "postgresql":
@@ -529,6 +679,7 @@ def ingest_table(
         "delimiter": dataset_delimiter,
         "has_header": dataset_has_header,
         "description": dataset_description_value,
+        "query_context": dataset_query_context_value,
     }
 
 

@@ -14,6 +14,12 @@ def sanitize_dataset_name(raw_name: str) -> str:
     return normalized_spaces[:SAFE_DATASET_NAME_MAX_LENGTH]
 
 
+def dataset_name_collision_key(raw_name: str) -> str:
+    normalized = sanitize_dataset_name(raw_name)
+    # Treat spaces/underscores/hyphens and casing as equivalent for uniqueness.
+    return re.sub(r"[^A-Za-z0-9]+", " ", normalized).strip().lower()
+
+
 def normalize_dataset_name_or_raise(raw_name: str) -> str:
     normalized = sanitize_dataset_name(raw_name)
     if not normalized:

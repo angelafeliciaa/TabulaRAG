@@ -23,6 +23,7 @@ type AggregatePayload = {
   metric_column?: string;
   group_by?: string;
   filters?: FilterConditionPayload[];
+  sort_order?: "asc" | "desc";
   limit?: number;
 };
 
@@ -32,6 +33,7 @@ type FilterPayload = {
   filters?: FilterConditionPayload[];
   limit?: number;
   offset?: number;
+  result_title?: string;
 };
 
 type TableRow = Record<string, unknown> & {
@@ -160,10 +162,14 @@ export default function VirtualTableView() {
       filterRows(payload)
         .then((result: FilterResponse) => {
           setErr(null);
-          setResultTitle(`Filter result: ${formatFilterSummary(payload.filters)}`);
+          const providedTitle =
+            typeof payload.result_title === "string" ? payload.result_title.trim() : "";
+          setResultTitle(
+            providedTitle || `Filter result: ${formatFilterSummary(payload.filters)}`,
+          );
           setResultSubtitle("");
 
-          const columnSet = new Set<string>(["row_index"]);
+          const columnSet = new Set<string>();
           for (const item of result.rowsResult) {
             for (const key of Object.keys(item.row_data || {})) {
               columnSet.add(key);
@@ -172,7 +178,6 @@ export default function VirtualTableView() {
           setColumns(Array.from(columnSet));
 
           const mappedRows: TableRow[] = result.rowsResult.map((item) => ({
-            row_index: item.row_index,
             __row_index: item.row_index,
             __dataset_id: result.dataset_id,
             __highlight_id: item.highlight_id,

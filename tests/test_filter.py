@@ -1,4 +1,9 @@
 
+import base64
+import json
+from urllib.parse import parse_qs, urlparse
+
+
 def _ingest(client):
     csv_content = b"name,city,age\nAlice,London,30\nBob,Paris,25\n"
     resp = client.post(
@@ -9,12 +14,26 @@ def _ingest(client):
     return resp.json()["dataset_id"]
 
 
+def _query_filter(client, payload):
+    return client.post(
+        "/query",
+        json={"mode": "filter", "filter": payload},
+    )
+
+
+def _query_filter_row_indices(client, payload):
+    return client.post(
+        "/query",
+        json={"mode": "filter_row_indices", "filter_row_indices": payload},
+    )
+
+
 def test_filter_rows_success(client):
     dataset_id = _ingest(client)
 
-    resp = client.post(
-        "/filter",
-        json={
+    resp = _query_filter(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "city", "operator": "=", "value": "London"}],
             "limit": 10,
@@ -46,9 +65,9 @@ def test_filter_between_numeric(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter",
-        json={
+    resp = _query_filter(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "number_of_rooms", "operator": "BETWEEN", "value": "3,6"}],
         },
@@ -73,9 +92,9 @@ def test_filter_not_like(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter",
-        json={
+    resp = _query_filter(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "city", "operator": "NOT LIKE", "value": "%is"}],
         },
@@ -99,9 +118,9 @@ def test_filter_or_conditions(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter",
-        json={
+    resp = _query_filter(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [
                 {"column": "city", "operator": "=", "value": "Paris"},
@@ -121,9 +140,9 @@ def test_filter_or_conditions(client):
 
 
 def test_filter_dataset_not_found(client):
-    resp = client.post(
-        "/filter",
-        json={
+    resp = _query_filter(
+        client,
+        {
             "dataset_id": 999999,
             "filters": [{"column": "city", "operator": "=", "value": "London"}],
         },
@@ -132,12 +151,99 @@ def test_filter_dataset_not_found(client):
     assert "not found" in resp.json()["detail"].lower()
 
 
+def test_filter_accepts_null_filters(client):
+    dataset_id = _ingest(client)
+
+    resp = _query_filter(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "filters": None,
+            "limit": 10,
+            "offset": 0,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dataset_id"] == dataset_id
+    assert data["row_count"] == 2
+
+
+def test_filter_virtual_url_uses_list_filters_for_compatibility(client):
+    dataset_id = _ingest(client)
+
+    resp = _query_filter(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "filters": None,
+            "limit": 3,
+            "offset": 1,
+        },
+    )
+    assert resp.status_code == 200
+    url = resp.json()["url"]
+    assert isinstance(url, str)
+
+    parsed = urlparse(url)
+    encoded = parse_qs(parsed.query).get("q", [None])[0]
+    assert encoded is not None
+    pad = "=" * (-len(encoded) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
+    )
+    assert payload["filters"] == []
+    assert payload["limit"] == 3
+    assert payload["offset"] == 1
+
+    replay_resp = _query_filter(client, payload)
+    assert replay_resp.status_code == 200
+
+
+def test_filter_virtual_url_preserves_sort_and_limit(client):
+    dataset_id = _ingest(client)
+
+    resp = _query_filter(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "filters": None,
+            "sort_by": "age",
+            "sort_order": "desc",
+            "limit": 1,
+            "offset": 0,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["rowsResult"]) == 1
+    assert body["rowsResult"][0]["row_data"]["name"] == "Alice"
+
+    parsed = urlparse(body["url"])
+    encoded = parse_qs(parsed.query).get("q", [None])[0]
+    assert encoded is not None
+    pad = "=" * (-len(encoded) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
+    )
+    assert payload["sort_by"] == "age"
+    assert payload["sort_order"] == "desc"
+    assert payload["limit"] == 1
+    assert payload["offset"] == 0
+
+    replay_resp = _query_filter(client, payload)
+    assert replay_resp.status_code == 200
+    replay_rows = replay_resp.json()["rowsResult"]
+    assert len(replay_rows) == 1
+    assert replay_rows[0]["row_data"]["name"] == "Alice"
+
+
 def test_filter_row_indices_success(client):
     dataset_id = _ingest(client)
 
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "city", "operator": "=", "value": "London"}],
             "max_rows": 1000,
@@ -165,9 +271,9 @@ def test_filter_row_indices_or_conditions(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [
                 {"column": "city", "operator": "=", "value": "Paris"},
@@ -203,9 +309,9 @@ def test_filter_row_indices_truncated(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "city", "operator": "=", "value": "London"}],
             "max_rows": 2,
@@ -232,9 +338,9 @@ def test_filter_row_indices_is_null(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "team", "operator": "IS NULL"}],
             "max_rows": 1000,
@@ -249,9 +355,9 @@ def test_filter_row_indices_is_null(client):
 
 
 def test_filter_row_indices_dataset_not_found(client):
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": 999999,
             "filters": [{"column": "city", "operator": "=", "value": "London"}],
         },
@@ -262,9 +368,9 @@ def test_filter_row_indices_dataset_not_found(client):
 
 def test_filter_row_indices_invalid_column(client):
     dataset_id = _ingest(client)
-    resp = client.post(
-        "/filter/row-indices",
-        json={
+    resp = _query_filter_row_indices(
+        client,
+        {
             "dataset_id": dataset_id,
             "filters": [{"column": "unknown_col", "operator": "=", "value": "x"}],
         },

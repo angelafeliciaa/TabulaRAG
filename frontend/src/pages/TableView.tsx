@@ -27,6 +27,7 @@ type QueryPayload =
     filters?: FilterConditionPayload[];
     limit?: number;
     offset?: number;
+    result_title?: string;
   }
   | {
     dataset_id: number;
@@ -34,6 +35,7 @@ type QueryPayload =
     metric_column?: string;
     group_by?: string;
     filters?: FilterConditionPayload[];
+    sort_order?: "asc" | "desc";
     limit?: number;
   };
 type MultiHighlightSpec = {
@@ -244,7 +246,9 @@ function buildQueryContextTitle(returnPath: string): string | null {
     }
     const payload = decodePayload(encoded);
     if ("mode" in payload && payload.mode === "filter") {
-      return `Filter result: ${formatFilterSummary(payload.filters)}`;
+      const providedTitle =
+        typeof payload.result_title === "string" ? payload.result_title.trim() : "";
+      return providedTitle || `Filter result: ${formatFilterSummary(payload.filters)}`;
     }
 
     const aggregatePayload = payload as Exclude<QueryPayload, { mode: "filter" }>;
@@ -966,10 +970,10 @@ export default function TableView() {
                   type="button"
                   className="table-view-row-jump"
                   onClick={jumpToHighlight}
-                  aria-label={`Viewing row ${highlightedRow}. Click to jump to highlighted row`}
-                  title={`Jump to highlighted row ${highlightedRow}`}
+                  aria-label={`Viewing row ${highlightedRow + 1}. Click to jump to highlighted row`}
+                  title={`Jump to highlighted row ${highlightedRow + 1}`}
                 >
-                  Row {highlightedRow}
+                  Row {highlightedRow + 1}
                 </button>
               </div>
             )}

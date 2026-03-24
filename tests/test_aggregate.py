@@ -1,4 +1,9 @@
 
+import base64
+import json
+from urllib.parse import parse_qs, urlparse
+
+
 def _ingest_sales(client):
     csv_content = (
         b"Sales Person,Boxes Shipped,Country\n"
@@ -15,12 +20,19 @@ def _ingest_sales(client):
     return resp.json()["dataset_id"]
 
 
+def _query_aggregate(client, payload):
+    return client.post(
+        "/query",
+        json={"mode": "aggregate", "aggregate": payload},
+    )
+
+
 def test_aggregate_count_success(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "count",
             "filters": [{"column": "Country", "operator": "=", "value": "Canada"}],
@@ -34,14 +46,18 @@ def test_aggregate_count_success(client):
     assert data["group_by_column"] is None
     assert len(data["rowsResult"]) == 1
     assert int(data["rowsResult"][0]["aggregate_value"]) == 2
+    assert isinstance(data["url"], str)
+    assert isinstance(data.get("final_response"), str)
+    assert data["url"] in data["final_response"]
+    assert "MANDATORY" in data.get("response_instructions", "")
 
 
 def test_aggregate_sum_group_by_success(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "sum",
             "metric_column": "Boxes Shipped",
@@ -63,9 +79,9 @@ def test_aggregate_sum_group_by_success(client):
 def test_aggregate_invalid_metric_column(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "sum",
             "metric_column": "NotAColumn",
@@ -80,9 +96,9 @@ def test_aggregate_invalid_metric_column(client):
 def test_aggregate_count_group_by_orders_desc(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "count",
             "group_by": "Sales Person",
@@ -101,6 +117,34 @@ def test_aggregate_count_group_by_orders_desc(client):
     assert data["url"].startswith("http://localhost:5173/tables/virtual?q=")
 
 
+def test_aggregate_sum_group_by_sort_order_asc_returns_bottom_rows(client):
+    dataset_id = _ingest_sales(client)
+
+    resp = _query_aggregate(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "operation": "sum",
+            "metric_column": "Boxes Shipped",
+            "group_by": "Sales Person",
+            "sort_order": "asc",
+            "limit": 2,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["group_by_column"] == "Sales Person"
+    assert len(data["rowsResult"]) == 2
+    first = data["rowsResult"][0]
+    second = data["rowsResult"][1]
+    assert first["group_value"] == "Alice"
+    assert float(first["aggregate_value"]) == 100.0
+    assert second["group_value"] == "Bob"
+    assert float(second["aggregate_value"]) == 350.0
+    assert "ORDER BY aggregate_value ASC" in data["sql_query"]
+
+
 def test_aggregate_group_by_date_part_month(client):
     csv_content = (
         b"sale_date,amount\n"
@@ -114,9 +158,9 @@ def test_aggregate_group_by_date_part_month(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "sum",
             "metric_column": "amount",
@@ -148,9 +192,9 @@ def test_aggregate_group_by_counts_include_rows_with_missing_values(client):
     )
     dataset_id = resp.json()["dataset_id"]
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "count",
             "group_by": "country",
@@ -170,9 +214,9 @@ def test_aggregate_group_by_counts_include_rows_with_missing_values(client):
 def test_aggregate_invalid_group_by_column(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "count",
             "group_by": "NotAColumn",
@@ -185,9 +229,9 @@ def test_aggregate_invalid_group_by_column(client):
 
 
 def test_aggregate_dataset_not_found(client):
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": 999999,
             "operation": "count",
             "limit": 50,
@@ -201,9 +245,9 @@ def test_aggregate_dataset_not_found(client):
 def test_aggregate_no_matches_count_returns_zero_row(client):
     dataset_id = _ingest_sales(client)
 
-    resp = client.post(
-        "/aggregate",
-        json={
+    resp = _query_aggregate(
+        client,
+        {
             "dataset_id": dataset_id,
             "operation": "count",
             "filters": [{"column": "Country", "operator": "=", "value": "Nowhere"}],
@@ -217,3 +261,52 @@ def test_aggregate_no_matches_count_returns_zero_row(client):
     assert data["rowsResult"][0]["group_value"] is None
     assert int(data["rowsResult"][0]["aggregate_value"]) == 0
     assert isinstance(data["url"], str)
+
+
+def test_aggregate_accepts_null_filters(client):
+    dataset_id = _ingest_sales(client)
+    resp = _query_aggregate(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "operation": "count",
+            "filters": None,
+            "limit": 50,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dataset_id"] == dataset_id
+    assert len(data["rowsResult"]) == 1
+
+
+def test_aggregate_virtual_url_uses_list_filters_for_compatibility(client):
+    dataset_id = _ingest_sales(client)
+    resp = _query_aggregate(
+        client,
+        {
+            "dataset_id": dataset_id,
+            "operation": "sum",
+            "metric_column": "Boxes Shipped",
+            "group_by": "Sales Person",
+            "filters": None,
+        },
+    )
+    assert resp.status_code == 200
+    url = resp.json()["url"]
+    assert isinstance(url, str)
+
+    parsed = urlparse(url)
+    encoded = parse_qs(parsed.query).get("q", [None])[0]
+    assert encoded is not None
+    pad = "=" * (-len(encoded) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
+    )
+    assert payload["filters"] == []
+    assert payload["sort_order"] == "desc"
+    assert payload["limit"] == 50
+
+    # Replay payload exactly as the frontend virtual view does.
+    replay_resp = _query_aggregate(client, payload)
+    assert replay_resp.status_code == 200

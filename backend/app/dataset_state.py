@@ -108,6 +108,24 @@ def ensure_dataset_description_column() -> None:
         )
 
 
+def ensure_dataset_query_context_column() -> None:
+    inspector = inspect(app_db.engine)
+    if "datasets" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("datasets")}
+    if "query_context" in column_names:
+        return
+
+    with app_db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE datasets "
+                "ADD COLUMN query_context JSON NULL"
+            )
+        )
+
+
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:
     with app_db.SessionLocal() as db:
         db.execute(
