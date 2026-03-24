@@ -5,15 +5,23 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
+from app.indexing import upsert_dataset_row_index
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
 from app.normalization import (
     flatten_row_data_to_original,
     get_normalized_value,
+    get_original_value,
     get_typed_value,
+    infer_date_formats_for_columns,
+    infer_measurement_columns,
+    infer_money_columns,
+    normalize_headers,
+    normalize_row_obj,
     normalize_text_value,
     parse_date,
     parse_measurement,
@@ -34,6 +42,61 @@ SLICE_RESPONSE_URL_REQUIREMENT_TEXT = (
 
 class RenameRequest(BaseModel):
     name: str
+
+
+class RowCellUpdateRequest(BaseModel):
+    """Update one cell: `column` is the dataset normalized column name; `value` is the new raw text."""
+
+    column: str
+    value: str
+
+
+class ColumnRenameRequest(BaseModel):
+    column: str
+    name: str
+
+
+ROW_EDIT_INFERENCE_SAMPLE_LIMIT = 2000
+
+
+def _row_to_string_list(row_data: Dict[str, Any], headers: List[str]) -> List[str]:
+    out: List[str] = []
+    for h in headers:
+        o = get_original_value(row_data, h)
+        if o is None:
+            out.append("")
+        else:
+            out.append(str(o))
+    return out
+
+
+def _inference_string_rows(
+    db,
+    dataset_id: int,
+    headers: List[str],
+    target_row_index: int,
+    target_strings: List[str],
+) -> List[List[str]]:
+    rows_db = (
+        db.execute(
+            select(DatasetRow.row_index, DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(ROW_EDIT_INFERENCE_SAMPLE_LIMIT)
+        )
+        .all()
+    )
+    out: List[List[str]] = []
+    replaced = False
+    for ri, rd in rows_db:
+        s = _row_to_string_list(_coerce_row_data_dict(rd), headers)
+        if int(ri) == int(target_row_index):
+            s = list(target_strings)
+            replaced = True
+        out.append(s)
+    if not replaced:
+        out.append(list(target_strings))
+    return out
 
 
 SEMANTIC_ROWS_BY_INDICES_MAX = 100
@@ -848,3 +911,174 @@ def rename_table(dataset_id: int, body: RenameRequest):
         dataset.name = normalized_name
         db.commit()
         return {"name": dataset.name}
+
+
+@router.patch("/tables/{dataset_id}/rows/{row_index}", include_in_schema=False)
+def patch_table_row_cell(
+    dataset_id: int,
+    row_index: int,
+    body: RowCellUpdateRequest,
+):
+    if row_index < 0:
+        raise HTTPException(status_code=400, detail="row_index must be non-negative")
+
+    column_key = (body.column or "").strip()
+    if not column_key:
+        raise HTTPException(status_code=400, detail="column is required")
+
+    new_row_data: Optional[Dict[str, Any]] = None
+
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        columns = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        headers = [c.normalized_name for c in columns]
+        if column_key not in headers:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {column_key}")
+
+        row = (
+            db.execute(
+                select(DatasetRow).where(
+                    DatasetRow.dataset_id == dataset_id,
+                    DatasetRow.row_index == row_index,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Row not found")
+
+        current = _coerce_row_data_dict(row.row_data)
+        target_strings = _row_to_string_list(current, headers)
+        col_idx = headers.index(column_key)
+        while len(target_strings) < len(headers):
+            target_strings.append("")
+        target_strings[col_idx] = body.value
+
+        inference_rows = _inference_string_rows(
+            db, dataset_id, headers, row_index, target_strings
+        )
+        date_format_by_column = infer_date_formats_for_columns(headers, inference_rows)
+        money_columns = infer_money_columns(headers, inference_rows)
+        measurement_columns = infer_measurement_columns(headers, inference_rows)
+
+        new_row_data = normalize_row_obj(
+            headers,
+            target_strings,
+            store_original=True,
+            date_format_by_column=date_format_by_column,
+            money_columns=money_columns,
+            measurement_columns=measurement_columns,
+        )
+        row.row_data = new_row_data
+        db.commit()
+
+    try:
+        upsert_dataset_row_index(dataset_id, row_index)
+    except Exception:
+        pass
+
+    return {
+        "dataset_id": dataset_id,
+        "row_index": row_index,
+        "column": column_key,
+        "data": strip_internal_fields(new_row_data or {}),
+    }
+
+
+@router.patch("/tables/{dataset_id}/columns", include_in_schema=False)
+def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
+    old_column = (body.column or "").strip()
+    if not old_column:
+        raise HTTPException(status_code=400, detail="column is required")
+
+    requested_name = (body.name or "").strip()
+    if not requested_name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    new_column = normalize_headers([requested_name])[0]
+
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        columns = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        target = next((c for c in columns if c.normalized_name == old_column), None)
+        if not target:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {old_column}")
+
+        conflict = next(
+            (c for c in columns if c.normalized_name == new_column and c.normalized_name != old_column),
+            None,
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Column '{new_column}' already exists.",
+            )
+
+        if old_column == new_column:
+            target.original_name = requested_name
+            db.commit()
+            return {
+                "dataset_id": dataset_id,
+                "column": target.normalized_name,
+                "original_name": target.original_name,
+            }
+
+        row_objs = (
+            db.execute(
+                select(DatasetRow)
+                .where(DatasetRow.dataset_id == dataset_id)
+                .order_by(DatasetRow.row_index)
+            )
+            .scalars()
+            .all()
+        )
+        row_indices: List[int] = []
+        for row in row_objs:
+            row_data = _coerce_row_data_dict(row.row_data)
+            if old_column in row_data:
+                row_data[new_column] = row_data.pop(old_column)
+            typed = row_data.get("__typed__")
+            if isinstance(typed, dict) and old_column in typed:
+                typed[new_column] = typed.pop(old_column)
+            row.row_data = dict(row_data)
+            flag_modified(row, "row_data")
+            row_indices.append(int(row.row_index))
+
+        target.normalized_name = new_column
+        target.original_name = requested_name
+        db.commit()
+
+    for row_index in row_indices:
+        try:
+            upsert_dataset_row_index(dataset_id, row_index)
+        except Exception:
+            continue
+
+    return {
+        "dataset_id": dataset_id,
+        "column": new_column,
+        "original_name": requested_name,
+    }

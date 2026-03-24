@@ -9,7 +9,7 @@
 
   --bg: #eef0f2;
   --bg-elev: #f6f7f9;
-  --bg-elev-2: #e4e6ea;
+  --bg-elev-2: #F4F5F8;
   --border: #cfd3d8;
   --border-soft: #889098;
   --text: #1a1d21;
@@ -2294,6 +2294,100 @@ a.sort-toggle-button.preview-open-link {
   margin-left: auto;
 }
 
+.table-view-save-edits-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-view-save-edits-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.table-view-save-edits-btn {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.table-view-save-edits-btn:hover,
+.table-view-save-edits-btn:focus-visible {
+  background: var(--success-strong);
+  border-color: var(--success-strong);
+  color: #fff;
+}
+
+.table-view-revert-edits-btn {
+  background: var(--surface-blur-bg);
+  border: 1px solid var(--border-soft);
+  color: var(--danger);
+}
+
+.table-view-revert-edits-btn:hover,
+.table-view-revert-edits-btn:focus-visible {
+  background: var(--surface-blur-bg-strong);
+  color: var(--danger-strong);
+  border-color: var(--border);
+}
+
+.table-view-revert-edits-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.table-view-saving-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.table-view-saving-modal {
+  min-width: 320px;
+  max-width: min(92vw, 440px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-view-saving-title {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.table-view-saving-subtitle {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.table-view-saving-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: table-view-spin 0.9s linear infinite;
+}
+
+@keyframes table-view-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .table-view-header-row {
   flex-wrap: nowrap;
   align-items: flex-start;
@@ -2390,6 +2484,35 @@ a.sort-toggle-button.preview-open-link {
   box-shadow: none;
   background: var(--bg-elev);
   border-color: var(--border-soft);
+}
+
+/* Keep explicit save/discard colors over generic table-view button styles. */
+.table-view-format-button.table-view-save-edits-btn {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.table-view-format-button.table-view-save-edits-btn:hover,
+.table-view-format-button.table-view-save-edits-btn:focus,
+.table-view-format-button.table-view-save-edits-btn:focus-visible {
+  background: var(--success-strong);
+  border-color: var(--success-strong);
+  color: #fff;
+}
+
+.table-view-format-button.table-view-revert-edits-btn {
+  background: var(--surface-blur-bg);
+  border-color: var(--border-soft);
+  color: var(--danger);
+}
+
+.table-view-format-button.table-view-revert-edits-btn:hover,
+.table-view-format-button.table-view-revert-edits-btn:focus,
+.table-view-format-button.table-view-revert-edits-btn:focus-visible {
+  background: var(--surface-blur-bg-strong);
+  border-color: var(--border);
+  color: var(--danger-strong);
 }
 
 .table-view-pagination {
@@ -2864,6 +2987,34 @@ tbody th[scope="row"] {
   font-size: 10px;
   line-height: 1;
   color: var(--text-muted);
+}
+
+.table-cell-input {
+  width: 100%;
+  min-width: 8ch;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.table-cell-input:focus {
+  outline: none;
+  border-color: var(--border);
+  background: var(--overlay);
+}
+
+.table-cell-input:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.table-cell-input.table-cell-pending-edit {
+  font-style: italic;
 }
 
 tr:hover td,

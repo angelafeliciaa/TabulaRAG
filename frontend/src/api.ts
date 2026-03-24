@@ -441,6 +441,54 @@ export async function deleteTable(
   return (await res.json()) as { deleted: number };
 }
 
+export async function patchTableCell(
+  datasetId: number,
+  rowIndex: number,
+  column: string,
+  value: string,
+): Promise<{ dataset_id: number; row_index: number; column: string; data: TableRow }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/rows/${rowIndex}`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ column, value }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    row_index: number;
+    column: string;
+    data: TableRow;
+  };
+}
+
+export async function patchTableColumnName(
+  datasetId: number,
+  column: string,
+  name: string,
+): Promise<{ dataset_id: number; column: string; original_name: string | null }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/columns`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ column, name }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    column: string;
+    original_name: string | null;
+  };
+}
+
 export async function renameTable(
   datasetId: number,
   name: string,

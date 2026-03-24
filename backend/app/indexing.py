@@ -9,8 +9,10 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.embeddings import embed_texts, row_to_text
 from app.qdrant_client import (
+    collection_name,
     ensure_collection,
     finalize_collection_after_ingest,
+    get_client,
     prepare_collection_for_bulk_ingest,
     upsert_vectors,
 )
@@ -127,3 +129,44 @@ def index_dataset(
 
     flush_batch()
     finalize_collection_after_ingest(dataset_id)
+
+
+def _delete_dataset_row_point(dataset_id: int, row_index: int) -> None:
+    """Remove one Qdrant point when a row no longer produces embeddable text (matches index_dataset skip)."""
+    client = get_client()
+    name = collection_name(dataset_id)
+    if not client.collection_exists(name):
+        return
+    client.delete(
+        collection_name=name,
+        points_selector=models.PointIdsList(points=[row_index]),
+        wait=False,
+    )
+
+
+def upsert_dataset_row_index(dataset_id: int, row_index: int) -> None:
+    """Re-embed and upsert a single row after a cell edit (or delete the point if text is empty)."""
+    ensure_collection(dataset_id)
+    with SessionLocal() as db:
+        row = db.execute(
+            text(
+                "SELECT row_data FROM dataset_rows WHERE dataset_id = :dataset_id AND row_index = :row_index"
+            ),
+            {"dataset_id": dataset_id, "row_index": row_index},
+        ).first()
+    if not row:
+        return
+    row_data = _deserialize_row_data(row[0])
+    serialized = row_to_text(row_data)
+    if not serialized:
+        _delete_dataset_row_point(dataset_id, row_index)
+        return
+    vectors = embed_texts([serialized])
+    points = [
+        models.PointStruct(
+            id=row_index,
+            vector=vectors[0],
+            payload={"row_data": row_data, "text": serialized},
+        )
+    ]
+    upsert_vectors(dataset_id, points)

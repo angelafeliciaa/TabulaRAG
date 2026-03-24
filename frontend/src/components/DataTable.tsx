@@ -33,6 +33,28 @@ type DataTableProps = {
   onRowClick?: (payload: { row: Record<string, unknown>; rowIndex: number; isHighlighted: boolean }) => void;
   rowAction?: (payload: { row: Record<string, unknown>; rowIndex: number }) => ReactNode;
   rowActionLabel?: string;
+  /** When true, cells are text inputs; draft updates on blur or Enter (plain full-table view only). */
+  editable?: boolean;
+  editableBusy?: boolean;
+  /** Bump after data reload so inputs reset to server values. */
+  editableEpoch?: number;
+  /** Called on every cell blur: parent tracks pending edits vs `baseline` (current server display). */
+  onCellDraftChange?: (payload: {
+    rowIndex: number;
+    column: string;
+    value: string;
+    baseline: string;
+  }) => void;
+  editableHeaders?: boolean;
+  onHeaderDraftChange?: (payload: {
+    column: string;
+    value: string;
+    baseline: string;
+  }) => void;
+  /** Keys `${rowIndex}:${normalizedColumn}` — italic for unsaved cell drafts. */
+  pendingCellEditKeys?: ReadonlySet<string>;
+  /** Normalized column keys with unsaved header rename drafts — italic. */
+  pendingHeaderColumns?: ReadonlySet<string>;
 };
 
 type SortDirection = "asc" | "desc";
@@ -222,6 +244,14 @@ export default function DataTable({
   onRowClick,
   rowAction,
   rowActionLabel = "",
+  editable = false,
+  editableBusy = false,
+  editableEpoch = 0,
+  onCellDraftChange,
+  editableHeaders = false,
+  onHeaderDraftChange,
+  pendingCellEditKeys,
+  pendingHeaderColumns,
 }: DataTableProps) {
   const labels = columnLabels ?? columns;
   const [clientSortColumn, setClientSortColumn] = useState<string | null>(null);
@@ -325,6 +355,28 @@ export default function DataTable({
               <th className="mono">#</th>
               {columns.map((column, i) => {
                 const label = labels[i] ?? column;
+                if (editableHeaders) {
+                  const headerPending = pendingHeaderColumns?.has(column) ?? false;
+                  return (
+                    <th key={column} className="table-header-cell-preserve-ws">
+                      <input
+                        type="text"
+                        className={`table-cell-input table-header-input${headerPending ? " table-cell-pending-edit" : ""}`}
+                        disabled={editableBusy}
+                        defaultValue={label}
+                        aria-label={`Column name ${label}`}
+                        key={`${editableEpoch}-header-${column}`}
+                        onBlur={(event) => {
+                          onHeaderDraftChange?.({
+                            column,
+                            value: event.currentTarget.value,
+                            baseline: label,
+                          });
+                        }}
+                      />
+                    </th>
+                  );
+                }
                 if (!sortable) {
                   return (
                     <th key={column} className="table-header-cell-preserve-ws">
@@ -400,6 +452,11 @@ export default function DataTable({
                       isHighlightedRow
                       && (highlightedCols.size === 0 || highlightedCols.has(column));
                     const rawValue = row[column];
+                    const displayStr = formatCellValue
+                      ? formatCellValue(column, rawValue)
+                      : defaultFormatValue(rawValue);
+                    const cellPending =
+                      pendingCellEditKeys?.has(`${absoluteRowIndex}:${column}`) ?? false;
                     return (
                       <td
                         key={`${absoluteRowIndex}:${column}`}
@@ -412,9 +469,34 @@ export default function DataTable({
                           })
                         }
                       >
-                        {formatCellValue
-                          ? formatCellValue(column, rawValue)
-                          : defaultFormatValue(rawValue)}
+                        {editable ? (
+                          <input
+                            type="text"
+                            className={`table-cell-input${cellPending ? " table-cell-pending-edit" : ""}`}
+                            disabled={editableBusy}
+                            defaultValue={displayStr}
+                            aria-label={`${column} row ${absoluteRowIndex + 1}`}
+                            key={`${editableEpoch}-${absoluteRowIndex}-${column}`}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.currentTarget.blur();
+                              }
+                            }}
+                            onBlur={(event) => {
+                              onCellDraftChange?.({
+                                rowIndex: absoluteRowIndex,
+                                column,
+                                value: event.currentTarget.value,
+                                baseline: displayStr,
+                              });
+                            }}
+                          />
+                        ) : formatCellValue ? (
+                          formatCellValue(column, rawValue)
+                        ) : (
+                          defaultFormatValue(rawValue)
+                        )}
                       </td>
                     );
                   })}

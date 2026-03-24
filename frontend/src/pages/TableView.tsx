@@ -1,10 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { focusByIndex, focusByOffset } from "../accessibility";
 import {
   filterRowIndices,
   getSlice,
   listTables,
+  patchTableCell,
+  patchTableColumnName,
   type FilterRowIndicesResponse,
   type TableSlice,
   type TableSummary,
@@ -458,6 +460,15 @@ export default function TableView() {
   const [valueMode, setValueMode] = useState<ValueMode>("normalized");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sliceEpoch, setSliceEpoch] = useState(0);
+  const [isSavingEdits, setIsSavingEdits] = useState(false);
+  const [saveSlowHint, setSaveSlowHint] = useState(false);
+  const [pendingEdits, setPendingEdits] = useState<
+    Map<string, { rowIndex: number; column: string; value: string }>
+  >(() => new Map());
+  const [pendingColumnEdits, setPendingColumnEdits] = useState<
+    Map<string, { column: string; value: string }>
+  >(() => new Map());
   const [multiHighlightRows, setMultiHighlightRows] = useState<number[]>([]);
   const [multiHighlightTotal, setMultiHighlightTotal] = useState(0);
   const [multiHighlightTruncated, setMultiHighlightTruncated] = useState(false);
@@ -513,6 +524,21 @@ export default function TableView() {
       mounted = false;
     };
   }, [numericDatasetId]);
+
+  useEffect(() => {
+    setPendingEdits(new Map());
+    setPendingColumnEdits(new Map());
+  }, [numericDatasetId, sortColumn, sortDirection, valueMode, dateViewMode]);
+
+  useEffect(() => {
+    if (!isSavingEdits) {
+      setSaveSlowHint(false);
+      return;
+    }
+    setSaveSlowHint(false);
+    const id = window.setTimeout(() => setSaveSlowHint(true), 5000);
+    return () => window.clearTimeout(id);
+  }, [isSavingEdits]);
 
   useEffect(() => {
     if (!datasetId) {
@@ -744,6 +770,7 @@ export default function TableView() {
         }
         setServerError(false);
         setData(slice);
+        setSliceEpoch((v) => v + 1);
         setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
 
         if (isMultiHighlightMode) {
@@ -789,6 +816,123 @@ export default function TableView() {
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const effectiveRowCount = Math.max(tableRowCount, Math.max(0, data?.row_count || 0));
+
+  const handleCellDraftChange = useCallback(
+    (payload: {
+      rowIndex: number;
+      column: string;
+      value: string;
+      baseline: string;
+    }) => {
+      const key = `${payload.rowIndex}:${payload.column}`;
+      setPendingEdits((prev) => {
+        const next = new Map(prev);
+        if (payload.value === payload.baseline) {
+          next.delete(key);
+        } else {
+          next.set(key, {
+            rowIndex: payload.rowIndex,
+            column: payload.column,
+            value: payload.value,
+          });
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleSaveEdits = useCallback(async () => {
+    if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
+      return;
+    }
+    const edits = [...pendingEdits.values()];
+    const columnEdits = [...pendingColumnEdits.values()];
+    if (edits.length === 0 && columnEdits.length === 0) {
+      return;
+    }
+    setIsSavingEdits(true);
+    setErr(null);
+    try {
+      for (const edit of edits) {
+        await patchTableCell(
+          numericDatasetId,
+          edit.rowIndex,
+          edit.column,
+          edit.value,
+        );
+      }
+      for (const edit of columnEdits) {
+        await patchTableColumnName(
+          numericDatasetId,
+          edit.column,
+          edit.value,
+        );
+      }
+      const sort =
+        sortColumn != null ? { sortColumn, sortDirection } : null;
+      const rowTo = Math.max(
+        1,
+        Math.max(tableRowCount, Math.max(0, data?.row_count || 0)),
+      );
+      const slice = await getSlice(numericDatasetId, 0, rowTo, {
+        flatten: false,
+        sort,
+      });
+      setData(slice);
+      setSliceEpoch((v) => v + 1);
+      setPendingEdits(new Map());
+      setPendingColumnEdits(new Map());
+    } catch (error: unknown) {
+      setErr(getErrorMessage(error));
+    } finally {
+      setIsSavingEdits(false);
+    }
+  }, [
+    pendingEdits,
+    pendingColumnEdits,
+    numericDatasetId,
+    sortColumn,
+    sortDirection,
+    tableRowCount,
+    data?.row_count,
+  ]);
+  const handleHeaderDraftChange = useCallback(
+    (payload: { column: string; value: string; baseline: string }) => {
+      const key = payload.column;
+      const nextValue = payload.value.trim();
+      const baseline = payload.baseline.trim();
+      setPendingColumnEdits((prev) => {
+        const next = new Map(prev);
+        if (!nextValue || nextValue === baseline) {
+          next.delete(key);
+        } else {
+          next.set(key, { column: payload.column, value: nextValue });
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const pendingCellEditKeys = useMemo(
+    () => new Set(pendingEdits.keys()),
+    [pendingEdits],
+  );
+  const pendingHeaderColumnsSet = useMemo(
+    () => new Set(pendingColumnEdits.keys()),
+    [pendingColumnEdits],
+  );
+
+  const handleRevertEdits = useCallback(() => {
+    if (isSavingEdits) {
+      return;
+    }
+    setPendingEdits(new Map());
+    setPendingColumnEdits(new Map());
+    setSliceEpoch((v) => v + 1);
+  }, [isSavingEdits]);
+
   const totalPages = isPlainDatasetView
     ? 1
     : Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
@@ -1201,6 +1345,28 @@ export default function TableView() {
     );
   }
 
+  const pendingEditHint =
+    isPlainDatasetView && (pendingEdits.size + pendingColumnEdits.size) > 0
+      ? ` • ${pendingEdits.size + pendingColumnEdits.size} unsaved change${pendingEdits.size + pendingColumnEdits.size === 1 ? "" : "s"}`
+      : "";
+  const hasUnsavedChanges =
+    isPlainDatasetView && (pendingEdits.size > 0 || pendingColumnEdits.size > 0);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) {
+      return;
+    }
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Required for Chrome/Edge to show the native confirmation prompt.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [hasUnsavedChanges]);
+
   return (
     <div
       className={`page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}`}
@@ -1250,13 +1416,36 @@ export default function TableView() {
                   ? "Loading table page..."
                   : data && data.rows.length > 0
                     ? normalizedSearch
-                      ? `${filtered.rows.length.toLocaleString()} match${filtered.rows.length === 1 ? "" : "es"} (search) • ${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded`
-                      : `${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded`
+                      ? `${filtered.rows.length.toLocaleString()} match${filtered.rows.length === 1 ? "" : "es"} (search) • ${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded${pendingEditHint}`
+                      : `${effectiveRowCount.toLocaleString()} row${effectiveRowCount === 1 ? "" : "s"} loaded${pendingEditHint}`
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
           </div>
           <div className="table-view-tools">
+            {isPlainDatasetView && (pendingEdits.size > 0 || pendingColumnEdits.size > 0) && (
+              <div className="table-view-save-edits-wrap">
+                <button
+                  type="button"
+                  className="table-view-format-button table-view-save-edits-btn"
+                  disabled={isSavingEdits || loading || awaitingCatalog}
+                  aria-busy={isSavingEdits}
+                  onClick={() => {
+                    void handleSaveEdits();
+                  }}
+                >
+                  {isSavingEdits ? "Saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  className="table-view-format-button table-view-revert-edits-btn"
+                  disabled={isSavingEdits || loading || awaitingCatalog}
+                  onClick={handleRevertEdits}
+                >
+                  Discard Changes
+                </button>
+              </div>
+            )}
             <label className="table-view-value-mode-toggle">
               <span className="table-view-value-mode-label">Values:</span>
               <select
@@ -1323,11 +1512,13 @@ export default function TableView() {
               columns={data.columns}
               columnLabels={
                 data.columns_meta
-                  ? data.columns_meta.map((m) =>
-                      valueMode === "original"
-                        ? (m.original_name ?? m.normalized_name)
-                        : m.normalized_name,
-                    )
+                  ? data.columns_meta.map((m) => {
+                      const base =
+                        valueMode === "original"
+                          ? (m.original_name ?? m.normalized_name)
+                          : m.normalized_name;
+                      return pendingColumnEdits.get(m.normalized_name)?.value ?? base;
+                    })
                   : undefined
               }
               rows={displayRows}
@@ -1376,6 +1567,14 @@ export default function TableView() {
                 event.preventDefault();
                 setDateMenu({ x: event.clientX, y: event.clientY });
               }}
+              editable={isPlainDatasetView}
+              editableBusy={isSavingEdits || loading}
+              editableEpoch={sliceEpoch}
+              onCellDraftChange={handleCellDraftChange}
+              editableHeaders={isPlainDatasetView}
+              onHeaderDraftChange={handleHeaderDraftChange}
+              pendingCellEditKeys={isPlainDatasetView ? pendingCellEditKeys : undefined}
+              pendingHeaderColumns={isPlainDatasetView ? pendingHeaderColumnsSet : undefined}
             />
             {showScrollHint && (
               <button
@@ -1502,6 +1701,17 @@ export default function TableView() {
               {option.label}
             </button>
           ))}
+        </div>
+      )}
+      {isSavingEdits && (
+        <div className="table-view-saving-overlay" role="status" aria-live="polite" aria-atomic="true">
+          <div className="table-view-saving-modal" aria-label="Saving changes">
+            <div className="table-view-saving-spinner" aria-hidden="true" />
+            <div className="table-view-saving-title">Saving changes</div>
+            <div className="table-view-saving-subtitle">
+              {saveSlowHint ? "This may take a while..." : "Updating table values and columns..."}
+            </div>
+          </div>
         </div>
       )}
     </div>
