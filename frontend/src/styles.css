@@ -1537,11 +1537,40 @@ ul {
 }
 
 .uploaded-tables-panel {
-  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 45vh;
+  overflow: hidden;
 }
 
 .uploaded-tables-panel .tables-scroll {
-  max-height: 70vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.tables-load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+
+.tables-load-more-btn {
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg);
+  color: var(--text);
+  border-radius: 10px;
+  height: 30px;
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tables-load-more-btn:hover {
+  background: var(--surface-blur-bg-strong);
 }
 
 .tables-header-row {
@@ -1793,6 +1822,7 @@ ul {
 
 .list-item {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: var(--table-row-control-height);
   background: var(--surface-blur-bg);
   border: 1px solid var(--surface-blur-border);
@@ -1841,6 +1871,7 @@ ul {
   display: inline-flex;
   align-items: center;
   width: 100%;
+  height: 100%;
   text-align: left;
   border: none;
   background: transparent;
@@ -1868,17 +1899,51 @@ ul {
 }
 
 .uploaded-table-meta {
-  margin-left: 2px;
+  margin-left: 8px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .uploaded-table-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  width: 100%;
+}
+
+.uploaded-table-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  gap: 10px;
+  min-width: 0;
+}
+
+.uploaded-table-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.uploaded-table-head .uploaded-table-name {
+  flex: 0 0 auto;
+  min-width: auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .uploaded-table-description {
-  margin-top: 2px;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 0;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;

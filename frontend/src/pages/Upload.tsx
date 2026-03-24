@@ -42,6 +42,7 @@ const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
 const SAFE_TABLE_NAME_MAX_LENGTH = 64;
 const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 100;
+const TABLES_RENDER_BATCH_SIZE = 120;
 const PREVIEW_ROWS_PER_PAGE = 100;
 
 type ToastState = { id: number; kind: "success"; message: string };
@@ -375,6 +376,7 @@ export default function Upload({ valueMode }: UploadProps) {
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
+  const [visibleTableCount, setVisibleTableCount] = useState(TABLES_RENDER_BATCH_SIZE);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [uploadPickerOpen, setUploadPickerOpen] = useState<UploadPickerTarget | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
@@ -1536,6 +1538,11 @@ export default function Upload({ valueMode }: UploadProps) {
       table.name.toLowerCase().includes(normalizedTableSearchQuery),
     );
   }, [sortedTables, normalizedTableSearchQuery]);
+  const visibleTables = useMemo(
+    () => filteredTables.slice(0, visibleTableCount),
+    [filteredTables, visibleTableCount],
+  );
+  const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
   const tableSortLabel =
     TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)?.label
     || "Most recent";
@@ -1554,6 +1561,23 @@ export default function Upload({ valueMode }: UploadProps) {
     setSortMenuOpen(false);
     sortToggleButtonRef.current?.focus();
   }
+
+  useEffect(() => {
+    setVisibleTableCount(TABLES_RENDER_BATCH_SIZE);
+  }, [normalizedTableSearchQuery, tableSortMode]);
+
+  useEffect(() => {
+    if (activeTableId === null) {
+      return;
+    }
+    const activeIndex = filteredTables.findIndex((table) => table.dataset_id === activeTableId);
+    if (activeIndex === -1 || activeIndex < visibleTableCount) {
+      return;
+    }
+    setVisibleTableCount(
+      Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) * TABLES_RENDER_BATCH_SIZE,
+    );
+  }, [activeTableId, filteredTables, visibleTableCount]);
 
   function onSortToggleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (
@@ -2145,7 +2169,7 @@ export default function Upload({ valueMode }: UploadProps) {
 
       <div className="panel uploaded-tables-panel" aria-hidden={isUploadDialogOpen}>
         <div className="row tables-header-row">
-          <h3 style={{ marginBottom: 0 }}>Uploaded tables</h3>
+          <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
           <div className="tables-header-controls">
             <label className="tables-search-input-wrap" aria-label="Search table name">
               <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
@@ -2222,7 +2246,7 @@ export default function Upload({ valueMode }: UploadProps) {
         ) : (
           <div className="tables-scroll" ref={tablesScrollRef}>
             <ul>
-              {filteredTables.map((table) => {
+              {visibleTables.map((table) => {
               const indexStatus = indexStatusByTable[table.dataset_id];
               const indexState = indexStatus?.state || "ready";
               const isPinned = pinnedTableIdSet.has(table.dataset_id);
@@ -2345,16 +2369,20 @@ export default function Upload({ valueMode }: UploadProps) {
                             }}
                             aria-pressed={activeTableId === table.dataset_id}
                           >
-                            <span className="uploaded-table-name">{table.name}</span>{" "}
-                            <span className="small uploaded-table-meta">
-                              ({table.row_count} rows, {table.column_count} cols)
+                            <span className="uploaded-table-head">
+                              <span className="uploaded-table-title-line">
+                                <span className="uploaded-table-name">{table.name}</span>
+                                {table.description?.trim() ? (
+                                  <span className="small uploaded-table-description">
+                                    {table.description.trim()}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="small uploaded-table-meta">
+                                ({table.row_count} rows, {table.column_count} cols)
+                              </span>
                             </span>
                           </button>
-                          {table.description?.trim() ? (
-                            <div className="small uploaded-table-description">
-                              {table.description.trim()}
-                            </div>
-                          ) : null}
                         </div>
                       )}
                     </div>
@@ -2433,6 +2461,19 @@ export default function Upload({ valueMode }: UploadProps) {
               );
             })}
             </ul>
+            {hasMoreFilteredTables && (
+              <div className="tables-load-more-wrap">
+                <button
+                  type="button"
+                  className="tables-load-more-btn"
+                  onClick={() =>
+                    setVisibleTableCount((current) => current + TABLES_RENDER_BATCH_SIZE)
+                  }
+                >
+                  Load more tables
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -2454,7 +2495,7 @@ export default function Upload({ valueMode }: UploadProps) {
         <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
         <div className="preview-header">
           <div className="preview-header-left">
-            <h3 style={{ marginBottom: 0 }}>Table preview</h3>
+            <h3 style={{ marginBottom: 0 }}>Table Preview</h3>
             {activeTableName && (
               <div className="preview-table-name" aria-live="polite">
                 <span className="preview-table-name-value">{activeTableName}</span>
