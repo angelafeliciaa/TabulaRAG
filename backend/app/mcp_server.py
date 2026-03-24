@@ -31,7 +31,7 @@
 # def mcp_query(
 #     dataset_id: int,
 #     question: str,
-#     top_k: int = 10,
+#     top_k: int = 5,
 # ) -> dict:
 #     """Query a dataset using vector (Qdrant) search and return matching rows with highlights."""
 #     results = semantic_search(

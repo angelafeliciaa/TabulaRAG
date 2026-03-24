@@ -2585,6 +2585,81 @@ a.sort-toggle-button.preview-open-link {
   padding-top: 72px;
 }
 
+/* Error / empty states (404, 500, offline): large centred card */
+.table-status-page-root {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Keep "Back to Home" clickable: translated layout must not sit above the link in hit-testing */
+.table-status-page-root .table-view-back-row {
+  position: relative;
+  z-index: 2;
+}
+
+.table-status-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: min(62vh, 520px);
+  padding: 24px 20px 32px;
+  box-sizing: border-box;
+  transform: translateY(-10rem);
+  /* Let clicks pass through the flex area to the back row; card re-enables hits below */
+  pointer-events: none;
+}
+
+/* Home page: centre card in space below hero */
+.table-status-layout--compact {
+  min-height: min(48vh, 400px);
+}
+
+.table-status-card-outer {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  pointer-events: auto;
+}
+
+.card.table-status-card {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 3rem 3.5rem;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.table-status-card .table-status-code {
+  margin: 0 0 0.5rem 0;
+  font-size: clamp(2.75rem, 9vw, 4rem);
+  font-weight: 700;
+  color: var(--brand-text);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.table-status-card .table-status-title {
+  margin: 0 0 1rem 0;
+  font-size: clamp(1.35rem, 3.5vw, 1.75rem);
+  font-weight: 700;
+  color: var(--brand-text);
+  line-height: 1.25;
+}
+
+.table-status-card .table-status-desc {
+  margin: 0;
+  font-size: clamp(0.95rem, 2.2vw, 1.125rem);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 38em;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .table-view-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -2846,6 +2921,37 @@ tr:hover th[scope="row"].hl {
 tr.table-row-highlighted:hover td,
 tr.table-row-highlighted:hover th[scope="row"] {
   background: rgba(253, 224, 71, 0.5) !important;
+}
+
+/* Multi-highlight: current row strong; other highlighted rows subtler */
+tr.table-row-highlighted-primary td,
+tr.table-row-highlighted-primary th[scope="row"] {
+  background: rgba(253, 224, 71, 0.55) !important;
+}
+
+tr.table-row-highlighted-primary td.hl,
+tr.table-row-highlighted-primary th[scope="row"].hl {
+  background: rgba(253, 224, 71, 0.55) !important;
+}
+
+tr.table-row-highlighted-secondary td,
+tr.table-row-highlighted-secondary th[scope="row"] {
+  background: rgba(253, 224, 71, 0.2) !important;
+}
+
+tr.table-row-highlighted-secondary td.hl,
+tr.table-row-highlighted-secondary th[scope="row"].hl {
+  background: rgba(253, 224, 71, 0.2) !important;
+}
+
+tr.table-row-highlighted-secondary:hover td,
+tr.table-row-highlighted-secondary:hover th[scope="row"] {
+  background: rgba(253, 224, 71, 0.3) !important;
+}
+
+tr.table-row-highlighted-primary:hover td,
+tr.table-row-highlighted-primary:hover th[scope="row"] {
+  background: rgba(253, 224, 71, 0.58) !important;
 }
 
 .mono {

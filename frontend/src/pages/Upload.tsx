@@ -27,6 +27,7 @@ import {
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
 import openIcon from "../images/open.png";
@@ -1486,8 +1487,19 @@ export default function Upload() {
     if (typeof window !== "undefined" && window.navigator && window.navigator.onLine === false) {
       return true;
     }
-    return Boolean(err && isOfflineConnectionError(err));
+    return Boolean(err && isOfflineConnectionError(getErrorMessage(err)));
   }, [tables.length, busy, err]);
+
+  useEffect(() => {
+    if (!showOfflineView) {
+      return;
+    }
+    document.title = "Error 503 | TabulaRAG";
+    return () => {
+      document.title = "Home | TabulaRAG";
+    };
+  }, [showOfflineView]);
+
   const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
   const sortedTables = useMemo(() => {
     const sortByMode = (a: TableSummary, b: TableSummary): number => {
@@ -1639,8 +1651,12 @@ export default function Upload() {
             Fast-ingesting tabular data RAG with cell-level citations
           </div>
         </div>
-        <div className="panel">
-          <p className="error">Connection Error: Server is currently offline.</p>
+        <div className="table-status-layout table-status-layout--compact">
+          <TableStatusCard
+            code="503"
+            title="Service Unavailable"
+            description="The server could not be reached. Try again in a moment."
+          />
         </div>
       </div>
     );

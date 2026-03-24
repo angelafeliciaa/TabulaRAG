@@ -200,12 +200,8 @@ export default function VirtualTableView() {
           setErr(null);
           const providedTitle =
             typeof sp.result_title === "string" ? sp.result_title.trim() : "";
-          const topK =
-            typeof sp.top_k === "number" && Number.isFinite(sp.top_k) && sp.top_k >= 1
-              ? Math.trunc(sp.top_k)
-              : sp.row_indices.length;
           setResultTitle(providedTitle || "Semantic matches");
-          setResultSubtitle(`Display: top ${topK} semantic matches.`);
+          setResultSubtitle("");
 
           const columnSet = new Set<string>();
           for (const item of result.rowsResult) {
@@ -471,11 +467,17 @@ export default function VirtualTableView() {
                   if (sourceDataset !== null && sourceRow !== null) {
                     if (filtered.rowIndices.length > 1) {
                       const cursor = Math.max(0, filtered.rowIndices.indexOf(rowIndex));
+                      const payload = parsedQuery.payload;
+                      const isSemanticVirtual =
+                        payload !== null
+                        && "mode" in payload
+                        && payload.mode === "semantic";
                       const spec = encodePayload({
                         dataset_id: sourceDataset,
                         row_indices: filtered.rowIndices,
                         label: resultTitle.trim() || "Query results",
                         max_rows: MAX_MULTI_HIGHLIGHT_ROWS,
+                        ...(isSemanticVirtual ? { sort_highlight_nav_by_row_index: true } : {}),
                       });
                       navigate(
                         `/tables/${sourceDataset}?highlight_mode=multi&highlight_spec=${encodeURIComponent(spec)}&highlight_cursor=${cursor}&return_to=${encodeURIComponent(virtualReturnTo)}`,

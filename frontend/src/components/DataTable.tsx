@@ -8,7 +8,12 @@ type DataTableProps = {
   /** When set, sorting uses these values (e.g. normalized) instead of rows. Must match rows in length and order. */
   sortRows?: Record<string, unknown>[];
   caption?: string;
-  highlight?: { rows: number[]; cols: string[] };
+  highlight?: {
+    rows: number[];
+    cols: string[];
+    /** When multiple rows are highlighted, the row that should use the stronger accent (e.g. active multi-highlight). */
+    primaryRow?: number | null;
+  };
   rowOffset?: number;
   rowIndices?: number[];
   sortable?: boolean;
@@ -360,13 +365,27 @@ export default function DataTable({
           <tbody>
             {displayRows.map(({ row, absoluteRowIndex }) => {
               const isHighlightedRow = highlightedRows.has(absoluteRowIndex);
+              const usePrimarySecondary =
+                highlight != null
+                && highlight.primaryRow != null
+                && (highlight.rows?.length ?? 0) > 1;
+              const isPrimaryHighlight =
+                usePrimarySecondary && absoluteRowIndex === highlight.primaryRow;
+              const rowHighlightClass = !isHighlightedRow
+                ? ""
+                : usePrimarySecondary
+                  ? isPrimaryHighlight
+                    ? "table-row-highlighted table-row-highlighted-primary"
+                    : "table-row-highlighted table-row-highlighted-secondary"
+                  : "table-row-highlighted";
 
               return (
                 <tr
                   key={absoluteRowIndex}
                   data-row-index={absoluteRowIndex}
+                  aria-current={isPrimaryHighlight ? "true" : undefined}
                   className={
-                    `${isHighlightedRow ? "table-row-highlighted" : ""} ${onRowClick ? "table-row-selectable" : ""}`.trim()
+                    `${rowHighlightClass} ${onRowClick ? "table-row-selectable" : ""}`.trim()
                   }
                   onClick={() => onRowClick?.({ row, rowIndex: absoluteRowIndex, isHighlighted: isHighlightedRow })}
                 >

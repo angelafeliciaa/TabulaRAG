@@ -541,7 +541,7 @@ def _hits_to_results(
 
 
 def semantic_search(
-    dataset_id: int, question: str, top_k: int = 10
+    dataset_id: int, question: str, top_k: int = 5
 ) -> List[Dict[str, Any]]:
     """Two-pass semantic search: keyword-filtered first, then unfiltered fallback."""
     query_vector = embed_texts([question])[0]
@@ -1634,7 +1634,7 @@ def _verify_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 def smart_query(
     dataset_id: int,
     question: str,
-    top_k: int = 10,
+    top_k: int = 5,
 ) -> Dict[str, Any]:
     """Semantic (vector) retrieval only via Qdrant. Use filter / aggregate modes for SQL-style table access."""
     top_k = max(1, top_k)

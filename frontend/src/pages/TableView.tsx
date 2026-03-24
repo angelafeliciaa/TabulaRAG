@@ -10,6 +10,7 @@ import {
   type TableSummary,
 } from "../api";
 import DataTable from "../components/DataTable";
+import TableStatusPage from "../components/TableStatusPage";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
 type ValueMode = "normalized" | "original";
@@ -51,6 +52,8 @@ type MultiHighlightSpec = {
   filters?: FilterConditionPayload[];
   /** When set, highlight these dataset row indices in order (filter / semantic virtual results). */
   row_indices?: number[];
+  /** Semantic full-table: navigate ▲/▼ in ascending row_index order; filter results keep virtual order. */
+  sort_highlight_nav_by_row_index?: boolean;
   label?: string;
   max_rows?: number;
 };
@@ -97,6 +100,71 @@ function getErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+/** Network failure, connection refused, or HTTP 5xx — show full-page server error like 404. */
+function isServerDownOr5xxError(error: unknown): boolean {
+  const msg = getErrorMessage(error);
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes("failed to fetch")
+    || lower.includes("networkerror")
+    || lower.includes("network request failed")
+    || lower.includes("load failed")
+    || lower.includes("connection refused")
+    || lower.includes("fetch failed")
+  ) {
+    return true;
+  }
+  if (/\(5\d\d\)/.test(msg)) {
+    return true;
+  }
+  if (/request failed \(5\d\d\)/i.test(msg)) {
+    return true;
+  }
+  if (/\b(502|503|504)\b/.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+function parseHttpStatusFromMessage(msg: string): string | null {
+  const match = msg.match(/\((\d{3})\)/);
+  return match ? match[1] : null;
+}
+
+/** Map API error text to the same card copy as other status pages (home offline, 404). */
+function tableErrorPageFromMessage(message: string): { code: string; title: string; description: string } {
+  const trimmed = message.trim();
+  const status = parseHttpStatusFromMessage(trimmed);
+  if (status === "404") {
+    return {
+      code: "404",
+      title: "Not Found",
+      description: "The table may have been deleted or the ID might be invalid.",
+    };
+  }
+  if (status === "500" || status === "502" || status === "503" || status === "504") {
+    return {
+      code: "503",
+      title: "Service Unavailable",
+      description: "The server could not be reached. Try again in a moment.",
+    };
+  }
+  if (status === "400") {
+    return { code: "400", title: "Bad Request", description: trimmed };
+  }
+  if (status === "403") {
+    return { code: "403", title: "Forbidden", description: trimmed };
+  }
+  if (status && /^\d{3}$/.test(status)) {
+    return { code: status, title: "Request failed", description: trimmed };
+  }
+  return {
+    code: "Error",
+    title: "Request failed",
+    description: trimmed,
+  };
 }
 
 function parseDateToDate(value: unknown): Date | null {
@@ -373,6 +441,7 @@ export default function TableView() {
   const [highlightErr, setHighlightErr] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
   const [tableNotFound, setTableNotFound] = useState(false);
+  const [serverError, setServerError] = useState(false);
   const [tableRowCount, setTableRowCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -395,6 +464,8 @@ export default function TableView() {
   const dateMenuRef = useRef<HTMLDivElement | null>(null);
   const dateMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const pageChangeSourceRef = useRef<"table" | "highlight">("table");
+  /** Tracks last page for multi-highlight sync — only snap cursor when the *page* changes (pagination), not when only the cursor changes (arrows preserve semantic order). */
+  const prevPageForHighlightSyncRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -405,6 +476,7 @@ export default function TableView() {
     setData(null);
     setTableName(null);
     setTableNotFound(false);
+    setServerError(false);
     setTableRowCount(0);
     setDateMenu(null);
 
@@ -424,8 +496,13 @@ export default function TableView() {
           setTableRowCount(Math.max(0, table.row_count));
         }
       })
-      .catch(() => {
-        // Keep table view usable even if metadata lookup fails.
+      .catch((error: unknown) => {
+        if (!mounted) {
+          return;
+        }
+        if (isServerDownOr5xxError(error)) {
+          setServerError(true);
+        }
       });
 
     return () => {
@@ -434,12 +511,23 @@ export default function TableView() {
   }, [numericDatasetId]);
 
   useEffect(() => {
-    if (tableNotFound) {
+    if (!datasetId) {
+      return;
+    }
+    if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
+      document.title = "Error 400 | TabulaRAG";
+      return;
+    }
+    if (serverError) {
+      document.title = "Error 503 | TabulaRAG";
+    } else if (err || highlightErr) {
+      document.title = "Error | TabulaRAG";
+    } else if (tableNotFound) {
       document.title = "Error 404 | TabulaRAG";
     } else if (tableName) {
       document.title = `${tableName} | TabulaRAG`;
     }
-  }, [tableName, tableNotFound]);
+  }, [datasetId, numericDatasetId, tableName, tableNotFound, serverError, err, highlightErr]);
 
   useEffect(() => {
     if (!isMultiHighlightMode) {
@@ -478,18 +566,25 @@ export default function TableView() {
     if (explicitIndices !== null) {
       setHighlightErr(null);
       const truncated = explicitIndices.length > maxRows;
-      const indices = truncated ? explicitIndices.slice(0, maxRows) : explicitIndices;
-      const initialCursor = Math.min(
+      let indices = truncated ? explicitIndices.slice(0, maxRows) : explicitIndices;
+      const semanticCursor = Math.min(
         highlightCursorParam ?? 0,
         Math.max(0, indices.length - 1),
       );
+      const focusedRow = indices[semanticCursor];
+      if (parsedMultiSpec.sort_highlight_nav_by_row_index) {
+        indices = [...indices].sort((a, b) => a - b);
+      }
+      const navCursor = parsedMultiSpec.sort_highlight_nav_by_row_index
+        ? Math.max(0, indices.indexOf(focusedRow))
+        : semanticCursor;
       setMultiHighlightRows(indices);
       setMultiHighlightTotal(explicitIndices.length);
       setMultiHighlightTruncated(truncated);
-      setActiveHighlightCursor(initialCursor);
+      setActiveHighlightCursor(navCursor);
       setMultiHighlightLabel(parsedMultiSpec.label || "Query results");
       if (indices.length > 0) {
-        const targetRow = indices[initialCursor];
+        const targetRow = focusedRow;
         const initialHighlightPage = Math.floor(targetRow / ROWS_PER_PAGE) + 1;
         pageChangeSourceRef.current = "highlight";
         setCurrentPage(initialHighlightPage);
@@ -569,22 +664,36 @@ export default function TableView() {
 
   useEffect(() => {
     if (!isMultiHighlightMode || multiHighlightRows.length === 0) {
+      prevPageForHighlightSyncRef.current = null;
       return;
     }
     if (pageChangeSourceRef.current === "highlight") {
       pageChangeSourceRef.current = "table";
+      prevPageForHighlightSyncRef.current = currentPage;
       return;
     }
+
+    const prev = prevPageForHighlightSyncRef.current;
+    if (prev === null) {
+      prevPageForHighlightSyncRef.current = currentPage;
+      return;
+    }
+    if (prev === currentPage) {
+      return;
+    }
+
+    prevPageForHighlightSyncRef.current = currentPage;
+
     const normalizedPage = Math.max(1, currentPage);
     const pageStart = (normalizedPage - 1) * ROWS_PER_PAGE;
     const pageEndExclusive = pageStart + ROWS_PER_PAGE;
     const firstIndexOnPage = multiHighlightRows.findIndex(
       (rowIndex) => rowIndex >= pageStart && rowIndex < pageEndExclusive,
     );
-    if (firstIndexOnPage !== -1 && firstIndexOnPage !== activeHighlightCursor) {
+    if (firstIndexOnPage !== -1) {
       setActiveHighlightCursor(firstIndexOnPage);
     }
-  }, [activeHighlightCursor, currentPage, isMultiHighlightMode, multiHighlightRows]);
+  }, [currentPage, isMultiHighlightMode, multiHighlightRows]);
 
   const activeMultiHighlightedRow = useMemo(() => {
     if (!isMultiHighlightMode || multiHighlightRows.length === 0) {
@@ -614,6 +723,7 @@ export default function TableView() {
         if (!mounted) {
           return;
         }
+        setServerError(false);
         setData(slice);
         setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
 
@@ -626,7 +736,11 @@ export default function TableView() {
         if (!mounted) {
           return;
         }
-        setErr(getErrorMessage(error));
+        if (isServerDownOr5xxError(error)) {
+          setServerError(true);
+        } else {
+          setErr(getErrorMessage(error));
+        }
         setData(null);
       })
       .finally(() => {
@@ -996,37 +1110,39 @@ export default function TableView() {
 
   if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
     return (
-      <div className="page-stack">
-        <p className="error" role="alert">
-          Invalid table id.
-        </p>
-      </div>
+      <TableStatusPage
+        code="400"
+        title="Invalid Request"
+        description="The table ID in the URL is not valid."
+      />
+    );
+  }
+
+  if (serverError) {
+    return (
+      <TableStatusPage
+        code="503"
+        title="Service Unavailable"
+        description="The server could not be reached. Try again in a moment."
+      />
     );
   }
 
   if (tableNotFound) {
     return (
-      <div className="page-stack full-table-page">
-        <div className="table-view-back-row">
-          <Link className="table-view-context-btn" to="/" aria-label="Back to home" title="Back to home">
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M20 11H7.83l4.59-4.59a1 1 0 1 0-1.42-1.41l-6.3 6.29a1 1 0 0 0 0 1.42l6.3 6.29a1 1 0 1 0 1.42-1.41L7.83 13H20a1 1 0 1 0 0-2Z" fill="currentColor" />
-            </svg>
-            Back to Home
-          </Link>
-        </div>
-        <div className="card" style={{ marginBottom: 12, textAlign: "center" }} role="alert">
-          <p style={{ margin: "0 0 4px 0", fontSize: 32, fontWeight: 700, color: "var(--brand-text)", letterSpacing: "-0.02em" }}>
-            404
-          </p>
-          <p style={{ margin: "0 0 8px 0", fontSize: 20, fontWeight: 700, color: "var(--brand-text)" }}>
-            Not Found
-          </p>
-          <p style={{ margin: 0, fontSize: 14, color: "var(--text-muted)" }}>
-            The table may have been deleted or the ID might be invalid.
-          </p>
-        </div>
-      </div>
+      <TableStatusPage
+        code="404"
+        title="Not Found"
+        description="The table may have been deleted or the ID might be invalid."
+      />
+    );
+  }
+
+  const blockingMessage = err || highlightErr;
+  if (blockingMessage) {
+    const page = tableErrorPageFromMessage(blockingMessage);
+    return (
+      <TableStatusPage code={page.code} title={page.title} description={page.description} />
     );
   }
 
@@ -1123,11 +1239,6 @@ export default function TableView() {
         </div>
       </div>
 
-      {(err || highlightErr) && (
-        <p className="error" role="alert">
-          {err || highlightErr}
-        </p>
-      )}
       {data && (
         <div
           className={
@@ -1188,7 +1299,13 @@ export default function TableView() {
               }}
               highlight={
                 highlightedRows.length > 0
-                  ? { rows: highlightedRows, cols: data.columns }
+                  ? {
+                      rows: highlightedRows,
+                      cols: data.columns,
+                      ...(isMultiHighlightMode && multiHighlightRows.length > 1 && effectiveHighlightRow !== null
+                        ? { primaryRow: effectiveHighlightRow }
+                        : {}),
+                    }
                   : undefined
               }
               sortable

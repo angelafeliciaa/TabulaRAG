@@ -106,7 +106,7 @@ class SemanticRequest(BaseModel):
             "especially when many datasets exist."
         ),
     )
-    top_k: int = Field(default=10, ge=1, le=100)
+    top_k: int = Field(default=5, ge=1, le=100)
     columns: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -464,7 +464,7 @@ UNIFIED_QUERY_OPENAPI_EXAMPLES: Dict[str, Dict[str, Any]] = {
             "semantic": {
                 "question": "Who lives in London?",
                 "dataset_name": "people",
-                "top_k": 10,
+                "top_k": 5,
             },
         },
     },
