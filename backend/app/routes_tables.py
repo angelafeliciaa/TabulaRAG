@@ -1,4 +1,6 @@
+import base64
 import json
+import os
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -21,6 +23,12 @@ from app.normalization import (
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 
 router = APIRouter()
+
+PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
+SLICE_RESPONSE_URL_REQUIREMENT_TEXT = (
+    "MANDATORY: In every user-facing response, include the exact `url` value as the source link. "
+    "This is required any time table data is returned."
+)
 
 
 class RenameRequest(BaseModel):
@@ -63,6 +71,44 @@ def _slice_order_by_clause(sort_column: str, sort_direction: str) -> str:
     # PostgreSQL: only cast to double when value matches numeric pattern; else NULL so we sort by text (dates, text)
     numeric_expr = f"(CASE WHEN TRIM({col}) ~ '^[-+]?[0-9]*\\.?[0-9]+$' THEN ({col}::double precision) ELSE NULL END)"
     return f"{numeric_expr} {dir_upper} {nulls}, {col} {dir_upper}"
+
+
+def _build_dataset_table_url(dataset_id: int) -> str:
+    return f"{PUBLIC_UI_BASE_URL}/tables/{dataset_id}"
+
+
+def _build_slice_virtual_table_url(
+    *,
+    dataset_id: int,
+    limit: int,
+    offset: int,
+    sort_column: Optional[str],
+    sort_direction: str,
+) -> str:
+    payload = {
+        "mode": "filter",
+        "dataset_id": dataset_id,
+        "filters": [],
+        "columns": None,
+        "sort_by": sort_column,
+        "sort_order": sort_direction,
+        "sort_as": "auto",
+        "limit": max(1, int(limit)),
+        "offset": max(0, int(offset)),
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
+
+
+def _with_source_link(final_response: Optional[str], url: str, fallback_message: str) -> str:
+    base = (final_response or "").strip()
+    if not base:
+        base = fallback_message.strip()
+    if url in base:
+        return base
+    if base:
+        return f"{base}\nSource link: {url}"
+    return f"Source link: {url}"
 
 
 def _coerce_row_data_dict(raw: Any) -> Dict[str, Any]:
@@ -420,6 +466,7 @@ def get_table_slice(
 
         search_trimmed = search.strip() if search else None
         like_pattern = _slice_search_like_pattern(search_trimmed) if search_trimmed else None
+        normalized_sort_direction = "asc"
 
         if engine.dialect.name == "sqlite":
             search_filter = (
@@ -464,6 +511,7 @@ def get_table_slice(
             if not col_match:
                 raise HTTPException(status_code=400, detail=f"Unknown sort_column: {sort_column}")
             dir_norm = sort_direction.lower() in ("desc", "descending") and "desc" or "asc"
+            normalized_sort_direction = dir_norm
             order_sql = _slice_order_by_clause(sort_column, dir_norm)
             query = base_query.order_by(text(order_sql)).offset(offset).limit(limit)
             if like_pattern is not None:
@@ -487,6 +535,16 @@ def get_table_slice(
             .all()
         )
 
+        if search_trimmed:
+            table_url = _build_dataset_table_url(dataset_id)
+        else:
+            table_url = _build_slice_virtual_table_url(
+                dataset_id=dataset_id,
+                limit=limit,
+                offset=offset,
+                sort_column=sort_column,
+                sort_direction=normalized_sort_direction,
+            )
         return {
             "dataset_id": dataset_id,
             "offset": offset,
@@ -506,6 +564,16 @@ def get_table_slice(
                 {"original_name": c.original_name, "normalized_name": c.normalized_name}
                 for c in columns
             ],
+            "url": table_url,
+            "final_response": _with_source_link(
+                None,
+                table_url,
+                (
+                    f"Table slice returned {len(rows)} row(s) "
+                    f"from offset {offset}."
+                ),
+            ),
+            "response_instructions": SLICE_RESPONSE_URL_REQUIREMENT_TEXT,
         }
 
 

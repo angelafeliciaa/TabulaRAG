@@ -1,5 +1,7 @@
+import base64
 import io
 import json
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import text
 
@@ -154,3 +156,38 @@ def test_legacy_context_endpoints_are_removed(client):
 
     assert legacy_bulk.status_code in {404, 405}
     assert legacy_single.status_code in {404, 405}
+
+
+def test_table_slice_includes_source_link_contract(client):
+    dataset_id = _ingest_dataset(client)
+
+    response = client.get(f"/tables/{dataset_id}/slice?offset=0&limit=2")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["dataset_id"] == dataset_id
+    assert body["url"].startswith("http://localhost:5173/tables/virtual?q=")
+    parsed = urlparse(body["url"])
+    encoded = parse_qs(parsed.query).get("q", [None])[0]
+    assert encoded is not None
+    pad = "=" * (-len(encoded) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8")
+    )
+    assert payload["mode"] == "filter"
+    assert payload["dataset_id"] == dataset_id
+    assert payload["filters"] == []
+    assert payload["limit"] == 2
+    assert payload["offset"] == 0
+    assert isinstance(body.get("final_response"), str)
+    assert body["url"] in body["final_response"]
+    assert isinstance(body.get("response_instructions"), str)
+
+
+def test_table_slice_search_link_falls_back_to_table_url(client):
+    dataset_id = _ingest_dataset(client)
+
+    response = client.get(f"/tables/{dataset_id}/slice?offset=0&limit=2&search=London")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["url"] == f"http://localhost:5173/tables/{dataset_id}"
