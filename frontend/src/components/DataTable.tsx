@@ -53,6 +53,8 @@ type DataTableProps = {
   }) => void;
   /** Keys `${rowIndex}:${normalizedColumn}` — italic for unsaved cell drafts. */
   pendingCellEditKeys?: ReadonlySet<string>;
+  /** Map `${rowIndex}:${normalizedColumn}` -> draft value for unsaved cell edits. */
+  pendingCellEditValues?: ReadonlyMap<string, string>;
   /** Normalized column keys with unsaved header rename drafts — italic. */
   pendingHeaderColumns?: ReadonlySet<string>;
 };
@@ -162,6 +164,12 @@ function defaultFormatValue(value: unknown): string {
   return String(value);
 }
 
+function inputSizeForText(value: string): number {
+  const trimmed = value.trim();
+  // Keep inputs readable without exploding the layout on very long values.
+  return Math.max(1, Math.min(80, trimmed.length || value.length || 1));
+}
+
 function getSortableValue(value: unknown): { kind: "empty" | "number" | "date" | "text"; value: string | number } {
   if (value === null || value === undefined) {
     return { kind: "empty", value: "" };
@@ -251,6 +259,7 @@ export default function DataTable({
   editableHeaders = false,
   onHeaderDraftChange,
   pendingCellEditKeys,
+  pendingCellEditValues,
   pendingHeaderColumns,
 }: DataTableProps) {
   const labels = columnLabels ?? columns;
@@ -358,22 +367,49 @@ export default function DataTable({
                 if (editableHeaders) {
                   const headerPending = pendingHeaderColumns?.has(column) ?? false;
                   return (
-                    <th key={column} className="table-header-cell-preserve-ws">
-                      <input
-                        type="text"
-                        className={`table-cell-input table-header-input${headerPending ? " table-cell-pending-edit" : ""}`}
-                        disabled={editableBusy}
-                        defaultValue={label}
-                        aria-label={`Column name ${label}`}
-                        key={`${editableEpoch}-header-${column}`}
-                        onBlur={(event) => {
-                          onHeaderDraftChange?.({
-                            column,
-                            value: event.currentTarget.value,
-                            baseline: label,
-                          });
-                        }}
-                      />
+                    <th
+                      key={column}
+                      className="table-header-cell-preserve-ws"
+                      scope="col"
+                      aria-sort={
+                        sortColumn === column
+                          ? sortDirection === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <div className="table-header-edit-wrap">
+                        <input
+                          type="text"
+                          className={`table-cell-input table-header-input${headerPending ? " table-cell-pending-edit" : ""}`}
+                          disabled={editableBusy}
+                          defaultValue={label}
+                          size={inputSizeForText(label)}
+                          aria-label={`Column name ${label}`}
+                          key={`${editableEpoch}-header-${column}`}
+                          onBlur={(event) => {
+                            onHeaderDraftChange?.({
+                              column,
+                              value: event.currentTarget.value,
+                              baseline: label,
+                            });
+                          }}
+                        />
+                        {sortable && (
+                          <button
+                            type="button"
+                            className="table-sort-icon-button"
+                            onClick={() => handleSortClick(column)}
+                            title={`Sort by ${label}`}
+                            aria-label={`Sort by ${label}`}
+                          >
+                            <span className="table-sort-arrow" aria-hidden="true">
+                              {sortColumn === column ? (sortDirection === "asc" ? "▲" : "▼") : "▴"}
+                            </span>
+                          </button>
+                        )}
+                      </div>
                     </th>
                   );
                 }
@@ -448,6 +484,7 @@ export default function DataTable({
                     {absoluteRowIndex + 1}
                   </th>
                   {columns.map((column) => {
+                    const cellKey = `${absoluteRowIndex}:${column}`;
                     const isHighlightedCell =
                       isHighlightedRow
                       && (highlightedCols.size === 0 || highlightedCols.has(column));
@@ -455,11 +492,12 @@ export default function DataTable({
                     const displayStr = formatCellValue
                       ? formatCellValue(column, rawValue)
                       : defaultFormatValue(rawValue);
-                    const cellPending =
-                      pendingCellEditKeys?.has(`${absoluteRowIndex}:${column}`) ?? false;
+                    const cellPending = pendingCellEditKeys?.has(cellKey) ?? false;
+                    const cellDraftValue = pendingCellEditValues?.get(cellKey);
+                    const inputValue = cellDraftValue ?? displayStr;
                     return (
                       <td
-                        key={`${absoluteRowIndex}:${column}`}
+                        key={cellKey}
                         className={isHighlightedCell ? "hl" : ""}
                         onContextMenu={(event) =>
                           onCellContextMenu?.(event, {
@@ -474,9 +512,10 @@ export default function DataTable({
                             type="text"
                             className={`table-cell-input${cellPending ? " table-cell-pending-edit" : ""}`}
                             disabled={editableBusy}
-                            defaultValue={displayStr}
+                            defaultValue={inputValue}
+                            size={inputSizeForText(inputValue)}
                             aria-label={`${column} row ${absoluteRowIndex + 1}`}
-                            key={`${editableEpoch}-${absoluteRowIndex}-${column}`}
+                            key={`${editableEpoch}-${cellKey}-${inputValue}`}
                             onClick={(event) => event.stopPropagation()}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {

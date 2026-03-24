@@ -13,9 +13,9 @@ import {
 } from "../api";
 import DataTable from "../components/DataTable";
 import TableStatusPage from "../components/TableStatusPage";
+import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
-type ValueMode = "normalized" | "original";
 type DateMenuState = { x: number; y: number } | null;
 type FilterConditionPayload = {
   column: string;
@@ -67,35 +67,9 @@ const DATE_VIEW_OPTIONS: Array<{ value: DateViewMode; label: string }> = [
   { value: "mon-dd-yyyy", label: "Jan 12, 2002" },
 ];
 
-function resolveCellValue(
-  value: unknown,
-  mode: ValueMode,
-): unknown {
-  if (
-    value != null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && "normalized" in value
-    && "original" in value
-  ) {
-    const o = value as { original?: unknown; normalized?: unknown };
-    return mode === "original" ? o.original : o.normalized;
-  }
-  return value;
-}
-
-function flattenRowsByValueMode(
-  rows: Record<string, unknown>[],
-  valueMode: ValueMode,
-): Record<string, unknown>[] {
-  return rows.map((row) => {
-    const out: Record<string, unknown> = {};
-    for (const [col, val] of Object.entries(row)) {
-      out[col] = resolveCellValue(val, valueMode);
-    }
-    return out;
-  });
-}
+type TableViewProps = {
+  valueMode: ValueMode;
+};
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -394,7 +368,7 @@ function buildQueryContextTitle(returnPath: string): string | null {
   }
 }
 
-export default function TableView() {
+export default function TableView({ valueMode }: TableViewProps) {
   const { datasetId } = useParams();
   const location = useLocation();
   const numericDatasetId = Number(datasetId);
@@ -458,7 +432,6 @@ export default function TableView() {
   const [pageInput, setPageInput] = useState("1");
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [tableAtBottom, setTableAtBottom] = useState(false);
-  const [valueMode, setValueMode] = useState<ValueMode>("normalized");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [sliceEpoch, setSliceEpoch] = useState(0);
@@ -531,7 +504,7 @@ export default function TableView() {
   useEffect(() => {
     setPendingEdits(new Map());
     setPendingColumnEdits(new Map());
-  }, [numericDatasetId, sortColumn, sortDirection, valueMode, dateViewMode]);
+  }, [numericDatasetId, valueMode, dateViewMode]);
 
   useEffect(() => {
     if (!isSavingEdits) {
@@ -548,7 +521,7 @@ export default function TableView() {
       return;
     }
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
-      document.title = "Error 400 | TabulaRAG";
+      document.title = "Error 404 | TabulaRAG";
       return;
     }
     if (serverError) {
@@ -922,6 +895,13 @@ export default function TableView() {
     () => new Set(pendingEdits.keys()),
     [pendingEdits],
   );
+  const pendingCellEditValues = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const [key, edit] of pendingEdits.entries()) {
+      next.set(key, edit.value);
+    }
+    return next;
+  }, [pendingEdits]);
   const pendingHeaderColumnsSet = useMemo(
     () => new Set(pendingColumnEdits.keys()),
     [pendingColumnEdits],
@@ -1140,6 +1120,23 @@ export default function TableView() {
   }, [safeCurrentPage]);
 
   useEffect(() => {
+    const shouldWarnOnUnload =
+      isPlainDatasetView && (pendingEdits.size > 0 || pendingColumnEdits.size > 0);
+    if (!shouldWarnOnUnload) {
+      return;
+    }
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Required for Chrome/Edge to show the native confirmation prompt.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [isPlainDatasetView, pendingEdits.size, pendingColumnEdits.size]);
+
+  useEffect(() => {
     if (effectiveHighlightRow === null || !data) {
       return;
     }
@@ -1313,9 +1310,9 @@ export default function TableView() {
   if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
     return (
       <TableStatusPage
-        code="400"
-        title="Invalid Request"
-        description="The table ID in the URL is not valid."
+        code="404"
+        title="Not Found"
+        description="The table may have been deleted or the ID might be invalid."
       />
     );
   }
@@ -1369,21 +1366,6 @@ export default function TableView() {
       pendingEdits.size > 0
       || pendingColumnEdits.size > 0
     );
-
-  useEffect(() => {
-    if (!hasUnsavedChanges) {
-      return;
-    }
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // Required for Chrome/Edge to show the native confirmation prompt.
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    };
-  }, [hasUnsavedChanges]);
 
   return (
     <div
@@ -1469,17 +1451,6 @@ export default function TableView() {
                 </button>
               </div>
             )}
-            <label className="table-view-value-mode-toggle">
-              <span className="table-view-value-mode-label">Values:</span>
-              <select
-                value={valueMode}
-                onChange={(e) => setValueMode(e.target.value as ValueMode)}
-                aria-label="Show original or normalized values"
-              >
-                <option value="normalized">Normalized</option>
-                <option value="original">Original</option>
-              </select>
-            </label>
             <div className="table-view-search-wrap">
               <svg className="table-view-search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
@@ -1597,6 +1568,7 @@ export default function TableView() {
               editableHeaders={isPlainDatasetView}
               onHeaderDraftChange={handleHeaderDraftChange}
               pendingCellEditKeys={isPlainDatasetView ? pendingCellEditKeys : undefined}
+              pendingCellEditValues={isPlainDatasetView ? pendingCellEditValues : undefined}
               pendingHeaderColumns={isPlainDatasetView ? pendingHeaderColumnsSet : undefined}
             />
             {showScrollHint && (

@@ -25,7 +25,7 @@ type TableStatusPageProps = {
 };
 
 export default function TableStatusPage(props: TableStatusPageProps) {
-  const showBack = props.showBackLink !== false;
+  const showBack = props.showBackLink !== false && props.code !== "404";
   return (
     <div className="page-stack full-table-page table-status-page-root">
       {showBack ? (

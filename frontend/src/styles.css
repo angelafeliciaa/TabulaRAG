@@ -1108,6 +1108,49 @@ h3 {
   opacity: 1;
 }
 
+.global-value-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.global-value-mode-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.global-value-mode-toggle select {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%236b7280' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 2px center;
+  background-size: 10px 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  min-height: 24px;
+  padding-right: 16px;
+}
+
+.global-value-mode-toggle select option {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.global-value-mode-toggle select:focus {
+  outline: none;
+}
+
 .card {
   background: var(--surface-blur-bg-strong);
   border: 1px solid var(--surface-blur-border);
@@ -1772,6 +1815,7 @@ ul {
   border-color: var(--surface-blur-border);
 }
 
+
 .rename-input {
   width: 100%;
   border: 1px solid var(--border-soft);
@@ -1863,6 +1907,7 @@ ul {
 :root[data-theme="dark"] .list-item.selected {
   background: var(--surface-blur-bg-strong);
 }
+
 
 .index-job {
   width: 178px;
@@ -2788,6 +2833,15 @@ a.sort-toggle-button.preview-open-link {
   min-height: 0;
 }
 
+/*
+ * Full table preview: allow wide datasets to expand horizontally.
+ * This prevents many-column tables from compressing cells so values get cut off.
+ */
+.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area .table-scroll table {
+  width: max-content;
+  min-width: 100%;
+}
+
 /* Error / empty states (404, 500, offline): large centred card */
 .table-status-page-root {
   flex: 1 1 auto;
@@ -3029,9 +3083,16 @@ tbody th[scope="row"] {
   color: var(--text-muted);
 }
 
+.table-header-edit-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .table-cell-input {
-  width: 100%;
-  min-width: 8ch;
+  width: auto;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -3055,6 +3116,24 @@ tbody th[scope="row"] {
 
 .table-cell-input.table-cell-pending-edit {
   font-style: italic;
+}
+
+.table-sort-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.table-sort-icon-button:hover {
+  background: var(--overlay);
 }
 
 tr:hover td,

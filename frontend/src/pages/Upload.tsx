@@ -22,12 +22,12 @@ import {
   renameTable,
   uploadTable,
   type TableIndexStatus,
-  type TableRow,
   type TableSlice,
   type TableSummary,
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
@@ -100,29 +100,9 @@ const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
   { value: "alphabet", label: "Alphabetical" },
 ];
 
-/** Resolve cell value to original when it is { original, normalized }; otherwise return as-is. */
-function resolveCellOriginal(value: unknown): unknown {
-  if (
-    value != null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && "original" in value
-    && "normalized" in value
-  ) {
-    return (value as { original?: unknown }).original;
-  }
-  return value;
-}
-
-function flattenRowsToOriginal(rows: TableRow[]): TableRow[] {
-  return rows.map((row) => {
-    const out: TableRow = {};
-    for (const [col, val] of Object.entries(row)) {
-      out[col] = resolveCellOriginal(val);
-    }
-    return out;
-  });
-}
+type UploadProps = {
+  valueMode: ValueMode;
+};
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -368,7 +348,7 @@ function smoothIndexStatus(
   };
 }
 
-export default function Upload() {
+export default function Upload({ valueMode }: UploadProps) {
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [showUploadQueue, setShowUploadQueue] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
@@ -973,9 +953,9 @@ export default function Upload() {
     }
   }, [activeTableId, tables]);
 
-  const previewRowsOriginal = useMemo(
-    () => (preview?.rows ? flattenRowsToOriginal(preview.rows) : []),
-    [preview?.rows],
+  const previewRows = useMemo(
+    () => (preview?.rows ? flattenRowsByValueMode(preview.rows, valueMode) : []),
+    [preview?.rows, valueMode],
   );
   const normalizedPreviewSearch = previewSearchQuery.trim().toLowerCase();
   const hasPreviewSearch = normalizedPreviewSearch.length > 0;
@@ -2028,9 +2008,6 @@ export default function Upload() {
                           </span>
                         </div>
                         <label className="upload-queue-description">
-                          <span className="small upload-queue-description-label">
-                            Description (optional)
-                          </span>
                           <input
                             ref={
                               index === 0 && canEditQueuedName
@@ -2048,13 +2025,10 @@ export default function Upload() {
                                 event.target.value,
                               );
                             }}
-                            placeholder="Add a short summary to help retrieval"
+                            placeholder="Add a short summary for better retrieval (optional)"
                             maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
                             disabled={busy || !canEditQueuedName}
                           />
-                          <span className="upload-queue-description-hint small">
-                            Helps retrieval by giving the AI more context.
-                          </span>
                         </label>
                       </div>
                       <div className="upload-queue-right">
@@ -2274,7 +2248,6 @@ export default function Upload() {
                       ? "Index failed"
                       : "Indexed";
               const isIndexing = indexState === "indexing";
-              const indexStatusText = indexStatus?.message || indexLabel;
 
               return (
                 <li key={table.dataset_id}>
@@ -2388,10 +2361,10 @@ export default function Upload() {
 
                     <div
                       className={`index-job ${indexState}`}
-                      title={indexStatusText}
+                      title={indexStatus?.message || indexLabel}
                       role={isIndexing ? "progressbar" : "status"}
                       aria-label={
-                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexStatusText}`
+                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexLabel}`
                       }
                       aria-valuemin={isIndexing ? 0 : undefined}
                       aria-valuemax={isIndexing ? 100 : undefined}
@@ -2535,7 +2508,7 @@ export default function Upload() {
           <div className="table-area" ref={previewAreaRef}>
             <DataTable
               columns={preview.columns}
-              rows={previewRowsOriginal}
+              rows={previewRows}
               sortable
               sortMode="server"
               serverSortColumn={previewSortColumn}
@@ -2548,7 +2521,7 @@ export default function Upload() {
                   });
                 }
               }}
-              caption={`Preview of ${activeTableName || "the selected table"}. Showing original values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
+              caption={`Preview of ${activeTableName || "the selected table"}. Showing ${valueMode} values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
             />
           </div>
         )}
