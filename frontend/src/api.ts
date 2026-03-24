@@ -215,7 +215,6 @@ export async function uploadTable(
 ): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
-  form.append("has_header", "true");
 
   const trimmed = name.trim();
   if (trimmed) {
@@ -442,6 +441,87 @@ export async function deleteTable(
   return (await res.json()) as { deleted: number };
 }
 
+export async function patchTableCell(
+  datasetId: number,
+  rowIndex: number,
+  column: string,
+  value: string,
+): Promise<{ dataset_id: number; row_index: number; column: string; data: TableRow }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/rows/${rowIndex}`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ column, value }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    row_index: number;
+    column: string;
+    data: TableRow;
+  };
+}
+
+export async function patchTableColumnName(
+  datasetId: number,
+  column: string,
+  name: string,
+): Promise<{ dataset_id: number; column: string; original_name: string | null }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/columns`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ column, name }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    column: string;
+    original_name: string | null;
+  };
+}
+
+export async function patchTableDescription(
+  datasetId: number,
+  description: string | null,
+): Promise<{ dataset_id: number; description: string | null }> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/description`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as { dataset_id: number; description: string | null };
+}
+
+export async function getTableColumns(
+  datasetId: number,
+): Promise<{ dataset_id: number; columns: Array<{ column_index: number; original_name: string | null; normalized_name: string }> }> {
+  const res = await authFetch(`${API_BASE}/tables/${datasetId}/columns`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return (await res.json()) as {
+    dataset_id: number;
+    columns: Array<{ column_index: number; original_name: string | null; normalized_name: string }>;
+  };
+}
+
 export async function renameTable(
   datasetId: number,
   name: string,
@@ -509,6 +589,27 @@ export async function filterRows(params: unknown): Promise<FilterResponse> {
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(params),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Same row shape as filter virtual table; used for semantic search result replay. */
+export async function fetchRowsByIndices(
+  datasetId: number,
+  rowIndices: number[],
+  columns?: string[] | null,
+): Promise<FilterResponse> {
+  const res = await authFetch(
+    `${API_BASE}/tables/${datasetId}/rows_by_indices`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        row_indices: rowIndices,
+        columns: columns ?? null,
+      }),
+    },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

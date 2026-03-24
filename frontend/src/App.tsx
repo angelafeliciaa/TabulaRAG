@@ -9,6 +9,7 @@ import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
 import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
+import { type ValueMode } from "./valueMode";
 
 export default function App() {
   const location = useLocation();
@@ -36,6 +37,16 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem("theme", theme);
   }, [theme]);
+  const [valueMode, setValueMode] = useState<ValueMode>(() => {
+    const storedValueMode = window.localStorage.getItem("valueMode");
+    if (storedValueMode === "normalized" || storedValueMode === "original") {
+      return storedValueMode;
+    }
+    return "normalized";
+  });
+  useEffect(() => {
+    window.localStorage.setItem("valueMode", valueMode);
+  }, [valueMode]);
 
   useEffect(() => {
     let pointerActive = false;
@@ -101,6 +112,17 @@ export default function App() {
           </button>
         </div>
 
+        <label className="global-value-mode-toggle">
+          <span className="global-value-mode-label">Values:</span>
+          <select
+            value={valueMode}
+            onChange={(event) => setValueMode(event.target.value as ValueMode)}
+            aria-label="Show original or normalized values"
+          >
+            <option value="normalized">Normalized</option>
+            <option value="original">Original</option>
+          </select>
+        </label>
         <button
           className="theme-toggle"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -121,9 +143,9 @@ export default function App() {
 
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
-          <Route path="/" element={<Upload />} />
-          <Route path="/tables/virtual" element={<AggregateTableView />} />
-          <Route path="/tables/:datasetId" element={<TableView />} />
+          <Route path="/" element={<Upload valueMode={valueMode} />} />
+          <Route path="/tables/virtual" element={<AggregateTableView valueMode={valueMode} />} />
+          <Route path="/tables/:datasetId" element={<TableView valueMode={valueMode} />} />
           <Route path="/highlight/:highlightId" element={<HighlightView />} />
           <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
         </Routes>

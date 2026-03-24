@@ -18,15 +18,17 @@ import {
   getSlice,
   listIndexStatus,
   listTables,
+  patchTableDescription,
   renameTable,
   uploadTable,
   type TableIndexStatus,
-  type TableRow,
   type TableSlice,
   type TableSummary,
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
+import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
 import openIcon from "../images/open.png";
@@ -39,7 +41,8 @@ const SUCCESS_TOAST_MS = 2800;
 const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
 const SAFE_TABLE_NAME_MAX_LENGTH = 64;
-const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 1024;
+const SAFE_TABLE_DESCRIPTION_MAX_LENGTH = 100;
+const TABLES_RENDER_BATCH_SIZE = 120;
 const PREVIEW_ROWS_PER_PAGE = 100;
 
 type ToastState = { id: number; kind: "success"; message: string };
@@ -98,29 +101,9 @@ const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
   { value: "alphabet", label: "Alphabetical" },
 ];
 
-/** Resolve cell value to original when it is { original, normalized }; otherwise return as-is. */
-function resolveCellOriginal(value: unknown): unknown {
-  if (
-    value != null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && "original" in value
-    && "normalized" in value
-  ) {
-    return (value as { original?: unknown }).original;
-  }
-  return value;
-}
-
-function flattenRowsToOriginal(rows: TableRow[]): TableRow[] {
-  return rows.map((row) => {
-    const out: TableRow = {};
-    for (const [col, val] of Object.entries(row)) {
-      out[col] = resolveCellOriginal(val);
-    }
-    return out;
-  });
-}
+type UploadProps = {
+  valueMode: ValueMode;
+};
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -366,7 +349,7 @@ function smoothIndexStatus(
   };
 }
 
-export default function Upload() {
+export default function Upload({ valueMode }: UploadProps) {
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [showUploadQueue, setShowUploadQueue] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
@@ -389,9 +372,11 @@ export default function Upload() {
   const [uploadedAtBottom, setUploadedAtBottom] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [editingDescription, setEditingDescription] = useState("");
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
+  const [visibleTableCount, setVisibleTableCount] = useState(TABLES_RENDER_BATCH_SIZE);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [uploadPickerOpen, setUploadPickerOpen] = useState<UploadPickerTarget | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
@@ -490,7 +475,7 @@ export default function Upload() {
       const delimiter = nextFile.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
       const headerLine = lines.find((line) => line.trim().length > 0) || "";
       const estimatedCols = headerLine ? countDelimitedColumns(headerLine, delimiter) : null;
-      // In this UI we always upload with has_header=true.
+      // Row estimate assumes a header row when subtracting 1 (actual header detection is server-side).
       return {
         rows: Math.max(0, estimatedTotalLines - 1),
         cols: estimatedCols,
@@ -940,7 +925,7 @@ export default function Upload() {
     }
   }, [activeTableId, tables]);
 
-  // Restore selected table from localStorage when returning to the page (e.g. after View Full Table → Back to Home).
+  // Restore selected table from localStorage when returning to the page (e.g. after closing a View Full Table tab).
   useEffect(() => {
     if (tables.length === 0) return;
     try {
@@ -970,9 +955,9 @@ export default function Upload() {
     }
   }, [activeTableId, tables]);
 
-  const previewRowsOriginal = useMemo(
-    () => (preview?.rows ? flattenRowsToOriginal(preview.rows) : []),
-    [preview?.rows],
+  const previewRows = useMemo(
+    () => (preview?.rows ? flattenRowsByValueMode(preview.rows, valueMode) : []),
+    [preview?.rows, valueMode],
   );
   const normalizedPreviewSearch = previewSearchQuery.trim().toLowerCase();
   const hasPreviewSearch = normalizedPreviewSearch.length > 0;
@@ -1224,8 +1209,14 @@ export default function Upload() {
 
     try {
       await renameTable(datasetId, nextName);
+      const nextDescription = sanitizeTableDescriptionInput(editingDescription).trim();
+      await patchTableDescription(
+        datasetId,
+        nextDescription.length > 0 ? nextDescription : null,
+      );
       setEditingId(null);
       setEditingName("");
+      setEditingDescription("");
       setRenameHintId(null);
       await refresh();
     } catch (error: unknown) {
@@ -1486,8 +1477,19 @@ export default function Upload() {
     if (typeof window !== "undefined" && window.navigator && window.navigator.onLine === false) {
       return true;
     }
-    return Boolean(err && isOfflineConnectionError(err));
+    return Boolean(err && isOfflineConnectionError(getErrorMessage(err)));
   }, [tables.length, busy, err]);
+
+  useEffect(() => {
+    if (!showOfflineView) {
+      return;
+    }
+    document.title = "Error 503 | TabulaRAG";
+    return () => {
+      document.title = "Home | TabulaRAG";
+    };
+  }, [showOfflineView]);
+
   const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
   const sortedTables = useMemo(() => {
     const sortByMode = (a: TableSummary, b: TableSummary): number => {
@@ -1536,6 +1538,11 @@ export default function Upload() {
       table.name.toLowerCase().includes(normalizedTableSearchQuery),
     );
   }, [sortedTables, normalizedTableSearchQuery]);
+  const visibleTables = useMemo(
+    () => filteredTables.slice(0, visibleTableCount),
+    [filteredTables, visibleTableCount],
+  );
+  const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
   const tableSortLabel =
     TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)?.label
     || "Most recent";
@@ -1554,6 +1561,23 @@ export default function Upload() {
     setSortMenuOpen(false);
     sortToggleButtonRef.current?.focus();
   }
+
+  useEffect(() => {
+    setVisibleTableCount(TABLES_RENDER_BATCH_SIZE);
+  }, [normalizedTableSearchQuery, tableSortMode]);
+
+  useEffect(() => {
+    if (activeTableId === null) {
+      return;
+    }
+    const activeIndex = filteredTables.findIndex((table) => table.dataset_id === activeTableId);
+    if (activeIndex === -1 || activeIndex < visibleTableCount) {
+      return;
+    }
+    setVisibleTableCount(
+      Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) * TABLES_RENDER_BATCH_SIZE,
+    );
+  }, [activeTableId, filteredTables, visibleTableCount]);
 
   function onSortToggleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (
@@ -1639,8 +1663,12 @@ export default function Upload() {
             Fast-ingesting tabular data RAG with cell-level citations
           </div>
         </div>
-        <div className="panel">
-          <p className="error">Connection Error: Server is currently offline.</p>
+        <div className="table-status-layout table-status-layout--compact">
+          <TableStatusCard
+            code="503"
+            title="Service Unavailable"
+            description="The server could not be reached. Try again in a moment."
+          />
         </div>
       </div>
     );
@@ -2004,9 +2032,6 @@ export default function Upload() {
                           </span>
                         </div>
                         <label className="upload-queue-description">
-                          <span className="small upload-queue-description-label">
-                            Description (optional)
-                          </span>
                           <input
                             ref={
                               index === 0 && canEditQueuedName
@@ -2024,13 +2049,10 @@ export default function Upload() {
                                 event.target.value,
                               );
                             }}
-                            placeholder="Add a short summary to help retrieval"
+                            placeholder="Add a short summary for better retrieval (optional)"
                             maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
                             disabled={busy || !canEditQueuedName}
                           />
-                          <span className="upload-queue-description-hint small">
-                            Helps retrieval by giving the AI more context.
-                          </span>
                         </label>
                       </div>
                       <div className="upload-queue-right">
@@ -2147,7 +2169,7 @@ export default function Upload() {
 
       <div className="panel uploaded-tables-panel" aria-hidden={isUploadDialogOpen}>
         <div className="row tables-header-row">
-          <h3 style={{ marginBottom: 0 }}>Uploaded tables</h3>
+          <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
           <div className="tables-header-controls">
             <label className="tables-search-input-wrap" aria-label="Search table name">
               <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
@@ -2224,7 +2246,7 @@ export default function Upload() {
         ) : (
           <div className="tables-scroll" ref={tablesScrollRef}>
             <ul>
-              {filteredTables.map((table) => {
+              {visibleTables.map((table) => {
               const indexStatus = indexStatusByTable[table.dataset_id];
               const indexState = indexStatus?.state || "ready";
               const isPinned = pinnedTableIdSet.has(table.dataset_id);
@@ -2250,7 +2272,6 @@ export default function Upload() {
                       ? "Index failed"
                       : "Indexed";
               const isIndexing = indexState === "indexing";
-              const indexStatusText = indexStatus?.message || indexLabel;
 
               return (
                 <li key={table.dataset_id}>
@@ -2273,74 +2294,105 @@ export default function Upload() {
                         }`}
                     >
                       {editingId === table.dataset_id ? (
-                        <input
-                          ref={renameInputRef}
-                          value={editingName}
-                          onChange={(event) => {
-                            setEditingName(sanitizeTableNameInput(event.target.value));
-                            if (renameHintId === table.dataset_id) {
-                              setRenameHintId(null);
+                        <div className="uploaded-table-main">
+                          <input
+                            ref={renameInputRef}
+                            value={editingName}
+                            onChange={(event) => {
+                              setEditingName(sanitizeTableNameInput(event.target.value));
+                              if (renameHintId === table.dataset_id) {
+                                setRenameHintId(null);
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void onRename(table.dataset_id);
+                              }
+                            }}
+                            className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
+                              }`}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                            placeholder={
+                              renameHintId === table.dataset_id
+                                ? "Name cannot be empty."
+                                : "Enter table name"
                             }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              void onRename(table.dataset_id);
-                            }
-                          }}
-                          className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
-                            }`}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                          placeholder={
-                            renameHintId === table.dataset_id
-                              ? "Name cannot be empty."
-                              : "Enter table name"
-                          }
-                          disabled={busy}
-                          aria-label={`Rename ${table.name}`}
-                          aria-invalid={renameHintId === table.dataset_id}
-                        />
+                            disabled={busy}
+                            aria-label={`Rename ${table.name}`}
+                            aria-invalid={renameHintId === table.dataset_id}
+                          />
+                          <input
+                            value={editingDescription}
+                            onChange={(event) => {
+                              setEditingDescription(
+                                sanitizeTableDescriptionInput(event.target.value),
+                              );
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void onRename(table.dataset_id);
+                              }
+                            }}
+                            className="rename-input uploaded-table-description-input"
+                            maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                            placeholder="Add table description"
+                            disabled={busy}
+                            aria-label={`Edit description for ${table.name}`}
+                          />
+                        </div>
                       ) : (
-                        <button
-                          type="button"
-                          className="list-button"
-                          onClick={() => {
-                            if (activeTableId === table.dataset_id) {
-                              // Toggle off when clicking the currently selected table.
-                              setActiveTableId(null);
-                              setPreview(null);
-                              setPreviewErr(null);
-                              setPreviewBusy(false);
-                              setPreviewPage(1);
-                              setPreviewRowCount(0);
-                              setPreviewSearchQuery("");
-                              setPreviewSortColumn(null);
-                              setPreviewSortDirection("asc");
-                              return;
-                            }
-                            void loadPreview(table.dataset_id, 1, {
-                              sortColumn: null,
-                              sortDirection: "asc",
-                            });
-                          }}
-                          aria-pressed={activeTableId === table.dataset_id}
-                        >
-                          <span className="uploaded-table-name">{table.name}</span>{" "}
-                          <span className="small uploaded-table-meta">
-                            ({table.row_count} rows, {table.column_count} cols)
-                          </span>
-                        </button>
+                        <div className="uploaded-table-main">
+                          <button
+                            type="button"
+                            className="list-button"
+                            onClick={() => {
+                              if (activeTableId === table.dataset_id) {
+                                // Toggle off when clicking the currently selected table.
+                                setActiveTableId(null);
+                                setPreview(null);
+                                setPreviewErr(null);
+                                setPreviewBusy(false);
+                                setPreviewPage(1);
+                                setPreviewRowCount(0);
+                                setPreviewSearchQuery("");
+                                setPreviewSortColumn(null);
+                                setPreviewSortDirection("asc");
+                                return;
+                              }
+                              void loadPreview(table.dataset_id, 1, {
+                                sortColumn: null,
+                                sortDirection: "asc",
+                              });
+                            }}
+                            aria-pressed={activeTableId === table.dataset_id}
+                          >
+                            <span className="uploaded-table-head">
+                              <span className="uploaded-table-title-line">
+                                <span className="uploaded-table-name">{table.name}</span>
+                                {table.description?.trim() ? (
+                                  <span className="small uploaded-table-description">
+                                    {table.description.trim()}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="small uploaded-table-meta">
+                                ({table.row_count} rows, {table.column_count} cols)
+                              </span>
+                            </span>
+                          </button>
+                        </div>
                       )}
                     </div>
 
                     <div
                       className={`index-job ${indexState}`}
-                      title={indexStatusText}
+                      title={indexStatus?.message || indexLabel}
                       role={isIndexing ? "progressbar" : "status"}
                       aria-label={
-                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexStatusText}`
+                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexLabel}`
                       }
                       aria-valuemin={isIndexing ? 0 : undefined}
                       aria-valuemax={isIndexing ? 100 : undefined}
@@ -2369,11 +2421,14 @@ export default function Upload() {
                         } else {
                           setEditingId(table.dataset_id);
                           setEditingName(table.name);
+                          setEditingDescription(
+                            sanitizeTableDescriptionInput(table.description || ""),
+                          );
                           setRenameHintId(null);
                         }
                       }}
-                      aria-label={editingId === table.dataset_id ? "Save name" : `Rename ${table.name}`}
-                      title={editingId === table.dataset_id ? "Save" : "Rename"}
+                      aria-label={editingId === table.dataset_id ? "Save table updates" : `Edit ${table.name}`}
+                      title={editingId === table.dataset_id ? "Save" : "Edit"}
                       disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
                     >
                       {editingId === table.dataset_id ? (
@@ -2406,6 +2461,19 @@ export default function Upload() {
               );
             })}
             </ul>
+            {hasMoreFilteredTables && (
+              <div className="tables-load-more-wrap">
+                <button
+                  type="button"
+                  className="tables-load-more-btn"
+                  onClick={() =>
+                    setVisibleTableCount((current) => current + TABLES_RENDER_BATCH_SIZE)
+                  }
+                >
+                  Load more tables
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -2427,7 +2495,7 @@ export default function Upload() {
         <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
         <div className="preview-header">
           <div className="preview-header-left">
-            <h3 style={{ marginBottom: 0 }}>Table preview</h3>
+            <h3 style={{ marginBottom: 0 }}>Table Preview</h3>
             {activeTableName && (
               <div className="preview-table-name" aria-live="polite">
                 <span className="preview-table-name-value">{activeTableName}</span>
@@ -2436,7 +2504,7 @@ export default function Upload() {
           </div>
           <div className="preview-header-right">
             {preview && (
-              <label className="tables-search-input-wrap preview-search-wrap" aria-label="Search in preview">
+              <label className="tables-search-input-wrap" aria-label="Search in preview">
                 <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
                   <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
                 </svg>
@@ -2454,8 +2522,10 @@ export default function Upload() {
               <Link
                 className="sort-toggle-button preview-open-link"
                 to={`/tables/${activeTableId}`}
-                aria-label="View Full Table"
-                title="View Full Table"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="View Full Table (opens in new tab)"
+                title="View Full Table (new tab)"
               >
                 <img src={openIcon} alt="" className="preview-open-link-icon" aria-hidden="true" />
                 <span className="sort-toggle-text">View Full Table</span>
@@ -2479,7 +2549,7 @@ export default function Upload() {
           <div className="table-area" ref={previewAreaRef}>
             <DataTable
               columns={preview.columns}
-              rows={previewRowsOriginal}
+              rows={previewRows}
               sortable
               sortMode="server"
               serverSortColumn={previewSortColumn}
@@ -2492,7 +2562,7 @@ export default function Upload() {
                   });
                 }
               }}
-              caption={`Preview of ${activeTableName || "the selected table"}. Showing original values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
+              caption={`Preview of ${activeTableName || "the selected table"}. Showing ${valueMode} values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
             />
           </div>
         )}

@@ -12,11 +12,11 @@ from app.query_input_schemas import (
     FilterCondition,
     FilterRequest,
     FilterRowIndicesRequest,
-    QueryRequest,
+    SemanticRequest,
     UNIFIED_QUERY_OPENAPI_EXAMPLES,
     UnifiedQueryRequest,
 )
-from app.retrieval import get_highlight, hybrid_search, resolve_dataset_context, smart_query
+from app.retrieval import get_highlight, resolve_dataset_context, smart_query
 from app.routes_tables import list_tables, get_cols_for_dataset
 import app.db as app_db
 from app.db import SessionLocal
@@ -215,12 +215,40 @@ def _build_casefold_column_lookup(columns: List[str]) -> Dict[str, List[str]]:
     return lookup
 
 
+def _build_original_name_casefold_lookup(
+    columns: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Map casefold(original CSV header) -> normalized_name when unambiguous."""
+    groups: Dict[str, List[str]] = {}
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        norm = col.get("normalized_name")
+        orig = col.get("original_name")
+        if not norm or orig is None:
+            continue
+        norm_s = str(norm).strip()
+        if not norm_s:
+            continue
+        key = str(orig).strip().casefold()
+        if not key:
+            continue
+        groups.setdefault(key, []).append(norm_s)
+    resolved: Dict[str, str] = {}
+    for key, norms in groups.items():
+        uniq = list(dict.fromkeys(norms))
+        if len(uniq) == 1:
+            resolved[key] = uniq[0]
+    return resolved
+
+
 def _resolve_column_case_insensitive(
     column_name: Optional[str],
     *,
     valid_columns: set[str],
     casefold_lookup: Dict[str, List[str]],
     field_label: str,
+    original_casefold_to_normalized: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     if column_name is None:
         return None
@@ -241,6 +269,10 @@ def _resolve_column_case_insensitive(
                 f"Matches: {', '.join(matches)}"
             ),
         )
+    if original_casefold_to_normalized is not None:
+        mapped = original_casefold_to_normalized.get(raw.casefold())
+        if mapped is not None and mapped in valid_columns:
+            return mapped
     return raw
 
 
@@ -249,6 +281,7 @@ def _resolve_filter_columns_case_insensitive(
     *,
     valid_columns: set[str],
     casefold_lookup: Dict[str, List[str]],
+    original_casefold_to_normalized: Optional[Dict[str, str]] = None,
 ) -> None:
     if not filters:
         return
@@ -258,6 +291,7 @@ def _resolve_filter_columns_case_insensitive(
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="filter column",
+            original_casefold_to_normalized=original_casefold_to_normalized,
         ) or item.column
 
 
@@ -410,7 +444,7 @@ RESPONSE_URL_REQUIREMENT_TEXT = (
 )
 
 
-class QueryResponse(BaseModel):
+class SemanticResponse(BaseModel):
     dataset_id: int
     question: str
     results: List[ResultItem]
@@ -547,7 +581,7 @@ class FilterRowIndicesResponse(BaseModel):
 
 
 UnifiedQueryResponse = Union[
-    QueryResponse,
+    SemanticResponse,
     AggregateResponse,
     FilterResponse,
     FilterRowIndicesResponse,
@@ -616,6 +650,29 @@ def build_filter_virtual_table_url(body: FilterRequest) -> str:
     return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
 
 
+def build_semantic_virtual_table_url(
+    *,
+    dataset_id: int,
+    row_indices: List[int],
+    row_scores: Optional[List[float]] = None,
+    top_k: int,
+    question: Optional[str] = None,
+    columns: Optional[List[str]] = None,
+) -> str:
+    """Virtual table URL showing the top semantic hits (same page shell as filter/aggregate)."""
+    payload: Dict[str, Any] = {
+        "mode": "semantic",
+        "dataset_id": int(dataset_id),
+        "row_indices": [int(i) for i in row_indices],
+        "row_scores": [float(s) for s in row_scores] if row_scores is not None else None,
+        "top_k": max(1, int(top_k)),
+        "question": question,
+        "columns": columns,
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return f"{PUBLIC_UI_BASE_URL}/tables/virtual?q={encoded}#q={encoded}"
+
+
 def _with_mandatory_source_link(
     final_response: Optional[str], url: str, fallback_message: str
 ) -> str:
@@ -627,24 +684,6 @@ def _with_mandatory_source_link(
     if base:
         return f"{base}\nSource link: {url}"
     return f"Source link: {url}"
-
-def _enforce_list_tables_first() -> bool:
-    return os.getenv("QUERY_ENFORCE_LIST_TABLES_FIRST", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _require_dataset_name_when_multiple() -> bool:
-    return os.getenv("QUERY_REQUIRE_DATASET_NAME_WHEN_MULTIPLE", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
 
 def _list_tables_compact(include_ids: bool = True) -> List[Dict[str, Any]]:
     tables = list_tables(include_pending=False, limit=None)
@@ -678,53 +717,36 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
 
 # ── Internal query handlers ────────────────────────────────────────
 
-def _run_semantic_query(body: QueryRequest) -> QueryResponse:
-    if _enforce_list_tables_first():
-        resolved_dataset_id = _resolve_structured_dataset_id(
+def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
+    try:
+        resolved_dataset_id, resolved_dataset, resolution_note = resolve_dataset_context(
             dataset_id=body.dataset_id,
             dataset_name=body.dataset_name,
-            mode_label="Semantic",
+            question=body.question,
         )
-        body.dataset_id = resolved_dataset_id
-
-        tables = _list_tables_compact(include_ids=True)
-        by_id = {int(table["dataset_id"]): table for table in tables}
-        if resolved_dataset_id not in by_id:
-            raise _strict_lookup_error(
-                status_code=404,
-                message=f"Dataset was not found.",
-            )
-        resolved_dataset = dict(by_id[resolved_dataset_id])
-        resolution_note = None
-    else:
-        try:
-            resolved_dataset_id, resolved_dataset, resolution_note = resolve_dataset_context(
-                dataset_id=body.dataset_id,
-                dataset_name=body.dataset_name,
-                question=body.question,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
     payload = smart_query(
         dataset_id=resolved_dataset_id,
         question=body.question,
-        filters=body.filters,
         top_k=body.top_k,
     )
 
     projected_columns: Optional[List[str]] = None
     if body.columns is not None:
         cols_payload = get_cols_for_dataset(resolved_dataset_id)
+        column_dicts = cols_payload.get("columns") or []
         ordered_columns = [
             col["normalized_name"]
-            for col in cols_payload["columns"]
-            if col.get("normalized_name")
+            for col in column_dicts
+            if isinstance(col, dict) and col.get("normalized_name")
         ]
         valid_columns = set(ordered_columns)
         if not valid_columns:
             raise HTTPException(status_code=400, detail="Dataset has no columns.")
         casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+        original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
         deduped_columns = list(dict.fromkeys(body.columns))
         deduped_columns = [
@@ -733,6 +755,7 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="projection column",
+                original_casefold_to_normalized=original_lookup,
             )
             or col
             for col in deduped_columns
@@ -764,16 +787,30 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
     if "source_url" not in resolved_dataset:
         resolved_dataset["source_url"] = dataset_url
 
-    canonical_url = dataset_url
+    row_indices_ordered: List[int] = []
+    row_scores_ordered: List[float] = []
     results = payload.get("results")
-    if isinstance(results, list) and results:
-        first = results[0]
-        if isinstance(first, dict):
-            canonical_url = (
-                first.get("highlight_url")
-                or first.get("source_url")
-                or dataset_url
-            )
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and item.get("row_index") is not None:
+                try:
+                    row_indices_ordered.append(int(item["row_index"]))
+                    score_raw = item.get("score")
+                    row_scores_ordered.append(float(score_raw) if score_raw is not None else 0.0)
+                except (TypeError, ValueError):
+                    continue
+
+    if row_indices_ordered:
+        canonical_url = build_semantic_virtual_table_url(
+            dataset_id=resolved_dataset_id,
+            row_indices=row_indices_ordered,
+            row_scores=row_scores_ordered if len(row_scores_ordered) == len(row_indices_ordered) else None,
+            top_k=body.top_k,
+            question=body.question,
+            columns=body.columns,
+        )
+    else:
+        canonical_url = dataset_url
     payload["url"] = canonical_url
     payload["final_response"] = _with_mandatory_source_link(
         payload.get("final_response"),
@@ -784,7 +821,7 @@ def _run_semantic_query(body: QueryRequest) -> QueryResponse:
     payload["resolved_dataset"] = resolved_dataset
     if resolution_note:
         payload["resolution_note"] = resolution_note
-    return QueryResponse(**payload)
+    return SemanticResponse(**payload)
 
 
 def _ensure_dataset_exists(dataset_id: int) -> None:
@@ -809,15 +846,6 @@ def _resolve_structured_dataset_id(
     if dataset_id is not None and not raw_name:
         resolved_from_id = int(dataset_id)
         _ensure_dataset_exists(resolved_from_id)
-        if _require_dataset_name_when_multiple():
-            tables_for_id = _list_tables_compact(include_ids=True)
-            if len(tables_for_id) > 1:
-                raise _strict_lookup_error(
-                    status_code=409,
-                    message=(
-                        f"{mode_label} query requires dataset_name when multiple datasets are available."
-                    ),
-                )
         return resolved_from_id
 
     tables = _list_tables_compact(include_ids=True)
@@ -927,20 +955,23 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
     if body.metric_column is not None:
         body.metric_column = _resolve_column_case_insensitive(
@@ -948,6 +979,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="metric_column",
+            original_casefold_to_normalized=original_lookup,
         )
     if body.group_by is not None:
         body.group_by = _resolve_column_case_insensitive(
@@ -955,6 +987,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
             valid_columns=valid_columns,
             casefold_lookup=casefold_lookup,
             field_label="group_by",
+            original_casefold_to_normalized=original_lookup,
         )
     if body.metrics:
         for metric in body.metrics:
@@ -966,6 +999,7 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="metric column",
+                original_casefold_to_normalized=original_lookup,
             )
             metric["column"] = resolved_metric_col
 
@@ -1146,20 +1180,23 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
 
     projected_columns: Optional[List[str]] = None
@@ -1171,6 +1208,7 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
                 valid_columns=valid_columns,
                 casefold_lookup=casefold_lookup,
                 field_label="projection column",
+                original_casefold_to_normalized=original_lookup,
             )
             or col
             for col in deduped_columns
@@ -1189,6 +1227,7 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
         field_label="sort_by column",
+        original_casefold_to_normalized=original_lookup,
     )
     body.sort_by = sort_by
     if sort_by is not None and sort_by not in valid_columns:
@@ -1318,20 +1357,23 @@ def _run_filter_row_indices_query(
     body.dataset_id = resolved_dataset_id
 
     cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
-        for col in cols_payload["columns"]
-        if col.get("normalized_name")
+        for col in column_dicts
+        if isinstance(col, dict) and col.get("normalized_name")
     ]
     valid_columns = set(ordered_columns)
     if not valid_columns:
         raise HTTPException(status_code=400, detail="Dataset has no columns.")
     casefold_lookup = _build_casefold_column_lookup(ordered_columns)
+    original_lookup = _build_original_name_casefold_lookup(column_dicts)
 
     _resolve_filter_columns_case_insensitive(
         body.filters,
         valid_columns=valid_columns,
         casefold_lookup=casefold_lookup,
+        original_casefold_to_normalized=original_lookup,
     )
 
     column_kinds = _infer_column_kinds(resolved_dataset_id, valid_columns)
@@ -1398,18 +1440,14 @@ def _run_filter_row_indices_query(
     operation_id="run_query",
     summary="Run table queries (retrieve, filter, sort, aggregate)",
     description=(
-        "Primary query endpoint for structured table querying.\n\n"
-        "Supported behaviors:\n"
-        "- Basic retrieval: show rows / first N rows\n"
-        "- Filtering: =, !=, >, >=, <, <=, LIKE, CONTAINS, IN, BETWEEN, IS NULL, IS NOT NULL\n"
-        "- Multiple filters: combine conditions with AND/OR\n"
-        "- Projection: return only selected columns\n"
-        "- Sorting + top-k: sort_by + sort_order + limit\n"
-        "- Pagination: limit + offset for next page\n"
-        "- Aggregation: count/sum/avg/min/max with optional filters\n"
-        "- Grouped aggregation: group_by (+ group_by_date_part for date columns)\n"
-        "- Aggregate ranking: sort_order=desc for top-N, sort_order=asc for bottom-N\n"
-        "- Multi-metric aggregation: metrics[] in one call\n\n"
+        "Primary query endpoint for table access.\n\n"
+        "Modes:\n"
+        "- semantic: vector similarity search only (Qdrant over embedded rows). "
+        "No SQL filters — use filter mode for structured row selection.\n"
+        "- filter: SQL-backed row query with operators (=, !=, >, LIKE, CONTAINS, IN, BETWEEN, IS NULL, …), "
+        "AND/OR, projection, sort_by, pagination (limit/offset).\n"
+        "- filter_row_indices: same filters as filter, returns matching row_index values.\n"
+        "- aggregate: SQL-backed metrics (count/sum/avg/min/max), optional group_by and metrics[].\n\n"
         "Usage guidance:\n"
         "- Use one mode per request: semantic, aggregate, filter, or filter_row_indices.\n"
         "- Provide exactly one matching payload block.\n"
@@ -1419,7 +1457,8 @@ def _run_filter_row_indices_query(
         "- RESPONSE CONTRACT (MANDATORY): include the returned `url` in every user-facing reply. "
         "Prefer returning `final_response` verbatim.\n"
         "- Discovery flow for large catalogs: GET /tables -> POST /query.\n"
-        "- Always use normalized column names from query_context.columns."
+        "- Column names: prefer normalized_name from query_context.columns (row_data keys); "
+        "the server resolves case-insensitive normalized names and unambiguous original CSV headers."
     ),
 )
 def unified_query_endpoint(
@@ -1427,8 +1466,9 @@ def unified_query_endpoint(
         ...,
         description=(
             "Single query payload. Set mode + matching block. "
-            "For user prompts like 'top 5 products by revenue', map to aggregate/group_by/limit. "
-            "For 'next 10 results', map to filter with limit + offset. "
+            "Semantic mode is Qdrant vector search only (natural-language question). "
+            "For 'top 5 products by revenue', use aggregate with group_by/limit; "
+            "for 'rows where …', use filter; for 'next page', filter with limit + offset. "
             "When dataset choice is unclear across multiple tables, ask the user to confirm dataset_name before running /query."
         ),
         openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
@@ -1447,10 +1487,10 @@ def unified_query_endpoint(
 
 @router.post(
     "/semantic_query",
-    response_model=QueryResponse,
+    response_model=SemanticResponse,
     include_in_schema=False,
 )
-def query_dataset(body: QueryRequest):
+def query_dataset(body: SemanticRequest):
     return _run_semantic_query(body)
 
 

@@ -56,6 +56,7 @@ def test_semantic_query_semantic_results(client):
     assert data["dataset_url"].startswith("http")
     assert isinstance(data.get("url"), str)
     assert data["url"].startswith("http")
+    assert "/tables/virtual" in data["url"]
     assert isinstance(data.get("final_response"), str)
     assert data["url"] in data["final_response"]
     assert "MANDATORY" in data.get("response_instructions", "")
@@ -94,6 +95,24 @@ def test_semantic_query_supports_column_projection_case_insensitive(client):
     assert set(row_data.keys()) == {"name", "age"}
     assert row_data["name"] == "Alice"
     assert row_data["age"] == "30"
+
+
+def test_semantic_query_rejects_filters_use_filter_mode_instead(client):
+    dataset_id = _ingest(client)
+    resp = _query_semantic(
+        client,
+        {
+            "question": "Who lives in London?",
+            "dataset_id": dataset_id,
+            "filters": {"city": "London"},
+        },
+    )
+    assert resp.status_code == 422
+    err = resp.json()
+    detail = err.get("detail")
+    assert isinstance(detail, list) and len(detail) >= 1
+    msg = str(detail[0].get("msg", ""))
+    assert "filters" in msg.lower() or "filter" in msg.lower()
 
 
 def test_semantic_query_projection_rejects_invalid_column(client):

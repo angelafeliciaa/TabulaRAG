@@ -377,3 +377,37 @@ def test_filter_row_indices_invalid_column(client):
     )
     assert resp.status_code == 400
     assert "Invalid filter column" in resp.json()["detail"]
+
+
+def test_rows_by_indices_preserves_order(client):
+    dataset_id = _ingest(client)
+    resp = client.post(
+        f"/tables/{dataset_id}/rows_by_indices",
+        json={"row_indices": [1, 0]},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [r["row_index"] for r in data["rowsResult"]] == [1, 0]
+    assert data["rowsResult"][0]["row_data"].get("name") == "Bob"
+    assert data["rowsResult"][1]["row_data"].get("name") == "Alice"
+
+
+def test_rows_by_indices_column_projection(client):
+    dataset_id = _ingest(client)
+    resp = client.post(
+        f"/tables/{dataset_id}/rows_by_indices",
+        json={"row_indices": [0], "columns": ["name", "city"]},
+    )
+    assert resp.status_code == 200
+    rd = resp.json()["rowsResult"][0]["row_data"]
+    assert set(rd.keys()) == {"name", "city"}
+
+
+def test_rows_by_indices_unknown_row_404(client):
+    dataset_id = _ingest(client)
+    resp = client.post(
+        f"/tables/{dataset_id}/rows_by_indices",
+        json={"row_indices": [0, 99]},
+    )
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()

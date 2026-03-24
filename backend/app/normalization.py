@@ -95,13 +95,27 @@ def is_internal_key(key: str) -> bool:
 # ─── Column / header name normalization ───────────────────────────────────────
 
 
+def _header_string_to_snake_case(raw: str) -> str:
+    """Strip, collapse whitespace, split camelCase boundaries, lowercase, non-word runs → single underscore."""
+    s = unicodedata.normalize("NFKC", raw or "")
+    s = s.strip()
+    s = " ".join(s.split())
+    if not s:
+        return ""
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    s = re.sub(r"([a-z\d])([A-Z])", r"\1_\2", s)
+    s = s.lower()
+    s = re.sub(r"[^\w]+", "_", s, flags=re.UNICODE)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_")
+
+
 def normalize_headers(headers: List[str]) -> List[str]:
-    """Normalize header names: strip, collapse internal whitespace to single space, empty → col_{index}, dedupe with _2, _3, …."""
+    """Normalize header names to snake_case; empty → col_{index}; dedupe collisions with _2, _3, …."""
     seen: Dict[str, int] = {}
     normalized: List[str] = []
     for idx, header in enumerate(headers):
-        raw = (header or "").strip()
-        base = " ".join(raw.split()) if raw else ""
+        base = _header_string_to_snake_case(header or "")
         if not base:
             base = f"col_{idx + 1}"
         key = base

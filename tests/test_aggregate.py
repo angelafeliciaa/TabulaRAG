@@ -69,7 +69,7 @@ def test_aggregate_sum_group_by_success(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["dataset_id"] == dataset_id
-    assert data["group_by_column"] == "Sales Person"
+    assert data["group_by_column"] == "sales_person"
     assert len(data["rowsResult"]) >= 1
     top = data["rowsResult"][0]
     assert top["group_value"] == "Karlen McCaffrey"
@@ -108,7 +108,7 @@ def test_aggregate_count_group_by_orders_desc(client):
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["group_by_column"] == "Sales Person"
+    assert data["group_by_column"] == "sales_person"
     assert len(data["rowsResult"]) >= 1
     top = data["rowsResult"][0]
     assert top["group_value"] == "Bob"
@@ -134,7 +134,7 @@ def test_aggregate_sum_group_by_sort_order_asc_returns_bottom_rows(client):
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["group_by_column"] == "Sales Person"
+    assert data["group_by_column"] == "sales_person"
     assert len(data["rowsResult"]) == 2
     first = data["rowsResult"][0]
     second = data["rowsResult"][1]

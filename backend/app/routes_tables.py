@@ -2,17 +2,26 @@ import base64
 import json
 import os
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
+from app.indexing import upsert_dataset_row_index
 from app.models import Dataset, DatasetColumn, DatasetRow
 from app.qdrant_client import delete_collection, get_collection_point_count
 from app.normalization import (
+    flatten_row_data_to_original,
     get_normalized_value,
+    get_original_value,
     get_typed_value,
+    infer_date_formats_for_columns,
+    infer_measurement_columns,
+    infer_money_columns,
+    normalize_headers,
+    normalize_row_obj,
     normalize_text_value,
     parse_date,
     parse_measurement,
@@ -35,6 +44,118 @@ class RenameRequest(BaseModel):
     name: str
 
 
+class RowCellUpdateRequest(BaseModel):
+    """Update one cell: `column` is the dataset normalized column name; `value` is the new raw text."""
+
+    column: str
+    value: str
+
+
+class ColumnRenameRequest(BaseModel):
+    column: str
+    name: str
+
+
+class DescriptionUpdateRequest(BaseModel):
+    description: Optional[str] = None
+
+
+ROW_EDIT_INFERENCE_SAMPLE_LIMIT = 2000
+
+
+def _row_to_string_list(row_data: Dict[str, Any], headers: List[str]) -> List[str]:
+    out: List[str] = []
+    for h in headers:
+        o = get_original_value(row_data, h)
+        if o is None:
+            out.append("")
+        else:
+            out.append(str(o))
+    return out
+
+
+def _inference_string_rows(
+    db,
+    dataset_id: int,
+    headers: List[str],
+    target_row_index: int,
+    target_strings: List[str],
+) -> List[List[str]]:
+    rows_db = (
+        db.execute(
+            select(DatasetRow.row_index, DatasetRow.row_data)
+            .where(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .limit(ROW_EDIT_INFERENCE_SAMPLE_LIMIT)
+        )
+        .all()
+    )
+    out: List[List[str]] = []
+    replaced = False
+    for ri, rd in rows_db:
+        s = _row_to_string_list(_coerce_row_data_dict(rd), headers)
+        if int(ri) == int(target_row_index):
+            s = list(target_strings)
+            replaced = True
+        out.append(s)
+    if not replaced:
+        out.append(list(target_strings))
+    return out
+
+
+def _normalize_dataset_description(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    cleaned = "".join(
+        ch for ch in str(raw) if ord(ch) >= 32 or ch in {"\n", "\t", "\r"}
+    ).strip()
+    if not cleaned:
+        return None
+    return cleaned[:100]
+
+
+SEMANTIC_ROWS_BY_INDICES_MAX = 100
+
+
+class RowsByIndicesRequest(BaseModel):
+    """Fetch specific rows by row_index for semantic virtual table replay."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    row_indices: List[int] = Field(..., min_length=1)
+    columns: Optional[List[str]] = None
+
+    @field_validator("row_indices")
+    @classmethod
+    def _non_negative(cls, value: List[int]) -> List[int]:
+        for idx in value:
+            if idx < 0:
+                raise ValueError("row_indices must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def _cap_length(self) -> "RowsByIndicesRequest":
+        if len(self.row_indices) > SEMANTIC_ROWS_BY_INDICES_MAX:
+            raise ValueError(
+                f"At most {SEMANTIC_ROWS_BY_INDICES_MAX} row_indices allowed."
+            )
+        return self
+
+
+def _flatten_stored_row_data(row_data: Any) -> Dict[str, Any]:
+    if isinstance(row_data, dict):
+        return flatten_row_data_to_original(row_data)
+    if isinstance(row_data, str):
+        try:
+            parsed = json.loads(row_data)
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+            return flatten_row_data_to_original(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 _QUERY_CONTEXT_TYPE_PRIORITY = {
     "unknown": 0,
     "text": 1,
@@ -55,7 +176,7 @@ def _slice_column_expr(column_name: str) -> str:
 
 
 def _slice_search_like_pattern(search: str) -> str:
-    """Escape search string for use in a LIKE pattern (%, _, \)."""
+    """Escape search string for use in a LIKE pattern (%, _, \\)."""
     s = (search or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{s}%"
 
@@ -430,6 +551,111 @@ def get_cols_for_dataset(dataset_id: int):
     }
 
 
+@router.post(
+    "/tables/{dataset_id}/rows_by_indices",
+    summary="Fetch dataset rows by row_index list",
+    description=(
+        "Returns full row payloads in the order of row_indices (for semantic search virtual table URLs). "
+        f"At most {SEMANTIC_ROWS_BY_INDICES_MAX} indices per request."
+    ),
+    include_in_schema=False,
+)
+def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest):
+    ordered_indices = list(body.row_indices)
+    unique_set = set(ordered_indices)
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+
+        columns_meta = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        ordered_column_names = [c.normalized_name for c in columns_meta]
+        if not ordered_column_names:
+            raise HTTPException(status_code=400, detail="Dataset has no columns.")
+        highlight_column = ordered_column_names[0]
+
+        valid_columns = set(ordered_column_names)
+        projected: Optional[List[str]] = None
+        if body.columns is not None:
+            if len(body.columns) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="columns, when set, must be a non-empty list.",
+                )
+            projected = [c for c in body.columns if c in valid_columns]
+            invalid = [c for c in body.columns if c not in valid_columns]
+            if invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown columns: {', '.join(invalid)}",
+                )
+            if not projected:
+                raise HTTPException(
+                    status_code=400,
+                    detail="columns must list at least one valid column name.",
+                )
+
+        rows_db = (
+            db.execute(
+                select(DatasetRow).where(
+                    DatasetRow.dataset_id == dataset_id,
+                    DatasetRow.row_index.in_(unique_set),
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    by_index = {int(r.row_index): r for r in rows_db}
+    missing = [i for i in unique_set if i not in by_index]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Row index(es) not found for this dataset: {', '.join(str(m) for m in sorted(missing)[:10])}"
+            + ("…" if len(missing) > 10 else ""),
+        )
+
+    rows_out: List[Dict[str, Any]] = []
+    for row_index in ordered_indices:
+        row = by_index.get(row_index)
+        if row is None:
+            continue
+        flattened = _flatten_stored_row_data(row.row_data)
+        if projected is not None:
+            row_data_out = {col: flattened.get(col) for col in projected}
+        else:
+            row_data_out = flattened
+        rows_out.append(
+            {
+                "row_index": int(row_index),
+                "row_data": row_data_out,
+                "highlight_id": f"d{dataset_id}_r{int(row_index)}_{highlight_column}",
+            }
+        )
+
+    in_list = ",".join(str(i) for i in sorted(unique_set))
+    sql_display = (
+        f"SELECT row_index, row_data FROM dataset_rows "
+        f"WHERE dataset_id = {dataset_id} AND row_index IN ({in_list})"
+    )
+
+    return {
+        "dataset_id": dataset_id,
+        "rowsResult": rows_out,
+        "row_count": len(rows_out),
+        "sql_query": sql_display,
+        "url": None,
+    }
+
+
 @router.get(
     "/tables/{dataset_id}/slice",
     operation_id="get_table_rows",
@@ -700,3 +926,189 @@ def rename_table(dataset_id: int, body: RenameRequest):
         dataset.name = normalized_name
         db.commit()
         return {"name": dataset.name}
+
+
+@router.patch("/tables/{dataset_id}/rows/{row_index}", include_in_schema=False)
+def patch_table_row_cell(
+    dataset_id: int,
+    row_index: int,
+    body: RowCellUpdateRequest,
+):
+    if row_index < 0:
+        raise HTTPException(status_code=400, detail="row_index must be non-negative")
+
+    column_key = (body.column or "").strip()
+    if not column_key:
+        raise HTTPException(status_code=400, detail="column is required")
+
+    new_row_data: Optional[Dict[str, Any]] = None
+
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        columns = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        headers = [c.normalized_name for c in columns]
+        if column_key not in headers:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {column_key}")
+
+        row = (
+            db.execute(
+                select(DatasetRow).where(
+                    DatasetRow.dataset_id == dataset_id,
+                    DatasetRow.row_index == row_index,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Row not found")
+
+        current = _coerce_row_data_dict(row.row_data)
+        target_strings = _row_to_string_list(current, headers)
+        col_idx = headers.index(column_key)
+        while len(target_strings) < len(headers):
+            target_strings.append("")
+        target_strings[col_idx] = body.value
+
+        inference_rows = _inference_string_rows(
+            db, dataset_id, headers, row_index, target_strings
+        )
+        date_format_by_column = infer_date_formats_for_columns(headers, inference_rows)
+        money_columns = infer_money_columns(headers, inference_rows)
+        measurement_columns = infer_measurement_columns(headers, inference_rows)
+
+        new_row_data = normalize_row_obj(
+            headers,
+            target_strings,
+            store_original=True,
+            date_format_by_column=date_format_by_column,
+            money_columns=money_columns,
+            measurement_columns=measurement_columns,
+        )
+        row.row_data = new_row_data
+        db.commit()
+
+    try:
+        upsert_dataset_row_index(dataset_id, row_index)
+    except Exception:
+        pass
+
+    return {
+        "dataset_id": dataset_id,
+        "row_index": row_index,
+        "column": column_key,
+        "data": strip_internal_fields(new_row_data or {}),
+    }
+
+
+@router.patch("/tables/{dataset_id}/columns", include_in_schema=False)
+def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
+    old_column = (body.column or "").strip()
+    if not old_column:
+        raise HTTPException(status_code=400, detail="column is required")
+
+    requested_name = (body.name or "").strip()
+    if not requested_name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    new_column = normalize_headers([requested_name])[0]
+
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        columns = (
+            db.execute(
+                select(DatasetColumn)
+                .where(DatasetColumn.dataset_id == dataset_id)
+                .order_by(DatasetColumn.column_index)
+            )
+            .scalars()
+            .all()
+        )
+        target = next((c for c in columns if c.normalized_name == old_column), None)
+        if not target:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {old_column}")
+
+        conflict = next(
+            (c for c in columns if c.normalized_name == new_column and c.normalized_name != old_column),
+            None,
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Column '{new_column}' already exists.",
+            )
+
+        if old_column == new_column:
+            target.original_name = requested_name
+            db.commit()
+            return {
+                "dataset_id": dataset_id,
+                "column": target.normalized_name,
+                "original_name": target.original_name,
+            }
+
+        row_objs = (
+            db.execute(
+                select(DatasetRow)
+                .where(DatasetRow.dataset_id == dataset_id)
+                .order_by(DatasetRow.row_index)
+            )
+            .scalars()
+            .all()
+        )
+        row_indices: List[int] = []
+        for row in row_objs:
+            row_data = _coerce_row_data_dict(row.row_data)
+            if old_column in row_data:
+                row_data[new_column] = row_data.pop(old_column)
+            typed = row_data.get("__typed__")
+            if isinstance(typed, dict) and old_column in typed:
+                typed[new_column] = typed.pop(old_column)
+            row.row_data = dict(row_data)
+            flag_modified(row, "row_data")
+            row_indices.append(int(row.row_index))
+
+        target.normalized_name = new_column
+        target.original_name = requested_name
+        db.commit()
+
+    for row_index in row_indices:
+        try:
+            upsert_dataset_row_index(dataset_id, row_index)
+        except Exception:
+            continue
+
+    return {
+        "dataset_id": dataset_id,
+        "column": new_column,
+        "original_name": requested_name,
+    }
+
+
+@router.patch("/tables/{dataset_id}/description", include_in_schema=False)
+def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest):
+    normalized_description = _normalize_dataset_description(body.description)
+    with SessionLocal() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Table not found")
+        dataset.description = normalized_description
+        db.commit()
+        return {
+            "dataset_id": dataset_id,
+            "description": dataset.description,
+        }

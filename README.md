@@ -38,14 +38,13 @@ Upload a table for ingestion:
 ```bash
 curl -F "file=@/path/to/data.csv" \
   -F "dataset_name=my_table" \
-  -F "has_header=true" \
-  -F "delimiter=," \
   http://localhost:8000/ingest
 ```
 
 Notes:
 - UTF-8 CSV/TSV only.
-- `delimiter` supports `,` or tab. If omitted, it is auto-detected.
+- Delimiter is inferred from the filename (`.csv` → comma, `.tsv` → tab).
+- **Header row:** omit `has_header` to auto-detect by comparing the first two rows; set `has_header=true` or `has_header=false` to force.
 
 ## Connecting via External Tools
 
