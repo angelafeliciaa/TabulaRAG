@@ -7,6 +7,8 @@ import httpx
 import jwt
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -101,19 +103,23 @@ async def exchange_google_code(code: str, redirect_uri: str) -> dict:
         raise HTTPException(status_code=502, detail="Google token exchange failed")
 
     token_data = token_resp.json()
-    access_token = token_data.get("access_token")
-    if not access_token:
+    raw_id_token = token_data.get("id_token")
+    if not raw_id_token:
         error = token_data.get("error_description", "Unknown error")
         raise HTTPException(status_code=401, detail=f"Google auth failed: {error}")
 
-    async with httpx.AsyncClient() as client:
-        user_resp = await client.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10.0,
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            raw_id_token,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid Google ID token: {exc}") from exc
 
-    if user_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Failed to fetch Google user info")
-
-    return user_resp.json()
+    return {
+        "id": claims["sub"],
+        "email": claims["email"],
+        "name": claims.get("name", ""),
+        "picture": claims.get("picture", ""),
+    }
