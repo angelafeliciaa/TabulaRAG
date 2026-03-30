@@ -52,14 +52,14 @@ Copy the example file and fill in the required values:
 cp .env.example .env
 ```
 
-| Variable            | Required | Description                                               |
-| ------------------- | -------- | --------------------------------------------------------- |
-| `API_KEY`           | No       | Optional static key for script/API access, bypasses OAuth |
-| `DATABASE_URL`      | Yes      | Set automatically in docker-compose for local use         |
-| `QDRANT_URL`        | Yes      | Set automatically in docker-compose for local use         |
-| `POSTGRES_DB`       | Yes      | Database name (default: `tabularag`)                      |
-| `POSTGRES_USER`     | Yes      | Database user (default: `tabularag`)                      |
-| `POSTGRES_PASSWORD` | Yes      | Database password                                         |
+| Variable            | Required | Description                                       |
+| ------------------- | -------- | ------------------------------------------------- |
+| `API_KEY`           | No       | Optional static key for script/API access         |
+| `DATABASE_URL`      | Yes      | Set automatically in docker-compose for local use |
+| `QDRANT_URL`        | Yes      | Set automatically in docker-compose for local use |
+| `POSTGRES_DB`       | Yes      | Database name (default: `tabularag`)              |
+| `POSTGRES_USER`     | Yes      | Database user (default: `tabularag`)              |
+| `POSTGRES_PASSWORD` | Yes      | Database password                                 |
 
 The remaining variables in `.env.example` control embedding model behaviour and Qdrant tuning — the defaults are fine for local use.
 
