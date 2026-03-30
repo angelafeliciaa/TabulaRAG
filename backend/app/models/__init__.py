@@ -40,7 +40,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    github_id = Column(String(64), unique=True, nullable=False)
+    google_id = Column(String(64), unique=True, nullable=False)
     login = Column(String(255), nullable=False)
     enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="SET NULL"), nullable=True)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.querier)

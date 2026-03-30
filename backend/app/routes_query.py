@@ -3,7 +3,7 @@ import base64
 import json
 import re
 from typing import Any, Dict, List, Literal, Optional, Union
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -17,7 +17,9 @@ from app.query_input_schemas import (
     UnifiedQueryRequest,
 )
 from app.retrieval import get_highlight, resolve_dataset_context, smart_query
-from app.routes_tables import list_tables, get_cols_for_dataset
+from app.routes_tables import _list_tables_payload, _get_cols_payload
+from app.auth import require_auth
+from app.models import User
 import app.db as app_db
 from app.db import SessionLocal
 from app.name_guard import sanitize_dataset_name
@@ -685,8 +687,8 @@ def _with_mandatory_source_link(
         return f"{base}\nSource link: {url}"
     return f"Source link: {url}"
 
-def _list_tables_compact(include_ids: bool = True) -> List[Dict[str, Any]]:
-    tables = list_tables(include_pending=False, limit=None)
+def _list_tables_compact(include_ids: bool = True, enterprise_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    tables = _list_tables_payload(include_pending=False, sample_rows=3, limit=None, enterprise_id=enterprise_id)
     compact: List[Dict[str, Any]] = []
     for table in tables:
         item = {
@@ -717,12 +719,13 @@ def _strict_lookup_error(status_code: int, message: str) -> HTTPException:
 
 # ── Internal query handlers ────────────────────────────────────────
 
-def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
+def _run_semantic_query(body: SemanticRequest, enterprise_id: Optional[int] = None) -> SemanticResponse:
     try:
         resolved_dataset_id, resolved_dataset, resolution_note = resolve_dataset_context(
             dataset_id=body.dataset_id,
             dataset_name=body.dataset_name,
             question=body.question,
+            enterprise_id=enterprise_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -735,7 +738,7 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
 
     projected_columns: Optional[List[str]] = None
     if body.columns is not None:
-        cols_payload = get_cols_for_dataset(resolved_dataset_id)
+        cols_payload = _get_cols_payload(resolved_dataset_id)
         column_dicts = cols_payload.get("columns") or []
         ordered_columns = [
             col["normalized_name"]
@@ -824,12 +827,18 @@ def _run_semantic_query(body: SemanticRequest) -> SemanticResponse:
     return SemanticResponse(**payload)
 
 
-def _ensure_dataset_exists(dataset_id: int) -> None:
+def _ensure_dataset_exists(dataset_id: int, enterprise_id: Optional[int] = None) -> None:
     with SessionLocal() as db:
-        row = db.execute(
-            text("SELECT id FROM datasets WHERE id = :id"),
-            {"id": dataset_id},
-        ).fetchone()
+        if enterprise_id is not None:
+            row = db.execute(
+                text("SELECT id FROM datasets WHERE id = :id AND enterprise_id = :eid"),
+                {"id": dataset_id, "eid": enterprise_id},
+            ).fetchone()
+        else:
+            row = db.execute(
+                text("SELECT id FROM datasets WHERE id = :id"),
+                {"id": dataset_id},
+            ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
@@ -839,16 +848,17 @@ def _resolve_structured_dataset_id(
     dataset_id: Optional[int],
     dataset_name: Optional[str],
     mode_label: str,
+    enterprise_id: Optional[int] = None,
 ) -> int:
     raw_name = (dataset_name or "").strip()
 
     # Backward-compatible path: explicit dataset_id without dataset_name.
     if dataset_id is not None and not raw_name:
         resolved_from_id = int(dataset_id)
-        _ensure_dataset_exists(resolved_from_id)
+        _ensure_dataset_exists(resolved_from_id, enterprise_id)
         return resolved_from_id
 
-    tables = _list_tables_compact(include_ids=True)
+    tables = _list_tables_compact(include_ids=True, enterprise_id=enterprise_id)
     if not tables:
         raise HTTPException(
             status_code=404,
@@ -946,15 +956,16 @@ def _metric_output_key(
     return key
 
 
-def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
+def _run_aggregate_query(body: AggregateRequest, enterprise_id: Optional[int] = None) -> AggregateResponse:
     resolved_dataset_id = _resolve_structured_dataset_id(
         dataset_id=body.dataset_id,
         dataset_name=body.dataset_name,
         mode_label="Aggregate",
+        enterprise_id=enterprise_id,
     )
     body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    cols_payload = _get_cols_payload(resolved_dataset_id)
     column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
@@ -1171,15 +1182,16 @@ def _run_aggregate_query(body: AggregateRequest) -> AggregateResponse:
     )
 
 
-def _run_filter_query(body: FilterRequest) -> FilterResponse:
+def _run_filter_query(body: FilterRequest, enterprise_id: Optional[int] = None) -> FilterResponse:
     resolved_dataset_id = _resolve_structured_dataset_id(
         dataset_id=body.dataset_id,
         dataset_name=body.dataset_name,
         mode_label="Filter",
+        enterprise_id=enterprise_id,
     )
     body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    cols_payload = _get_cols_payload(resolved_dataset_id)
     column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
@@ -1348,15 +1360,17 @@ def _run_filter_query(body: FilterRequest) -> FilterResponse:
 
 def _run_filter_row_indices_query(
     body: FilterRowIndicesRequest,
+    enterprise_id: Optional[int] = None,
 ) -> FilterRowIndicesResponse:
     resolved_dataset_id = _resolve_structured_dataset_id(
         dataset_id=body.dataset_id,
         dataset_name=body.dataset_name,
         mode_label="Filter row indices",
+        enterprise_id=enterprise_id,
     )
     body.dataset_id = resolved_dataset_id
 
-    cols_payload = get_cols_for_dataset(resolved_dataset_id)
+    cols_payload = _get_cols_payload(resolved_dataset_id)
     column_dicts = cols_payload.get("columns") or []
     ordered_columns = [
         col["normalized_name"]
@@ -1473,15 +1487,17 @@ def unified_query_endpoint(
         ),
         openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
     ),
+    current_user: User = Depends(require_auth),
 ):
+    eid = current_user.enterprise_id
     if body.mode == "semantic" and body.semantic is not None:
-        return _run_semantic_query(body.semantic)
+        return _run_semantic_query(body.semantic, enterprise_id=eid)
     if body.mode == "aggregate" and body.aggregate is not None:
-        return _run_aggregate_query(body.aggregate)
+        return _run_aggregate_query(body.aggregate, enterprise_id=eid)
     if body.mode == "filter" and body.filter is not None:
-        return _run_filter_query(body.filter)
+        return _run_filter_query(body.filter, enterprise_id=eid)
     if body.mode == "filter_row_indices" and body.filter_row_indices is not None:
-        return _run_filter_row_indices_query(body.filter_row_indices)
+        return _run_filter_row_indices_query(body.filter_row_indices, enterprise_id=eid)
     raise HTTPException(status_code=400, detail="Unsupported query payload.")
 
 
@@ -1490,8 +1506,8 @@ def unified_query_endpoint(
     response_model=SemanticResponse,
     include_in_schema=False,
 )
-def query_dataset(body: SemanticRequest):
-    return _run_semantic_query(body)
+def query_dataset(body: SemanticRequest, current_user: User = Depends(require_auth)):
+    return _run_semantic_query(body, enterprise_id=current_user.enterprise_id)
 
 
 @router.post(
@@ -1499,8 +1515,8 @@ def query_dataset(body: SemanticRequest):
     response_model=AggregateResponse,
     include_in_schema=False,
 )
-def aggregate_dataset(body: AggregateRequest):
-    return _run_aggregate_query(body)
+def aggregate_dataset(body: AggregateRequest, current_user: User = Depends(require_auth)):
+    return _run_aggregate_query(body, enterprise_id=current_user.enterprise_id)
 
 
 @router.post(
@@ -1508,8 +1524,8 @@ def aggregate_dataset(body: AggregateRequest):
     response_model=FilterResponse,
     include_in_schema=False,
 )
-def filter_dataset(body: FilterRequest):
-    return _run_filter_query(body)
+def filter_dataset(body: FilterRequest, current_user: User = Depends(require_auth)):
+    return _run_filter_query(body, enterprise_id=current_user.enterprise_id)
 
 
 @router.post(
@@ -1517,8 +1533,8 @@ def filter_dataset(body: FilterRequest):
     response_model=FilterRowIndicesResponse,
     include_in_schema=False,
 )
-def filter_row_indices(body: FilterRowIndicesRequest):
-    return _run_filter_row_indices_query(body)
+def filter_row_indices(body: FilterRowIndicesRequest, current_user: User = Depends(require_auth)):
+    return _run_filter_row_indices_query(body, enterprise_id=current_user.enterprise_id)
 
 
 @router.get(
@@ -1526,7 +1542,7 @@ def filter_row_indices(body: FilterRowIndicesRequest):
     response_model=HighlightResponse,
     include_in_schema=False,
 )
-def highlight_endpoint(highlight_id: str):
+def highlight_endpoint(highlight_id: str, current_user: User = Depends(require_auth)):
     result = get_highlight(highlight_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Highlight not found.")

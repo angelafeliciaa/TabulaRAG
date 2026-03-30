@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
-import { logout, getUser } from "./api";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { logout, getUser, isAuthenticated } from "./api";
 import logo from "./images/logo-64.webp";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
@@ -9,7 +9,20 @@ import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
 import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
+import Login from "./pages/Login";
+import Onboarding from "./pages/Onboarding";
 import { type ValueMode } from "./valueMode";
+
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  if (!isAuthenticated()) return <Login />;
+  return <>{children}</>;
+}
+
+function EnterpriseGuard({ children }: { children: React.ReactNode }) {
+  const user = getUser();
+  if (!user?.enterprise_id) return <Navigate to="/onboarding" replace />;
+  return <>{children}</>;
+}
 
 export default function App() {
   const location = useLocation();
@@ -143,10 +156,54 @@ export default function App() {
 
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
-          <Route path="/" element={<Upload valueMode={valueMode} />} />
-          <Route path="/tables/virtual" element={<AggregateTableView valueMode={valueMode} />} />
-          <Route path="/tables/:datasetId" element={<TableView valueMode={valueMode} />} />
-          <Route path="/highlight/:highlightId" element={<HighlightView />} />
+          <Route
+            path="/"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <Upload valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/tables/virtual"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <AggregateTableView valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/tables/:datasetId"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <TableView valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/highlight/:highlightId"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <HighlightView />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/onboarding"
+            element={
+              <AuthGuard>
+                <Onboarding />
+              </AuthGuard>
+            }
+          />
           <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
         </Routes>
       </main>

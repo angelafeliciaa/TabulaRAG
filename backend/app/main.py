@@ -26,11 +26,12 @@ from app.index_jobs import (
 )
 from app.indexing import index_dataset
 from app.index_worker import IndexWorker
-from app.models import Base, Dataset, DatasetColumn, DatasetRow
+from app.models import Base, Dataset, DatasetColumn, DatasetRow, User, UserRole
 from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
+from app.routes_enterprises import router as enterprises_router
 from app.normalization import (
     infer_date_formats_for_columns,
     infer_measurement_columns,
@@ -45,7 +46,7 @@ from app.normalization import (
     normalize_row_obj,
 )
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
-from app.auth import require_auth, exchange_github_code, create_jwt, GITHUB_CLIENT_ID
+from app.auth import require_auth, require_admin, exchange_google_code, create_jwt, GOOGLE_CLIENT_ID
 
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ app.add_middleware(
 
 app.include_router(tables_router)
 app.include_router(query_router)
+app.include_router(enterprises_router)
 
 
 @app.get("/health", include_in_schema=False)
@@ -611,27 +613,47 @@ def auth_verify(credentials: None = Depends(require_auth)) -> dict:
     return {"valid": True}
 
 
-@app.get("/auth/github", include_in_schema=False)
-def auth_github_redirect():
-    if not GITHUB_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="GitHub OAuth not configured")
-    return {"client_id": GITHUB_CLIENT_ID}
+@app.get("/auth/google", include_in_schema=False)
+def auth_google_redirect():
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    return {"client_id": GOOGLE_CLIENT_ID}
 
 
-@app.post("/auth/github/callback", include_in_schema=False)
-async def auth_github_callback(body: dict):
+@app.post("/auth/google/callback", include_in_schema=False)
+async def auth_google_callback(body: dict):
     code = body.get("code")
-    if not code:
-        raise HTTPException(status_code=400, detail="Missing code parameter")
-    github_user = await exchange_github_code(code)
-    token = create_jwt(github_user)
+    redirect_uri = body.get("redirect_uri")
+    if not code or not redirect_uri:
+        raise HTTPException(status_code=400, detail="Missing code or redirect_uri parameter")
+    google_user = await exchange_google_code(code, redirect_uri)
+
+    google_id = str(google_user["id"])
+    login = google_user["email"]
+
+    with SessionLocal() as db:
+        user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
+        if user is None:
+            user = User(google_id=google_id, login=login)
+            db.add(user)
+        elif user.login != login:
+            user.login = login
+        db.commit()
+        db.refresh(user)
+        enterprise_id = user.enterprise_id
+        role = user.role.value
+
+    token = create_jwt(google_user, user)
     return {
         "token": token,
         "user": {
-            "login": github_user["login"],
-            "name": github_user.get("name") or github_user["login"],
-            "avatar_url": github_user.get("avatar_url", ""),
+            "login": google_user["email"],
+            "name": google_user.get("name") or google_user["email"],
+            "avatar_url": google_user.get("picture", ""),
+            "role": role,
+            "enterprise_id": enterprise_id,
         },
+        "onboarding_required": enterprise_id is None,
     }
 
 
@@ -641,6 +663,7 @@ def ingest_table(
     dataset_name: str | None = Form(None),
     dataset_description: str | None = Form(None),
     has_header: Optional[bool] = Form(None),
+    current_user: User = Depends(require_auth),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
@@ -703,6 +726,7 @@ def ingest_table(
             has_header=has_header,
             column_count=len(normalized_headers),
             is_index_ready=False,
+            enterprise_id=current_user.enterprise_id,
         )
         db.add(dataset)
         db.flush()
