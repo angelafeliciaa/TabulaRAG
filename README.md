@@ -68,7 +68,7 @@ The remaining variables in `.env.example` control embedding model behaviour and 
 ## Quick start
 
 ```bash
-cp .env.example .env        # 1. copy env file and fill in GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET
+cp .env.example .env
 ./scripts/dev-up.sh         # 2. build and start all services
 ```
 
