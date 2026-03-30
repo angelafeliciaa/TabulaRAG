@@ -109,6 +109,67 @@ export function isAdmin(): boolean {
   return getUser()?.role === "admin";
 }
 
+export interface Member {
+  id: number;
+  login: string;
+  role: "admin" | "querier";
+  joined_at: string;
+}
+
+export interface InviteCode {
+  code: string;
+  expires_at: string | null;
+  expired: boolean;
+  created_at: string;
+}
+
+export async function listMembers(): Promise<Member[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/members`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateMemberRole(userId: number, role: "admin" | "querier"): Promise<Member> {
+  const res = await authFetch(`${API_BASE}/enterprises/members/${userId}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function removeMember(userId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function listInviteCodes(): Promise<InviteCode[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createInviteCode(): Promise<InviteCode> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeInviteCode(code: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes/${code}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export type ServerStatus = "Online" | "Offline" | "Unknown";
 export type IndexJobState = "queued" | "indexing" | "ready" | "error";
 

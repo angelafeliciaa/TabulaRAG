@@ -45,7 +45,7 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: User = Depend
         raise HTTPException(status_code=400, detail="Enterprise name cannot be empty")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.github_id == current_user.github_id)).scalar_one_or_none()
+        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
         if user.enterprise_id is not None:
@@ -77,7 +77,7 @@ def join_enterprise(body: JoinEnterpriseRequest, current_user: User = Depends(re
         raise HTTPException(status_code=400, detail="Invite code cannot be empty")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.github_id == current_user.github_id)).scalar_one_or_none()
+        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
         if user.enterprise_id is not None:

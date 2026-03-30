@@ -16,6 +16,7 @@ import {
 import {
   deleteTable,
   getSlice,
+  isAdmin,
   listIndexStatus,
   listTables,
   patchTableDescription,
@@ -350,6 +351,7 @@ function smoothIndexStatus(
 }
 
 export default function Upload({ valueMode }: UploadProps) {
+  const userIsAdmin = isAdmin();
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [showUploadQueue, setShowUploadQueue] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
@@ -1735,7 +1737,7 @@ export default function Upload({ valueMode }: UploadProps) {
         </div>
       )}
 
-      {isUploadQueueVisible && <div className="upload-queue-backdrop" aria-hidden="true" />}
+      {userIsAdmin && isUploadQueueVisible && <div className="upload-queue-backdrop" aria-hidden="true" />}
 
       <div className="hero" aria-hidden={isUploadDialogOpen}>
         <div className="hero-title-row">
@@ -1758,6 +1760,7 @@ export default function Upload({ valueMode }: UploadProps) {
 
       <div
         ref={uploadPanelRef}
+        hidden={!userIsAdmin}
         className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
         role={isUploadQueueVisible ? "dialog" : undefined}
         aria-modal={isUploadQueueVisible ? "true" : undefined}
@@ -2412,6 +2415,7 @@ export default function Upload({ valueMode }: UploadProps) {
                       )}
                     </div>
 
+                    {userIsAdmin && (
                     <button
                       type="button"
                       className={`icon-button ${editingId === table.dataset_id ? "success" : "edit"}`}
@@ -2441,7 +2445,9 @@ export default function Upload({ valueMode }: UploadProps) {
                         </svg>
                       )}
                     </button>
+                    )}
 
+                    {userIsAdmin && (
                     <button
                       type="button"
                       className="icon-button danger"
@@ -2456,6 +2462,7 @@ export default function Upload({ valueMode }: UploadProps) {
                         <path d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 0 0 0 2h1v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9zm1 2h4v0H10zm-1 4a1 1 0 0 1 2 0v8a1 1 0 1 1-2 0V9zm6-1a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1z" />
                       </svg>
                     </button>
+                    )}
                   </div>
                 </li>
               );

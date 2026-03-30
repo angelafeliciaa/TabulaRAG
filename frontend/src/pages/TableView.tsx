@@ -4,6 +4,7 @@ import { focusByIndex, focusByOffset } from "../accessibility";
 import {
   filterRowIndices,
   getSlice,
+  isAdmin,
   listTables,
   patchTableCell,
   patchTableColumnName,
@@ -367,6 +368,7 @@ function buildQueryContextTitle(returnPath: string): string | null {
 }
 
 export default function TableView({ valueMode }: TableViewProps) {
+  const userIsAdmin = isAdmin();
   const { datasetId } = useParams();
   const location = useLocation();
   const numericDatasetId = Number(datasetId);
@@ -1492,7 +1494,7 @@ export default function TableView({ valueMode }: TableViewProps) {
             )}
           </div>
           <div className="table-view-tools">
-            {isPlainDatasetView && hasUnsavedChanges && (
+            {isPlainDatasetView && hasUnsavedChanges && userIsAdmin && (
               <div className="table-view-save-edits-wrap">
                 <button
                   type="button"
@@ -1626,11 +1628,11 @@ export default function TableView({ valueMode }: TableViewProps) {
                 event.preventDefault();
                 setDateMenu({ x: event.clientX, y: event.clientY });
               }}
-              editable={isPlainDatasetView}
+              editable={isPlainDatasetView && userIsAdmin}
               editableBusy={isSavingEdits || loading}
               editableEpoch={sliceEpoch}
               onCellDraftChange={handleCellDraftChange}
-              editableHeaders={isPlainDatasetView}
+              editableHeaders={isPlainDatasetView && userIsAdmin}
               onHeaderDraftChange={handleHeaderDraftChange}
               pendingCellEditKeys={isPlainDatasetView ? pendingCellEditKeys : undefined}
               pendingCellEditValues={isPlainDatasetView ? pendingCellEditValues : undefined}
