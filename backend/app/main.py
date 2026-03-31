@@ -663,7 +663,7 @@ def ingest_table(
     dataset_name: str | None = Form(None),
     dataset_description: str | None = Form(None),
     has_header: Optional[bool] = Form(None),
-    current_user: User = Depends(require_auth),
+    current_user: User = Depends(require_admin),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
