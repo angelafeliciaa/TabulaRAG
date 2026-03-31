@@ -44,47 +44,63 @@ def test_auth_verify_no_token():
 
 
 def test_auth_verify_jwt(client):
-    token = create_jwt({"id": 1, "login": "tester"})
-    from fastapi.testclient import TestClient
-    import app.main as app_main
-    with TestClient(app_main.app, headers={"Authorization": f"Bearer {token}"}) as c:
-        resp = c.post("/auth/verify")
-        assert resp.status_code == 200
+    from app.db import SessionLocal
+    from app.models import User, UserRole
+
+    with SessionLocal() as db:
+        db.add(User(
+            google_id="test_google_id",
+            login="tester",
+            role=UserRole.querier
+        ))
+        db.commit()
+
+    token = create_jwt({
+        "id": "test_google_id",
+        "email": "tester@example.com",
+        "name": "tester",
+        "picture": ""
+    })
+
+    resp = client.post(
+        "/auth/verify",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert resp.status_code == 200
 
 
-# ── Auth GitHub redirect ─────────────────────────────────────────
+
+# ── Auth Google callback ─────────────────────────────────────────
 
 
-def test_github_redirect_not_configured(client):
-    with patch("app.main.GITHUB_CLIENT_ID", ""):
-        resp = client.get("/auth/github")
-        assert resp.status_code == 500
-
-
-def test_github_redirect_configured(client):
-    with patch("app.main.GITHUB_CLIENT_ID", "my-client-id"):
-        resp = client.get("/auth/github")
-        assert resp.status_code == 200
-        assert resp.json()["client_id"] == "my-client-id"
-
-
-# ── Auth GitHub callback ─────────────────────────────────────────
-
-
-def test_github_callback_missing_code(client):
-    resp = client.post("/auth/github/callback", json={})
+def test_google_callback_missing_code(client):
+    resp = client.post("/auth/google/callback", json={})
     assert resp.status_code == 400
 
 
-def test_github_callback_success(client):
-    mock_user = {"id": 1, "login": "octocat", "name": "Octo", "avatar_url": ""}
+def test_google_callback_missing_redirect_uri(client):
+    resp = client.post("/auth/google/callback", json={"code": "abc123"})
+    assert resp.status_code == 400
 
-    with patch("app.main.exchange_github_code", new_callable=AsyncMock, return_value=mock_user):
-        resp = client.post("/auth/github/callback", json={"code": "abc123"})
+
+def test_google_callback_success(client):
+    mock_user = {
+        "id": "42",
+        "email": "octocat@example.com",
+        "name": "Octo",
+        "picture": "",
+    }
+
+    with patch("app.main.exchange_google_code", new_callable=AsyncMock, return_value=mock_user):
+        resp = client.post(
+            "/auth/google/callback",
+            json={"code": "abc123", "redirect_uri": "https://example.com/callback"},
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert "token" in body
-    assert body["user"]["login"] == "octocat"
+    assert body["user"]["login"] == "octocat@example.com"
 
 
 # ── Ingest edge cases ────────────────────────────────────────────

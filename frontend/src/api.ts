@@ -7,6 +7,8 @@ export interface AuthUser {
   login: string;
   name: string;
   avatar_url: string;
+  role: "admin" | "querier" | null;
+  enterprise_id: number | null;
 }
 
 export function getToken(): string | null {
@@ -53,29 +55,119 @@ async function authFetch(
   return res;
 }
 
-export async function getGithubClientId(): Promise<string> {
-  const res = await fetch(`${API_BASE}/auth/github`);
-  if (!res.ok) throw new Error("GitHub OAuth not configured");
+export async function getGoogleClientId(): Promise<string> {
+  const res = await fetch(`${API_BASE}/auth/google`);
+  if (!res.ok) throw new Error("Google OAuth not configured");
   const data = (await res.json()) as { client_id: string };
   return data.client_id;
 }
 
-export async function exchangeGithubCode(
+export async function exchangeGoogleCode(
   code: string,
-): Promise<{ token: string; user: AuthUser }> {
-  const res = await fetch(`${API_BASE}/auth/github/callback`, {
+  redirectUri: string,
+): Promise<{ token: string; user: AuthUser; onboarding_required: boolean }> {
+  const res = await fetch(`${API_BASE}/auth/google/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(err || "GitHub authentication failed");
+    throw new Error(err || "Google authentication failed");
   }
-  const data = (await res.json()) as { token: string; user: AuthUser };
+  const data = (await res.json()) as { token: string; user: AuthUser; onboarding_required: boolean };
   localStorage.setItem(TOKEN_KEY, data.token);
   localStorage.setItem(USER_KEY, JSON.stringify(data.user));
   return data;
+}
+
+export async function createEnterprise(
+  name: string,
+): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function joinEnterprise(
+  code: string,
+): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export function isAdmin(): boolean {
+  return getUser()?.role === "admin";
+}
+
+export interface Member {
+  id: number;
+  login: string;
+  role: "admin" | "querier";
+  joined_at: string;
+}
+
+export interface InviteCode {
+  code: string;
+  expires_at: string | null;
+  expired: boolean;
+  created_at: string;
+}
+
+export async function listMembers(): Promise<Member[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/members`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateMemberRole(userId: number, role: "admin" | "querier"): Promise<Member> {
+  const res = await authFetch(`${API_BASE}/enterprises/members/${userId}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function removeMember(userId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function listInviteCodes(): Promise<InviteCode[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createInviteCode(): Promise<InviteCode> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeInviteCode(code: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/invite-codes/${code}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 export type ServerStatus = "Online" | "Offline" | "Unknown";

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { exchangeGithubCode } from "../api";
+import { exchangeGoogleCode } from "../api";
 
 interface AuthCallbackProps {
   onLogin: () => void;
@@ -11,26 +11,31 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
   const navigate = useNavigate();
 
   const code = new URLSearchParams(window.location.search).get("code");
+  const redirectUri = `${window.location.origin}/auth/callback`;
 
   useEffect(() => {
     if (!code) return;
 
-    exchangeGithubCode(code)
-      .then(() => {
+    exchangeGoogleCode(code, redirectUri)
+      .then((data) => {
         onLogin();
-        navigate("/", { replace: true });
+        if (data.onboarding_required) {
+          navigate("/onboarding", { replace: true });
+        } else {
+          navigate("/", { replace: true });
+        }
       })
       .catch(() => {
-        setError("GitHub authentication failed. Please try again.");
+        setError("Google authentication failed. Please try again.");
       });
-  }, [code, onLogin, navigate]);
+  }, [code, onLogin, navigate, redirectUri]);
 
   if (!code) {
     return (
       <div className="login-page">
         <div className="login-card">
           <p className="login-error" role="alert">
-            No authorization code received from GitHub.
+            No authorization code received from Google.
           </p>
           <button
             type="button"
@@ -67,7 +72,7 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
     <div className="login-page">
       <div className="login-card">
         <p className="login-subtitle" role="status" aria-live="polite">
-          Signing in with GitHub...
+          Signing in with Google...
         </p>
       </div>
     </div>

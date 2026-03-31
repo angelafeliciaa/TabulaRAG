@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
-import { logout, getUser } from "./api";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { logout, getUser, isAuthenticated, isAdmin } from "./api";
 import logo from "./images/logo-64.webp";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
@@ -9,7 +9,26 @@ import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
 import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
+import Login from "./pages/Login";
+import Onboarding from "./pages/Onboarding";
+import Admin from "./pages/Admin";
 import { type ValueMode } from "./valueMode";
+
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  if (!isAuthenticated()) return <Login />;
+  return <>{children}</>;
+}
+
+function EnterpriseGuard({ children }: { children: React.ReactNode }) {
+  const user = getUser();
+  if (!user?.enterprise_id) return <Navigate to="/onboarding" replace />;
+  return <>{children}</>;
+}
+
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  if (!isAdmin()) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 
 export default function App() {
   const location = useLocation();
@@ -81,6 +100,7 @@ export default function App() {
 
   function handleLogout() {
     logout();
+    window.location.replace("/");
   }
 
   return (
@@ -102,10 +122,14 @@ export default function App() {
             <img src={user.avatar_url} alt="" className="user-avatar" />
           )}
           <span className="user-name">{user?.name || user?.login}</span>
+          {isAdmin() && (
+            <Link className="surface-btn" to="/admin" style={{ fontSize: "0.8rem", padding: "0.2rem 0.7rem" }}>
+              Admin
+            </Link>
+          )}
           <button
             className="logout-btn"
             onClick={handleLogout}
-            hidden
             type="button"
           >
             Sign out
@@ -143,10 +167,66 @@ export default function App() {
 
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
-          <Route path="/" element={<Upload valueMode={valueMode} />} />
-          <Route path="/tables/virtual" element={<AggregateTableView valueMode={valueMode} />} />
-          <Route path="/tables/:datasetId" element={<TableView valueMode={valueMode} />} />
-          <Route path="/highlight/:highlightId" element={<HighlightView />} />
+          <Route
+            path="/"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <Upload valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/tables/virtual"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <AggregateTableView valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/tables/:datasetId"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <TableView valueMode={valueMode} />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/highlight/:highlightId"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <HighlightView />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/onboarding"
+            element={
+              <AuthGuard>
+                <Onboarding />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <AdminGuard>
+                    <Admin />
+                  </AdminGuard>
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
           <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
         </Routes>
       </main>

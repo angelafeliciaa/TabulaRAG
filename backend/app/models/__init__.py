@@ -1,7 +1,10 @@
+import enum
+
 from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -16,10 +19,56 @@ from sqlalchemy.sql import func
 from app.db import Base
 
 
+class UserRole(str, enum.Enum):
+    admin = "admin"
+    querier = "querier"
+
+
+class Enterprise(Base):
+    __tablename__ = "enterprises"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    users = relationship("User", back_populates="enterprise")
+    datasets = relationship("Dataset", back_populates="enterprise")
+    invite_codes = relationship("InviteCode", back_populates="enterprise")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    google_id = Column(String(64), unique=True, nullable=False)
+    login = Column(String(255), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="SET NULL"), nullable=True)
+    role = Column(Enum(UserRole), nullable=False, default=UserRole.querier)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    enterprise = relationship("Enterprise", back_populates="users")
+    invite_codes_created = relationship("InviteCode", back_populates="created_by_user")
+
+
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    id = Column(Integer, primary_key=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False)
+    code = Column(String(8), unique=True, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    enterprise = relationship("Enterprise", back_populates="invite_codes")
+    created_by_user = relationship("User", back_populates="invite_codes_created")
+
+
 class Dataset(Base):
     __tablename__ = "datasets"
 
     id = Column(Integer, primary_key=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     description = Column(String(1024), nullable=True)
     query_context = Column(JSON, nullable=True)
@@ -36,6 +85,7 @@ class Dataset(Base):
     )
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    enterprise = relationship("Enterprise", back_populates="datasets")
     columns = relationship("DatasetColumn", back_populates="dataset", cascade="all, delete-orphan")
     rows = relationship("DatasetRow", back_populates="dataset", cascade="all, delete-orphan")
 
@@ -74,4 +124,4 @@ class DatasetRow(Base):
     )
 
 
-__all__ = ["Base", "Dataset", "DatasetColumn", "DatasetRow"]
+__all__ = ["Base", "Dataset", "DatasetColumn", "DatasetRow", "Enterprise", "User", "InviteCode", "UserRole"]

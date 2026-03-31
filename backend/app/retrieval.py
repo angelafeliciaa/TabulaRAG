@@ -289,14 +289,23 @@ def _normalize_dataset_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
-def _list_dataset_summaries() -> List[Dict[str, Any]]:
+def _list_dataset_summaries(enterprise_id: Optional[int] = None) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
-        rows = db.execute(
-            text(
-                "SELECT id, name, description, source_filename, row_count, column_count, created_at "
-                "FROM datasets WHERE is_index_ready = TRUE ORDER BY id DESC"
-            )
-        ).fetchall()
+        if enterprise_id is not None:
+            rows = db.execute(
+                text(
+                    "SELECT id, name, description, source_filename, row_count, column_count, created_at "
+                    "FROM datasets WHERE is_index_ready = TRUE AND enterprise_id = :eid ORDER BY id DESC"
+                ),
+                {"eid": enterprise_id},
+            ).fetchall()
+        else:
+            rows = db.execute(
+                text(
+                    "SELECT id, name, description, source_filename, row_count, column_count, created_at "
+                    "FROM datasets WHERE is_index_ready = TRUE ORDER BY id DESC"
+                )
+            ).fetchall()
 
     summaries: List[Dict[str, Any]] = []
     for row in rows:
@@ -358,8 +367,9 @@ def resolve_dataset_context(
     dataset_id: Optional[int],
     dataset_name: Optional[str],
     question: str,
+    enterprise_id: Optional[int] = None,
 ) -> Tuple[int, Dict[str, Any], Optional[str]]:
-    summaries = _list_dataset_summaries()
+    summaries = _list_dataset_summaries(enterprise_id=enterprise_id)
     if not summaries:
         raise ValueError("No ingested tables found. Upload a CSV/TSV first.")
 
