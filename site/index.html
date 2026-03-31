@@ -309,16 +309,14 @@
       <div class="terminal-dot" style="background:#28c840"></div>
     </div>
     <div class="terminal-body">
+      <div class="out"><span class="comment">// .cursor/mcp.json</span></div>
       <div class="out">{</div>
-      <div class="out">&nbsp; <span class="key">"dataset_id"</span>: <span class="num">1</span>,</div>
-      <div class="out">&nbsp; <span class="key">"name"</span>: <span class="str">"q1_sales"</span>,</div>
-      <div class="out">&nbsp; <span class="key">"rows"</span>: <span class="num">48201</span>,</div>
-      <div class="out">&nbsp; <span class="key">"columns"</span>: <span class="num">12</span></div>
+      <div class="out">&nbsp; <span class="key">"mcpServers"</span>: {</div>
+      <div class="out">&nbsp; &nbsp; <span class="key">"tabularag"</span>: {</div>
+      <div class="out">&nbsp; &nbsp; &nbsp; <span class="key">"url"</span>: <span class="str">"http://127.0.0.1:8000/mcp"</span></div>
+      <div class="out">&nbsp; &nbsp; }</div>
+      <div class="out">&nbsp; }</div>
       <div class="out">}</div>
-      <div class="out">&nbsp;</div>
-      <div class="out"><span class="ok">Indexing vectors...</span> <span class="num">48201/48201</span> <span class="ok">ready</span></div>
-      <div class="out">&nbsp;</div>
-      <div><span class="prompt">$</span> <span class="cursor"></span></div>
     </div>
   </div>
 </div>
@@ -421,18 +419,18 @@
         </tr>
         <tr>
           <td><span class="badge badge-post">POST</span></td>
-          <td><code>/semantic_query</code></td>
-          <td>Semantic search with cell citations</td>
+          <td><code>/tables/{id}/rows_by_indices</code></td>
+          <td>Fetch specific rows by index list</td>
         </tr>
         <tr>
           <td><span class="badge badge-post">POST</span></td>
-          <td><code>/aggregate</code></td>
-          <td>SUM, AVG, COUNT with group-by</td>
+          <td><code>/query</code></td>
+          <td>Unified query &mdash; semantic search, aggregate, or filter</td>
         </tr>
         <tr>
-          <td><span class="badge badge-post">POST</span></td>
-          <td><code>/filter</code></td>
-          <td>Advanced row filtering</td>
+          <td><span class="badge badge-mcp">MCP</span></td>
+          <td><code>/mcp</code></td>
+          <td>Streamable HTTP MCP server endpoint</td>
         </tr>
       </tbody>
     </table>
