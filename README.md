@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>A fast-ingesting tabular data MCP RAG tool backed with cell citations.</strong><br/>
-  Upload a CSV or TSV, then query it in natural language. Results include cell-level citations so you can trace exactly where each answer came from.
+  Upload a CSV or TSV, then query it in natural language. Results include cell-level citations so you can trace exactly where each answer came from. We also have multi-role access where admin users can add, delete, edit datasets as well as invite users to their enterprise/organization via invite codes. 
 </p>
 
 <p align="center">
