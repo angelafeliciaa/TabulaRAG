@@ -38,7 +38,7 @@ class UpdateRoleRequest(BaseModel):
     role: UserRole
 
 
-@router.post("")
+@router.post("", include_in_schema=False)
 def create_enterprise(body: CreateEnterpriseRequest, current_user: User = Depends(require_auth)):
     name = body.name.strip()
     if not name:
@@ -70,7 +70,7 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: User = Depend
         }
 
 
-@router.post("/join")
+@router.post("/join", include_in_schema=False)
 def join_enterprise(body: JoinEnterpriseRequest, current_user: User = Depends(require_auth)):
     code_str = (body.code or "").strip().upper()
     if not code_str:
@@ -103,7 +103,7 @@ def join_enterprise(body: JoinEnterpriseRequest, current_user: User = Depends(re
         }
 
 
-@router.post("/invite-codes")
+@router.post("/invite-codes", include_in_schema=False)
 def create_invite_code(current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
@@ -128,7 +128,7 @@ def create_invite_code(current_user: User = Depends(require_admin)):
         }
 
 
-@router.get("/invite-codes")
+@router.get("/invite-codes", include_in_schema=False)
 def list_invite_codes(current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
@@ -152,7 +152,7 @@ def list_invite_codes(current_user: User = Depends(require_admin)):
         ]
 
 
-@router.delete("/invite-codes/{code}")
+@router.delete("/invite-codes/{code}", include_in_schema=False)
 def revoke_invite_code(code: str, current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
@@ -173,7 +173,7 @@ def revoke_invite_code(code: str, current_user: User = Depends(require_admin)):
     return {"revoked": code_str}
 
 
-@router.get("/members")
+@router.get("/members", include_in_schema=False)
 def list_members(current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
@@ -196,7 +196,7 @@ def list_members(current_user: User = Depends(require_admin)):
         ]
 
 
-@router.patch("/members/{user_id}/role")
+@router.patch("/members/{user_id}/role", include_in_schema=False)
 def update_member_role(user_id: int, body: UpdateRoleRequest, current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
@@ -218,7 +218,7 @@ def update_member_role(user_id: int, body: UpdateRoleRequest, current_user: User
         }
 
 
-@router.delete("/members/{user_id}")
+@router.delete("/members/{user_id}", include_in_schema=False)
 def remove_member(user_id: int, current_user: User = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
