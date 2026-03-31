@@ -15,13 +15,14 @@ os.environ.setdefault("API_KEY", "test-key")
 
 import app.db as app_db
 import app.main as app_main
+import app.routes_tables as app_routes_tables
 from app.models import Base
 
 @pytest.fixture(scope="session")
 def test_engine():
     engine = create_engine(
         #use sqlite:///.test_debug.db" if you want to see the contents of the DB after tests run. Use DB Browswer for SQLite and open test_debug.db
-        # "sqlite:///./test_debug.db", 
+        # "sqlite:///./test_debug.db",
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,  # forces all connections to share the same in-memory DB
@@ -29,6 +30,7 @@ def test_engine():
 
     app_db.engine = engine
     app_main.engine = engine
+    app_routes_tables.engine = engine
     app_db.SessionLocal.configure(bind=engine)
     app_main.SessionLocal.configure(bind=engine)
 

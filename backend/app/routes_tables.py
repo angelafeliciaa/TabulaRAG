@@ -3,7 +3,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -30,6 +30,8 @@ from app.normalization import (
     strip_internal_fields,
 )
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
+from app.auth import require_admin, require_auth
+from app.models import Dataset, DatasetColumn, DatasetRow, User
 
 router = APIRouter()
 
@@ -446,11 +448,14 @@ def _list_tables_payload(
     include_pending: bool,
     sample_rows: int,
     limit: Optional[int],
+    enterprise_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     with SessionLocal() as db:
         query = select(Dataset).order_by(Dataset.id.desc())
         if not include_pending:
             query = query.where(Dataset.is_index_ready.is_(True))
+        if enterprise_id is not None:
+            query = query.where(Dataset.enterprise_id == enterprise_id)
         if limit is not None:
             query = query.limit(limit)
         datasets = db.execute(query).scalars().all()
@@ -473,6 +478,16 @@ def _list_tables_payload(
             )
             items.append(item)
         return items
+
+
+def _get_dataset_or_404(db, dataset_id: int, enterprise_id: Optional[int]) -> Dataset:
+    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    if enterprise_id is not None:
+        stmt = stmt.where(Dataset.enterprise_id == enterprise_id)
+    dataset = db.execute(stmt).scalar_one_or_none()
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Table not found")
+    return dataset
 
 
 def _delete_collection_safe(dataset_id: int) -> None:
@@ -506,21 +521,17 @@ def list_tables(
         le=200,
         description="Optional cap on number of datasets returned. If omitted, returns all ready datasets.",
     ),
+    current_user: User = Depends(require_auth),
 ):
     return _list_tables_payload(
         include_pending=include_pending,
         sample_rows=3,
         limit=limit,
+        enterprise_id=current_user.enterprise_id,
     )
 
 
-@router.get(
-    "/tables/{dataset_id}/columns",
-    summary="List all columns for a dataset",
-    description="Returns column names and indexes for a dataset. Always call this to understand the data structure and actual column names before querying.",
-    include_in_schema=False,
-)
-def get_cols_for_dataset(dataset_id: int):
+def _get_cols_payload(dataset_id: int) -> dict:
     with SessionLocal() as db:
         dataset = db.execute(
             select(Dataset).where(Dataset.id == dataset_id)
@@ -551,6 +562,18 @@ def get_cols_for_dataset(dataset_id: int):
     }
 
 
+@router.get(
+    "/tables/{dataset_id}/columns",
+    summary="List all columns for a dataset",
+    description="Returns column names and indexes for a dataset. Always call this to understand the data structure and actual column names before querying.",
+    include_in_schema=False,
+)
+def get_cols_for_dataset(dataset_id: int, current_user: User = Depends(require_auth)):
+    with SessionLocal() as db:
+        _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+    return _get_cols_payload(dataset_id)
+
+
 @router.post(
     "/tables/{dataset_id}/rows_by_indices",
     summary="Fetch dataset rows by row_index list",
@@ -560,13 +583,11 @@ def get_cols_for_dataset(dataset_id: int):
     ),
     include_in_schema=False,
 )
-def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest):
+def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest, current_user: User = Depends(require_auth)):
     ordered_indices = list(body.row_indices)
     unique_set = set(ordered_indices)
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if dataset is None:
-            raise HTTPException(status_code=404, detail="Dataset not found.")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
 
         columns_meta = (
             db.execute(
@@ -686,11 +707,10 @@ def get_table_slice(
         default=None,
         description="When set, only rows where any cell (original or normalized value) contains this string (case-insensitive) are returned. Pagination applies to the filtered set.",
     ),
+    current_user: User = Depends(require_auth),
 ):
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
 
         search_trimmed = search.strip() if search else None
         like_pattern = _slice_search_like_pattern(search_trimmed) if search_trimmed else None
@@ -812,9 +832,14 @@ def get_table_slice(
 
 
 @router.get("/tables/index-status", include_in_schema=False)
-def list_index_status(dataset_id: Optional[List[int]] = Query(default=None)):
+def list_index_status(
+    dataset_id: Optional[List[int]] = Query(default=None),
+    current_user: User = Depends(require_auth),
+):
     with SessionLocal() as db:
         query = select(Dataset.id, Dataset.row_count)
+        if current_user.enterprise_id is not None:
+            query = query.where(Dataset.enterprise_id == current_user.enterprise_id)
         if dataset_id:
             query = query.where(Dataset.id.in_(dataset_id))
         dataset_rows = db.execute(query.order_by(Dataset.id.desc())).all()
@@ -880,11 +905,9 @@ def list_index_status(dataset_id: Optional[List[int]] = Query(default=None)):
 
 
 @router.delete("/tables/{dataset_id}", include_in_schema=False)
-def delete_table(dataset_id: int, background_tasks: BackgroundTasks):
+def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_user: User = Depends(require_admin)):
     with SessionLocal() as db:
-        exists = db.execute(select(Dataset.id).where(Dataset.id == dataset_id)).first()
-        if not exists:
-            raise HTTPException(status_code=404, detail="Table not found")
+        _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
         # Use direct SQL deletes to avoid expensive ORM cascade object loading.
         db.execute(delete(DatasetRow).where(DatasetRow.dataset_id == dataset_id))
         db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id == dataset_id))
@@ -896,11 +919,9 @@ def delete_table(dataset_id: int, background_tasks: BackgroundTasks):
 
 
 @router.patch("/tables/{dataset_id}", include_in_schema=False)
-def rename_table(dataset_id: int, body: RenameRequest):
+def rename_table(dataset_id: int, body: RenameRequest, current_user: User = Depends(require_admin)):
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
         normalized_name = normalize_dataset_name_or_raise(body.name)
         target_key = dataset_name_collision_key(normalized_name)
         existing = db.execute(
@@ -933,6 +954,7 @@ def patch_table_row_cell(
     dataset_id: int,
     row_index: int,
     body: RowCellUpdateRequest,
+    current_user: User = Depends(require_auth),
 ):
     if row_index < 0:
         raise HTTPException(status_code=400, detail="row_index must be non-negative")
@@ -944,9 +966,7 @@ def patch_table_row_cell(
     new_row_data: Optional[Dict[str, Any]] = None
 
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
 
         columns = (
             db.execute(
@@ -1013,7 +1033,7 @@ def patch_table_row_cell(
 
 
 @router.patch("/tables/{dataset_id}/columns", include_in_schema=False)
-def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
+def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_user: User = Depends(require_auth)):
     old_column = (body.column or "").strip()
     if not old_column:
         raise HTTPException(status_code=400, detail="column is required")
@@ -1025,9 +1045,7 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
     new_column = normalize_headers([requested_name])[0]
 
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
 
         columns = (
             db.execute(
@@ -1100,12 +1118,10 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest):
 
 
 @router.patch("/tables/{dataset_id}/description", include_in_schema=False)
-def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest):
+def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest, current_user: User = Depends(require_admin)):
     normalized_description = _normalize_dataset_description(body.description)
     with SessionLocal() as db:
-        dataset = db.get(Dataset, dataset_id)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Table not found")
+        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
         dataset.description = normalized_description
         db.commit()
         return {

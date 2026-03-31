@@ -12,13 +12,13 @@ from app.auth import _decode_jwt, create_jwt, require_auth, JWT_SECRET, JWT_ALGO
 # ── helpers ────────────────────────────────────────────────────────
 
 
-def _github_user(**kwargs) -> dict:
-    """Create a GitHub user dict for testing."""
+def _google_user(**kwargs) -> dict:
+    """Create a Google userinfo dict for testing."""
     defaults = {
-        "id": 1,
-        "login": "octocat",
+        "id": "1",
+        "email": "octocat@example.com",
         "name": "Octo Cat",
-        "avatar_url": "https://example.com/avatar.png",
+        "picture": "https://example.com/avatar.png",
     }
     defaults.update(kwargs)
     return defaults
@@ -28,21 +28,21 @@ def _github_user(**kwargs) -> dict:
 
 
 def test_create_and_decode_jwt():
-    user = _github_user()
+    user = _google_user()
     token = create_jwt(user)
     claims = _decode_jwt(token)
     assert claims is not None
     assert claims["sub"] == "1"
-    assert claims["login"] == "octocat"
+    assert claims["login"] == "octocat@example.com"
     assert claims["name"] == "Octo Cat"
     assert claims["avatar_url"] == "https://example.com/avatar.png"
 
 
-def test_create_jwt_uses_login_as_name_fallback():
-    user = _github_user(name=None)
+def test_create_jwt_uses_email_as_name_fallback():
+    user = _google_user(name=None)
     token = create_jwt(user)
     claims = _decode_jwt(token)
-    assert claims["name"] == "octocat"
+    assert claims["name"] == "octocat@example.com"
 
 
 def test_decode_jwt_invalid_token():
@@ -78,19 +78,50 @@ def test_require_auth_missing_credentials():
 
 
 def test_require_auth_valid_api_key():
+    from app.models import UserRole
     cred = MagicMock()
     cred.credentials = os.environ.get("API_KEY", "test-key")
     result = require_auth(credentials=cred)
-    assert result is None  # returns None on success
+    assert result.google_id == "api_key"
+    assert result.role == UserRole.admin
 
 
 def test_require_auth_valid_jwt():
-    user = _github_user(id=99)
-    token = create_jwt(user)
+    from app.models import User, UserRole
+    google_user = _google_user(id="99")
+    token = create_jwt(google_user)
     cred = MagicMock()
     cred.credentials = token
-    result = require_auth(credentials=cred)
-    assert result is None  # returns None on success
+
+    mock_user = User(google_id="99", login="octocat@example.com", role=UserRole.querier)
+    mock_db = MagicMock()
+    mock_db.execute.return_value.scalar_one_or_none.return_value = mock_user
+    mock_db.__enter__ = MagicMock(return_value=mock_db)
+    mock_db.__exit__ = MagicMock(return_value=False)
+
+    with patch("app.auth.SessionLocal", return_value=mock_db):
+        result = require_auth(credentials=cred)
+
+    assert result.google_id == "99"
+
+
+def test_require_auth_user_not_found():
+    from fastapi import HTTPException
+    google_user = _google_user(id="999")
+    token = create_jwt(google_user)
+    cred = MagicMock()
+    cred.credentials = token
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.scalar_one_or_none.return_value = None
+    mock_db.__enter__ = MagicMock(return_value=mock_db)
+    mock_db.__exit__ = MagicMock(return_value=False)
+
+    with patch("app.auth.SessionLocal", return_value=mock_db):
+        with pytest.raises(HTTPException) as exc_info:
+            require_auth(credentials=cred)
+    assert exc_info.value.status_code == 401
+    assert "not found" in exc_info.value.detail
 
 
 def test_require_auth_invalid_token():
@@ -103,21 +134,21 @@ def test_require_auth_invalid_token():
     assert "Invalid" in exc_info.value.detail
 
 
-# ── exchange_github_code ──────────────────────────────────────────
+# ── exchange_google_code ──────────────────────────────────────────
 
 
-def test_exchange_github_code_not_configured():
-    from app.auth import exchange_github_code
+def test_exchange_google_code_not_configured():
+    from app.auth import exchange_google_code
     from fastapi import HTTPException
-    with patch("app.auth.GITHUB_CLIENT_ID", ""), patch("app.auth.GITHUB_CLIENT_SECRET", ""):
+    with patch("app.auth.GOOGLE_CLIENT_ID", ""), patch("app.auth.GOOGLE_CLIENT_SECRET", ""):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(exchange_github_code("some-code"))
+            asyncio.run(exchange_google_code("some-code", "https://example.com/callback"))
         assert exc_info.value.status_code == 500
         assert "not configured" in exc_info.value.detail
 
 
-def test_exchange_github_code_token_exchange_fails():
-    from app.auth import exchange_github_code
+def test_exchange_google_code_token_exchange_fails():
+    from app.auth import exchange_google_code
     from fastapi import HTTPException
 
     mock_resp = MagicMock()
@@ -128,16 +159,16 @@ def test_exchange_github_code_token_exchange_fails():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.auth.GITHUB_CLIENT_ID", "id"), \
-         patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
+    with patch("app.auth.GOOGLE_CLIENT_ID", "id"), \
+         patch("app.auth.GOOGLE_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(exchange_github_code("bad-code"))
+            asyncio.run(exchange_google_code("bad-code", "https://example.com/callback"))
         assert exc_info.value.status_code == 502
 
 
-def test_exchange_github_code_no_access_token():
-    from app.auth import exchange_github_code
+def test_exchange_google_code_no_id_token():
+    from app.auth import exchange_google_code
     from fastapi import HTTPException
 
     mock_resp = MagicMock()
@@ -149,59 +180,62 @@ def test_exchange_github_code_no_access_token():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.auth.GITHUB_CLIENT_ID", "id"), \
-         patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
+    with patch("app.auth.GOOGLE_CLIENT_ID", "id"), \
+         patch("app.auth.GOOGLE_CLIENT_SECRET", "secret"), \
          patch("app.auth.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(exchange_github_code("bad-code"))
+            asyncio.run(exchange_google_code("bad-code", "https://example.com/callback"))
         assert exc_info.value.status_code == 401
         assert "bad code" in exc_info.value.detail
 
 
-def test_exchange_github_code_user_fetch_fails():
-    from app.auth import exchange_github_code
+def test_exchange_google_code_invalid_id_token():
+    from app.auth import exchange_google_code
     from fastapi import HTTPException
 
-    token_resp = MagicMock()
-    token_resp.status_code = 200
-    token_resp.json.return_value = {"access_token": "gho_abc123"}
-
-    user_resp = MagicMock()
-    user_resp.status_code = 403
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id_token": "bad.id.token"}
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=token_resp)
-    mock_client.get = AsyncMock(return_value=user_resp)
+    mock_client.post = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.auth.GITHUB_CLIENT_ID", "id"), \
-         patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
-         patch("app.auth.httpx.AsyncClient", return_value=mock_client):
+    with patch("app.auth.GOOGLE_CLIENT_ID", "id"), \
+         patch("app.auth.GOOGLE_CLIENT_SECRET", "secret"), \
+         patch("app.auth.httpx.AsyncClient", return_value=mock_client), \
+         patch("app.auth.google_id_token.verify_oauth2_token", side_effect=ValueError("token invalid")):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(exchange_github_code("good-code"))
-        assert exc_info.value.status_code == 502
+            asyncio.run(exchange_google_code("bad-code", "https://example.com/callback"))
+        assert exc_info.value.status_code == 401
+        assert "Invalid Google ID token" in exc_info.value.detail
 
 
-def test_exchange_github_code_success():
-    from app.auth import exchange_github_code
+def test_exchange_google_code_success():
+    from app.auth import exchange_google_code
 
-    token_resp = MagicMock()
-    token_resp.status_code = 200
-    token_resp.json.return_value = {"access_token": "gho_abc123"}
-
-    user_resp = MagicMock()
-    user_resp.status_code = 200
-    user_resp.json.return_value = {"id": 1, "login": "octocat", "name": "Octo", "avatar_url": ""}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id_token": "valid.id.token"}
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=token_resp)
-    mock_client.get = AsyncMock(return_value=user_resp)
+    mock_client.post = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.auth.GITHUB_CLIENT_ID", "id"), \
-         patch("app.auth.GITHUB_CLIENT_SECRET", "secret"), \
-         patch("app.auth.httpx.AsyncClient", return_value=mock_client):
-        result = asyncio.run(exchange_github_code("good-code"))
-        assert result["login"] == "octocat"
+    fake_claims = {
+        "sub": "1",
+        "email": "octocat@example.com",
+        "name": "Octo",
+        "picture": "",
+    }
+
+    with patch("app.auth.GOOGLE_CLIENT_ID", "id"), \
+         patch("app.auth.GOOGLE_CLIENT_SECRET", "secret"), \
+         patch("app.auth.httpx.AsyncClient", return_value=mock_client), \
+         patch("app.auth.google_id_token.verify_oauth2_token", return_value=fake_claims):
+        result = asyncio.run(exchange_google_code("good-code", "https://example.com/callback"))
+
+    assert result["email"] == "octocat@example.com"
+    assert result["id"] == "1"
