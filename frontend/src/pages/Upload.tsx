@@ -1758,9 +1758,8 @@ export default function Upload({ valueMode }: UploadProps) {
         </div>
       </div>
 
-      <div
+      {userIsAdmin && <div
         ref={uploadPanelRef}
-        hidden={!userIsAdmin}
         className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
         role={isUploadQueueVisible ? "dialog" : undefined}
         aria-modal={isUploadQueueVisible ? "true" : undefined}
@@ -2168,7 +2167,7 @@ export default function Upload({ valueMode }: UploadProps) {
             {status}
           </p>
         )}
-      </div>
+      </div>}
 
       <div className="panel uploaded-tables-panel" aria-hidden={isUploadDialogOpen}>
         <div className="row tables-header-row">
