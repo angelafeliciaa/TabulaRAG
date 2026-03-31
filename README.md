@@ -67,6 +67,8 @@ The remaining variables in `.env.example` control embedding model behaviour and 
 
 ## Quick start
 
+1. Clone the repository.
+2. Start the server by running the commands below.
 ```bash
 cp .env.example .env
 ./scripts/dev-up.sh         # 2. build and start all services
@@ -111,6 +113,19 @@ TabulaRAG exposes two endpoints for integration with AI assistants and tool runn
 | --------------------- | ------------------------------------ |
 | OpenAPI               | `http://localhost:8000/openapi.json` |
 | MCP (Streamable HTTP) | `http://localhost:8000/mcp`          |
+
+## Recommended LLM application to connect to:
+**Cursor**
+1. Go to ‘Settings’ > ‘Tools & MCP’ > ‘Add Custom MCP’
+2. Copy and Paste the following in the mcp.json file that comes up, and replace localhost with your local machine IP address.
+```bash
+{"mcpServers":
+  { "tabularag":
+      { "url": "http://localhost:8000/mcp"}
+  }
+}
+
+``` 
 
 > **Note:** If your client is running outside the browser (e.g. inside Docker or a desktop app), replace `localhost` with your machine's local IP address. Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) to find it.
 
