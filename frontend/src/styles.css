@@ -361,6 +361,11 @@ h3 {
   overflow: hidden;
 }
 
+/* Queue view: menu must paint above the scrollable list and not be clipped by the panel. */
+.upload-panel.has-queue {
+  overflow: visible;
+}
+
 .upload-panel:not(.has-queue) {
   min-height: 180px;
 }
@@ -388,6 +393,8 @@ h3 {
 
 .upload-queue-toolbar {
   justify-content: flex-start;
+  position: relative;
+  z-index: 2;
 }
 
 .upload-add-more-button {
@@ -2298,6 +2305,19 @@ button.surface-btn.settings-workspace-admin-remove:focus-visible {
 .mcp-token-panel-intro-code {
   font-size: 0.9em;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.mcp-token-panel-config-snippet {
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
 }
 
 :root:not([data-theme="dark"]) .tables-search-input,

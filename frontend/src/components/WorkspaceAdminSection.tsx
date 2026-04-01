@@ -16,9 +16,11 @@ import {
 type WorkspaceAdminSectionProps = {
   workspaceId: number;
   isAdmin: boolean;
+  /** When false, admins can promote members but cannot demote another admin (owner only). */
+  viewerIsOwner: boolean;
 };
 
-export default function WorkspaceAdminSection({ workspaceId, isAdmin }: WorkspaceAdminSectionProps) {
+export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOwner }: WorkspaceAdminSectionProps) {
   const currentUser = getUser();
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -210,6 +212,8 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin }: Workspac
                 {members.map((member) => {
                   const isSelf = member.login === currentUser?.login;
                   const isWorkspaceOwner = member.role === "owner";
+                  const adminDemoteNeedsOwner =
+                    isAdmin && !viewerIsOwner && member.role === "admin" && !isSelf;
                   return (
                     <tr key={member.id}>
                       <td>
@@ -223,6 +227,13 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin }: Workspac
                       <td>
                         {isWorkspaceOwner ? (
                           <span className="settings-workspace-admin-muted">owner</span>
+                        ) : isAdmin && adminDemoteNeedsOwner ? (
+                          <span
+                            className="settings-workspace-admin-muted"
+                            title="Only the workspace owner can demote an admin to member"
+                          >
+                            admin
+                          </span>
                         ) : isAdmin ? (
                           <button
                             type="button"
