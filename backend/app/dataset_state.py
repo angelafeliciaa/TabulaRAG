@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect, text, update
+from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset
+from app.models import Dataset, EnterpriseMembership, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -150,6 +150,65 @@ def ensure_dataset_enterprise_id_column() -> None:
             )
         else:
             conn.execute(text("ALTER TABLE datasets ADD COLUMN enterprise_id INTEGER NULL"))
+
+
+def _coerce_user_role(value) -> UserRole:
+    if isinstance(value, UserRole):
+        return value
+    if value is None:
+        return UserRole.querier
+    return UserRole(str(value))
+
+
+def ensure_enterprise_memberships_and_last_active() -> None:
+    """Memberships table, users.last_active_enterprise_id, backfill from legacy user.enterprise_id/role."""
+    EnterpriseMembership.__table__.create(bind=app_db.engine, checkfirst=True)
+
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    user_cols = {c["name"] for c in inspector.get_columns("users")}
+    dialect = app_db.engine.dialect.name
+
+    if "last_active_enterprise_id" not in user_cols:
+        with app_db.engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN last_active_enterprise_id INTEGER NULL "
+                        "REFERENCES enterprises(id) ON DELETE SET NULL"
+                    )
+                )
+            else:
+                conn.execute(text("ALTER TABLE users ADD COLUMN last_active_enterprise_id INTEGER NULL"))
+
+    if "enterprise_id" not in user_cols:
+        return
+
+    with app_db.SessionLocal() as db:
+        legacy_rows = db.execute(
+            text("SELECT id, enterprise_id, role FROM users WHERE enterprise_id IS NOT NULL"),
+        ).all()
+        for row in legacy_rows:
+            uid, eid, role_raw = int(row[0]), int(row[1]), row[2]
+            role = _coerce_user_role(role_raw)
+            exists = db.execute(
+                select(EnterpriseMembership).where(
+                    EnterpriseMembership.user_id == uid,
+                    EnterpriseMembership.enterprise_id == eid,
+                ),
+            ).scalar_one_or_none()
+            if exists is None:
+                db.add(EnterpriseMembership(user_id=uid, enterprise_id=eid, role=role))
+
+        db.execute(
+            text(
+                "UPDATE users SET last_active_enterprise_id = enterprise_id "
+                "WHERE enterprise_id IS NOT NULL AND last_active_enterprise_id IS NULL",
+            ),
+        )
+        db.commit()
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:

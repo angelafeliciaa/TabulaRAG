@@ -7,7 +7,7 @@ from typing import Iterable, List, Optional, Tuple
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import insert, text, select
+from sqlalchemy import func, insert, text, select
 from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
@@ -16,6 +16,7 @@ from app.dataset_state import (
     ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
+    ensure_enterprise_memberships_and_last_active,
     set_dataset_index_ready,
 )
 from app.index_jobs import (
@@ -27,7 +28,7 @@ from app.index_jobs import (
 )
 from app.indexing import index_dataset
 from app.index_worker import IndexWorker
-from app.models import Base, Dataset, DatasetColumn, DatasetRow, User, UserRole
+from app.models import Base, Dataset, DatasetColumn, DatasetRow, EnterpriseMembership, User
 from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.routes_tables import router as tables_router
@@ -47,7 +48,15 @@ from app.normalization import (
     normalize_row_obj,
 )
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
-from app.auth import require_auth, require_admin, exchange_google_code, create_jwt, GOOGLE_CLIENT_ID
+from app.auth import (
+    AuthUser,
+    get_active_membership,
+    GOOGLE_CLIENT_ID,
+    mint_token_for_user,
+    require_admin,
+    require_auth,
+    exchange_google_code,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +73,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_description_column()
     ensure_dataset_query_context_column()
     ensure_dataset_enterprise_id_column()
+    ensure_enterprise_memberships_and_last_active()
     try:
         from app.embeddings import get_model
         get_model()
@@ -642,10 +652,14 @@ async def auth_google_callback(body: dict):
             user.login = login
         db.commit()
         db.refresh(user)
-        enterprise_id = user.enterprise_id
-        role = user.role.value
+        membership_count = db.execute(
+            select(func.count()).where(EnterpriseMembership.user_id == user.id),
+        ).scalar_one()
+        m = get_active_membership(db, user)
+        enterprise_id = m.enterprise_id if m else None
+        role = m.role.value if m else None
+        token = mint_token_for_user(db, user, google_user)
 
-    token = create_jwt(google_user, user)
     return {
         "token": token,
         "user": {
@@ -655,7 +669,7 @@ async def auth_google_callback(body: dict):
             "role": role,
             "enterprise_id": enterprise_id,
         },
-        "onboarding_required": enterprise_id is None,
+        "onboarding_required": membership_count == 0,
     }
 
 
@@ -665,8 +679,13 @@ def ingest_table(
     dataset_name: str | None = Form(None),
     dataset_description: str | None = Form(None),
     has_header: Optional[bool] = Form(None),
-    current_user: User = Depends(require_admin),
+    current_user: AuthUser = Depends(require_admin),
 ):
+    if current_user.google_id != "api_key" and current_user.enterprise_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Join or create a workspace before uploading.",
+        )
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
     validate_filename(file.filename)

@@ -1,6 +1,7 @@
 import hmac
 import os
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -12,7 +13,7 @@ from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import User, UserRole
+from app.models import EnterpriseMembership, User, UserRole
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -23,6 +24,17 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "168"))  # 7 days
 
 
+@dataclass
+class AuthUser:
+    """Authenticated identity plus active enterprise context (from DB)."""
+
+    id: int
+    google_id: str
+    login: str
+    enterprise_id: int | None
+    role: UserRole | None
+
+
 def _decode_jwt(token: str) -> dict | None:
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -30,15 +42,78 @@ def _decode_jwt(token: str) -> dict | None:
         return None
 
 
-def create_jwt(google_user: dict, user: User | None = None) -> str:
+def get_active_membership(db, user: User) -> EnterpriseMembership | None:
+    eid = user.last_active_enterprise_id
+    if eid is not None:
+        m = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == user.id,
+                EnterpriseMembership.enterprise_id == eid,
+            ),
+        ).scalar_one_or_none()
+        if m is not None:
+            return m
+    return db.execute(
+        select(EnterpriseMembership)
+        .where(EnterpriseMembership.user_id == user.id)
+        .order_by(EnterpriseMembership.id.asc()),
+    ).scalars().first()
+
+
+def mint_token_for_user(db, user: User, google_profile: dict | None = None) -> str:
+    """JWT reflecting current `last_active_enterprise_id` and membership role."""
+    profile = google_profile or {
+        "id": user.google_id,
+        "email": user.login,
+        "name": user.login,
+        "picture": "",
+    }
+    m = get_active_membership(db, user)
+    return create_jwt(
+        profile,
+        enterprise_id=m.enterprise_id if m else None,
+        role=m.role.value if m else None,
+    )
+
+
+def _auth_user_from_db_user(db, user: User) -> AuthUser:
+    m = get_active_membership(db, user)
+    if m is None:
+        return AuthUser(
+            id=user.id,
+            google_id=user.google_id,
+            login=user.login,
+            enterprise_id=None,
+            role=None,
+        )
+    if user.last_active_enterprise_id != m.enterprise_id:
+        user.last_active_enterprise_id = m.enterprise_id
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return AuthUser(
+        id=user.id,
+        google_id=user.google_id,
+        login=user.login,
+        enterprise_id=m.enterprise_id,
+        role=m.role,
+    )
+
+
+def create_jwt(
+    google_user: dict,
+    *,
+    enterprise_id: int | None = None,
+    role: str | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(google_user["id"]),
         "login": google_user["email"],
         "name": google_user.get("name") or google_user["email"],
         "avatar_url": google_user.get("picture", ""),
-        "enterprise_id": user.enterprise_id if user else None,
-        "role": user.role.value if user else None,
+        "enterprise_id": enterprise_id,
+        "role": role,
         "iat": now,
         "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
     }
@@ -47,7 +122,7 @@ def create_jwt(google_user: dict, user: User | None = None) -> str:
 
 def require_auth(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
-) -> User:
+) -> AuthUser:
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication")
 
@@ -56,7 +131,13 @@ def require_auth(
     # Try API key first — treated as a synthetic admin (used in tests/scripts)
     api_key = os.getenv("API_KEY", "").strip()
     if api_key and hmac.compare_digest(token, api_key):
-        return User(google_id="api_key", login="api_key", role=UserRole.admin)
+        return AuthUser(
+            id=0,
+            google_id="api_key",
+            login="api_key",
+            enterprise_id=None,
+            role=UserRole.admin,
+        )
 
     # Try JWT
     claims = _decode_jwt(token)
@@ -66,14 +147,12 @@ def require_auth(
     google_id = claims.get("sub")
     with SessionLocal() as db:
         user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
-
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found — please log in again")
-
-    return user
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found — please log in again")
+        return _auth_user_from_db_user(db, user)
 
 
-def require_admin(current_user: User = Depends(require_auth)) -> User:
+def require_admin(current_user: AuthUser = Depends(require_auth)) -> AuthUser:
     if current_user.role != UserRole.admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user

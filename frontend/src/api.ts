@@ -81,6 +81,57 @@ export async function exchangeGoogleCode(
   return data;
 }
 
+function applyEnterpriseSession(
+  token: string,
+  enterpriseId: number,
+  role: string,
+): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  const prev = getUser();
+  if (prev) {
+    localStorage.setItem(
+      USER_KEY,
+      JSON.stringify({
+        ...prev,
+        enterprise_id: enterpriseId,
+        role: role as AuthUser["role"],
+      }),
+    );
+  }
+}
+
+export interface WorkspaceSummary {
+  enterprise_id: number;
+  enterprise_name: string;
+  role: "admin" | "querier";
+  is_active: boolean;
+}
+
+export async function listMyWorkspaces(): Promise<WorkspaceSummary[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/me`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function switchWorkspace(
+  enterpriseId: number,
+): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ enterprise_id: enterpriseId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    token: string;
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+  };
+  applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  return data;
+}
+
 export async function createEnterprise(
   name: string,
 ): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
@@ -90,7 +141,16 @@ export async function createEnterprise(
     body: JSON.stringify({ name }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = (await res.json()) as {
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+    token?: string;
+  };
+  if (data.token) {
+    applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  }
+  return data;
 }
 
 export async function joinEnterprise(
@@ -102,7 +162,16 @@ export async function joinEnterprise(
     body: JSON.stringify({ code }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = (await res.json()) as {
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+    token?: string;
+  };
+  if (data.token) {
+    applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  }
+  return data;
 }
 
 export function isAdmin(): boolean {

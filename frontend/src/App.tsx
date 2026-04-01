@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { logout, getUser, isAuthenticated, isAdmin } from "./api";
+import {
+  getUser,
+  isAdmin,
+  isAuthenticated,
+  listMyWorkspaces,
+  logout,
+  switchWorkspace,
+  type WorkspaceSummary,
+} from "./api";
 import logo from "./images/logo-64.webp";
 import moonIcon from "./images/moon.png";
 import sunIcon from "./images/sun.png";
@@ -32,6 +40,39 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const location = useLocation();
+  const [sessionRev, setSessionRev] = useState(0);
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+
+  const user = getUser();
+  const workspaceKey = `${user?.enterprise_id ?? "none"}-${sessionRev}`;
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      setWorkspaces([]);
+      return;
+    }
+    const u = getUser();
+    if (!u?.enterprise_id) {
+      setWorkspaces([]);
+      return;
+    }
+    let cancelled = false;
+    listMyWorkspaces()
+      .then((list) => {
+        if (!cancelled) {
+          setWorkspaces(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaces([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRev, location.pathname]);
+
   useEffect(() => {
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
@@ -96,8 +137,6 @@ export default function App() {
     };
   }, []);
 
-  const user = getUser();
-
   function handleLogout() {
     logout();
     window.location.replace("/");
@@ -122,6 +161,32 @@ export default function App() {
             <img src={user.avatar_url} alt="" className="user-avatar" />
           )}
           <span className="user-name">{user?.name || user?.login}</span>
+          {workspaces.length > 0 && (
+            <select
+              className="workspace-select"
+              aria-label="Active workspace"
+              value={user?.enterprise_id ?? ""}
+              onChange={(e) => {
+                const id = Number(e.target.value);
+                if (!Number.isFinite(id) || id === user?.enterprise_id) {
+                  return;
+                }
+                void switchWorkspace(id).then(() => setSessionRev((r) => r + 1));
+              }}
+            >
+              {workspaces.map((w) => (
+                <option key={w.enterprise_id} value={w.enterprise_id}>
+                  {w.enterprise_name}
+                  {w.role === "admin" ? " · admin" : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          {user && (
+            <Link className="surface-btn" to="/onboarding" style={{ fontSize: "0.8rem", padding: "0.2rem 0.7rem" }}>
+              Add workspace
+            </Link>
+          )}
           {isAdmin() && (
             <Link className="surface-btn" to="/admin" style={{ fontSize: "0.8rem", padding: "0.2rem 0.7rem" }}>
               Admin
@@ -172,7 +237,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <Upload valueMode={valueMode} />
+                  <Upload key={workspaceKey} valueMode={valueMode} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -182,7 +247,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <AggregateTableView valueMode={valueMode} />
+                  <AggregateTableView key={workspaceKey} valueMode={valueMode} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -192,7 +257,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <TableView valueMode={valueMode} />
+                  <TableView key={workspaceKey} valueMode={valueMode} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -202,7 +267,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <HighlightView />
+                  <HighlightView key={workspaceKey} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -221,13 +286,16 @@ export default function App() {
               <AuthGuard>
                 <EnterpriseGuard>
                   <AdminGuard>
-                    <Admin />
+                    <Admin key={workspaceKey} />
                   </AdminGuard>
                 </EnterpriseGuard>
               </AuthGuard>
             }
           />
-          <Route path="/auth/callback" element={<AuthCallback onLogin={() => {}} />} />
+          <Route
+            path="/auth/callback"
+            element={<AuthCallback onLogin={() => setSessionRev((r) => r + 1)} />}
+          />
         </Routes>
       </main>
     </div>

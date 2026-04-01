@@ -17,9 +17,8 @@ from app.query_input_schemas import (
     UnifiedQueryRequest,
 )
 from app.retrieval import get_highlight, resolve_dataset_context, smart_query
-from app.routes_tables import _list_tables_payload, _get_cols_payload
-from app.auth import require_auth
-from app.models import User
+from app.routes_tables import _get_cols_payload, _list_tables_payload, _scoped_enterprise_id
+from app.auth import AuthUser, require_auth
 import app.db as app_db
 from app.db import SessionLocal
 from app.name_guard import sanitize_dataset_name
@@ -1487,9 +1486,9 @@ def unified_query_endpoint(
         ),
         openapi_examples=UNIFIED_QUERY_OPENAPI_EXAMPLES,
     ),
-    current_user: User = Depends(require_auth),
+    current_user: AuthUser = Depends(require_auth),
 ):
-    eid = current_user.enterprise_id
+    eid = _scoped_enterprise_id(current_user)
     if body.mode == "semantic" and body.semantic is not None:
         return _run_semantic_query(body.semantic, enterprise_id=eid)
     if body.mode == "aggregate" and body.aggregate is not None:
@@ -1506,8 +1505,8 @@ def unified_query_endpoint(
     response_model=SemanticResponse,
     include_in_schema=False,
 )
-def query_dataset(body: SemanticRequest, current_user: User = Depends(require_auth)):
-    return _run_semantic_query(body, enterprise_id=current_user.enterprise_id)
+def query_dataset(body: SemanticRequest, current_user: AuthUser = Depends(require_auth)):
+    return _run_semantic_query(body, enterprise_id=_scoped_enterprise_id(current_user))
 
 
 @router.post(
@@ -1515,8 +1514,8 @@ def query_dataset(body: SemanticRequest, current_user: User = Depends(require_au
     response_model=AggregateResponse,
     include_in_schema=False,
 )
-def aggregate_dataset(body: AggregateRequest, current_user: User = Depends(require_auth)):
-    return _run_aggregate_query(body, enterprise_id=current_user.enterprise_id)
+def aggregate_dataset(body: AggregateRequest, current_user: AuthUser = Depends(require_auth)):
+    return _run_aggregate_query(body, enterprise_id=_scoped_enterprise_id(current_user))
 
 
 @router.post(
@@ -1524,8 +1523,8 @@ def aggregate_dataset(body: AggregateRequest, current_user: User = Depends(requi
     response_model=FilterResponse,
     include_in_schema=False,
 )
-def filter_dataset(body: FilterRequest, current_user: User = Depends(require_auth)):
-    return _run_filter_query(body, enterprise_id=current_user.enterprise_id)
+def filter_dataset(body: FilterRequest, current_user: AuthUser = Depends(require_auth)):
+    return _run_filter_query(body, enterprise_id=_scoped_enterprise_id(current_user))
 
 
 @router.post(
@@ -1533,8 +1532,8 @@ def filter_dataset(body: FilterRequest, current_user: User = Depends(require_aut
     response_model=FilterRowIndicesResponse,
     include_in_schema=False,
 )
-def filter_row_indices(body: FilterRowIndicesRequest, current_user: User = Depends(require_auth)):
-    return _run_filter_row_indices_query(body, enterprise_id=current_user.enterprise_id)
+def filter_row_indices(body: FilterRowIndicesRequest, current_user: AuthUser = Depends(require_auth)):
+    return _run_filter_row_indices_query(body, enterprise_id=_scoped_enterprise_id(current_user))
 
 
 @router.get(
@@ -1542,7 +1541,7 @@ def filter_row_indices(body: FilterRowIndicesRequest, current_user: User = Depen
     response_model=HighlightResponse,
     include_in_schema=False,
 )
-def highlight_endpoint(highlight_id: str, current_user: User = Depends(require_auth)):
+def highlight_endpoint(highlight_id: str, current_user: AuthUser = Depends(require_auth)):
     result = get_highlight(highlight_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Highlight not found.")

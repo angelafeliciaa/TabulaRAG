@@ -36,6 +36,8 @@ def test_create_and_decode_jwt():
     assert claims["login"] == "octocat@example.com"
     assert claims["name"] == "Octo Cat"
     assert claims["avatar_url"] == "https://example.com/avatar.png"
+    assert claims.get("enterprise_id") is None
+    assert claims.get("role") is None
 
 
 def test_create_jwt_uses_email_as_name_fallback():
@@ -93,7 +95,7 @@ def test_require_auth_valid_jwt():
     cred = MagicMock()
     cred.credentials = token
 
-    mock_user = User(google_id="99", login="octocat@example.com", role=UserRole.querier)
+    mock_user = User(google_id="99", login="octocat@example.com")
     mock_db = MagicMock()
     mock_db.execute.return_value.scalar_one_or_none.return_value = mock_user
     mock_db.__enter__ = MagicMock(return_value=mock_db)

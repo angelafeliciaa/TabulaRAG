@@ -2,17 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createEnterprise, joinEnterprise, getUser } from "../api";
 
-function updateStoredUser(patch: { enterprise_id: number; role: string }) {
-  const raw = localStorage.getItem("tabularag_user");
-  if (!raw) return;
-  try {
-    const user = JSON.parse(raw);
-    localStorage.setItem("tabularag_user", JSON.stringify({ ...user, ...patch }));
-  } catch {
-    // ignore
-  }
-}
-
 export default function Onboarding() {
   const navigate = useNavigate();
   const user = getUser();
@@ -29,8 +18,7 @@ export default function Onboarding() {
     setCreateError(null);
     setCreateLoading(true);
     try {
-      const result = await createEnterprise(enterpriseName.trim());
-      updateStoredUser({ enterprise_id: result.enterprise_id, role: result.role });
+      await createEnterprise(enterpriseName.trim());
       navigate("/", { replace: true });
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create enterprise");
@@ -44,8 +32,7 @@ export default function Onboarding() {
     setJoinError(null);
     setJoinLoading(true);
     try {
-      const result = await joinEnterprise(inviteCode.trim().toUpperCase());
-      updateStoredUser({ enterprise_id: result.enterprise_id, role: result.role });
+      await joinEnterprise(inviteCode.trim().toUpperCase());
       navigate("/", { replace: true });
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Failed to join enterprise");
@@ -54,8 +41,15 @@ export default function Onboarding() {
     }
   }
 
+  const hasWorkspace = Boolean(user?.enterprise_id);
+
   return (
     <div className="login-page">
+      {hasWorkspace && (
+        <p className="login-subtitle" style={{ maxWidth: 560, marginBottom: "1.25rem", textAlign: "center" }}>
+          You can create another workspace or join one with an invite code. Use the menu switcher to move between workspaces.
+        </p>
+      )}
       <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap", justifyContent: "center", width: "100%", maxWidth: 760 }}>
         <div className="login-card" style={{ flex: 1, minWidth: 280 }}>
           <h2 className="login-title" style={{ fontSize: "1.25rem" }}>Create Enterprise</h2>
