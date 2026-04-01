@@ -9,7 +9,7 @@ import {
   type FilterResponse,
 } from "../api";
 import DataTable from "../components/DataTable";
-import { type ValueMode } from "../valueMode";
+import { useAppUi } from "../appUiContext";
 
 const MAX_MULTI_HIGHLIGHT_ROWS = 1000;
 const QUERY_ROWS_PER_PAGE = 100;
@@ -154,11 +154,8 @@ function formatFilterSummaryWithDisplayNames(
     .join(" ");
 }
 
-type AggregateTableProps = {
-  valueMode: ValueMode;
-};
-
-export default function VirtualTableView({ valueMode }: AggregateTableProps) {
+export default function VirtualTableView() {
+  const { valueMode } = useAppUi();
   const location = useLocation();
   const navigate = useNavigate();
   const [err, setErr] = useState<string | null>(null);

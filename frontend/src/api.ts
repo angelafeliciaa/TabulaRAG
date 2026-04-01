@@ -8,6 +8,7 @@ export interface AuthUser {
   name: string;
   avatar_url: string;
   role: "owner" | "admin" | "querier" | null;
+  enterprise_id: number | null;
 }
 
 export function getToken(): string | null {

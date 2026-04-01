@@ -28,8 +28,8 @@ import {
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
-import McpTokenPanel from "../components/McpTokenPanel";
-import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
+import { useAppUi } from "../appUiContext";
+import { flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
@@ -102,10 +102,6 @@ const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
   { value: "rows", label: "Most rows" },
   { value: "alphabet", label: "Alphabetical" },
 ];
-
-type UploadProps = {
-  valueMode: ValueMode;
-};
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -351,7 +347,8 @@ function smoothIndexStatus(
   };
 }
 
-export default function Upload({ valueMode }: UploadProps) {
+export default function Upload() {
+  const { valueMode } = useAppUi();
   const userIsAdmin = isAdmin();
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [showUploadQueue, setShowUploadQueue] = useState(false);
@@ -1758,8 +1755,6 @@ export default function Upload({ valueMode }: UploadProps) {
           Fast-ingesting tabular data RAG with cell-level citations
         </div>
       </div>
-
-      <McpTokenPanel />
 
       {userIsAdmin && <div
         ref={uploadPanelRef}

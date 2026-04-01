@@ -14,7 +14,8 @@ import {
 } from "../api";
 import DataTable from "../components/DataTable";
 import TableStatusPage from "../components/TableStatusPage";
-import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
+import { useAppUi } from "../appUiContext";
+import { flattenRowsByValueMode } from "../valueMode";
 
 type DateViewMode = "default" | "mm-dd-yyyy" | "mon-dd-yyyy";
 type DateMenuState = { x: number; y: number } | null;
@@ -74,10 +75,6 @@ const DATE_VIEW_OPTIONS: Array<{ value: DateViewMode; label: string }> = [
   { value: "mm-dd-yyyy", label: "MM-DD-YYYY" },
   { value: "mon-dd-yyyy", label: "Jan 12, 2002" },
 ];
-
-type TableViewProps = {
-  valueMode: ValueMode;
-};
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -367,7 +364,8 @@ function buildQueryContextTitle(returnPath: string): string | null {
   }
 }
 
-export default function TableView({ valueMode }: TableViewProps) {
+export default function TableView() {
+  const { valueMode } = useAppUi();
   const userIsAdmin = isAdmin();
   const { datasetId } = useParams();
   const location = useLocation();

@@ -1,17 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import {
-  getUser,
-  isAdmin,
-  isAuthenticated,
-  listMyWorkspaces,
-  logout,
-  switchWorkspace,
-  type WorkspaceSummary,
-} from "./api";
+import { AppUiProvider, useAppUi } from "./appUiContext";
+import { getUser, isAdmin, isAuthenticated } from "./api";
 import logo from "./images/logo-64.webp";
-import moonIcon from "./images/moon.png";
-import sunIcon from "./images/sun.png";
 import HighlightView from "./pages/HighlightView";
 import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
@@ -20,7 +11,7 @@ import AuthCallback from "./pages/AuthCallback";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
 import Admin from "./pages/Admin";
-import { type ValueMode } from "./valueMode";
+import Settings from "./pages/Settings";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Login />;
@@ -38,40 +29,12 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export default function App() {
+function AppContent() {
   const location = useLocation();
-  const [sessionRev, setSessionRev] = useState(0);
-  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const { sessionRev } = useAppUi();
 
   const user = getUser();
   const workspaceKey = `${user?.enterprise_id ?? "none"}-${sessionRev}`;
-
-  useEffect(() => {
-    if (!isAuthenticated()) {
-      setWorkspaces([]);
-      return;
-    }
-    const u = getUser();
-    if (!u?.enterprise_id) {
-      setWorkspaces([]);
-      return;
-    }
-    let cancelled = false;
-    listMyWorkspaces()
-      .then((list) => {
-        if (!cancelled) {
-          setWorkspaces(list);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setWorkspaces([]);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionRev, location.pathname, user?.enterprise_id]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -79,34 +42,11 @@ export default function App() {
     document.body.scrollTop = 0;
   }, [location.pathname, location.search]);
 
-  // Set tab title for the home page.
   useEffect(() => {
     if (location.pathname === "/") {
       document.title = "Home | TabulaRAG";
     }
   }, [location.pathname]);
-
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    const storedTheme = window.localStorage.getItem("theme");
-    if (storedTheme === "light" || storedTheme === "dark") {
-      return storedTheme;
-    }
-    return "light";
-  });
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    window.localStorage.setItem("theme", theme);
-  }, [theme]);
-  const [valueMode, setValueMode] = useState<ValueMode>(() => {
-    const storedValueMode = window.localStorage.getItem("valueMode");
-    if (storedValueMode === "normalized" || storedValueMode === "original") {
-      return storedValueMode;
-    }
-    return "normalized";
-  });
-  useEffect(() => {
-    window.localStorage.setItem("valueMode", valueMode);
-  }, [valueMode]);
 
   useEffect(() => {
     let pointerActive = false;
@@ -137,11 +77,6 @@ export default function App() {
     };
   }, []);
 
-  function handleLogout() {
-    logout();
-    window.location.replace("/");
-  }
-
   return (
     <div className="app-shell">
       {location.pathname !== "/" && (
@@ -155,86 +90,34 @@ export default function App() {
         Skip to main content
       </a>
 
-      <div className="top-bar">
-        <div className="user-menu">
-          {user?.avatar_url && (
-            <img src={user.avatar_url} alt="" className="user-avatar" />
-          )}
-          <span className="user-name">{user?.name || user?.login}</span>
-          {workspaces.length > 0 && (
-            <select
-              className="workspace-select"
-              aria-label="Active workspace"
-              value={user?.enterprise_id ?? ""}
-              onChange={(e) => {
-                const id = Number(e.target.value);
-                if (!Number.isFinite(id) || id === user?.enterprise_id) {
-                  return;
-                }
-                void switchWorkspace(id).then(() => setSessionRev((r) => r + 1));
-              }}
-            >
-              {workspaces.map((w) => (
-                <option key={w.enterprise_id} value={w.enterprise_id}>
-                  {w.enterprise_name}
-                  {w.role === "owner"
-                    ? " · owner"
-                    : w.role === "admin"
-                      ? " · admin"
-                      : w.role === "querier"
-                        ? " · querier"
-                        : ""}
-                </option>
-              ))}
-            </select>
-          )}
-          {user && (
-            <Link className="surface-btn" to="/onboarding" style={{ fontSize: "0.8rem", padding: "0.2rem 0.7rem" }}>
-              Add workspace
-            </Link>
-          )}
-          {isAdmin() && (
-            <Link className="surface-btn" to="/admin" style={{ fontSize: "0.8rem", padding: "0.2rem 0.7rem" }}>
-              Admin
-            </Link>
-          )}
-          <button
-            className="logout-btn"
-            onClick={handleLogout}
-            type="button"
-          >
-            Sign out
-          </button>
+      {isAuthenticated() && user && (
+        <div className="top-bar top-bar--compact">
+          <div className="user-menu user-menu--compact">
+            {user.avatar_url ? (
+              <img src={user.avatar_url} alt="" className="user-avatar" />
+            ) : (
+              <span className="user-avatar user-avatar--placeholder" aria-hidden>
+                {(user.name || user.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
+              </span>
+            )}
+            {user.enterprise_id ? (
+              <Link
+                className={`top-bar-settings-gear${location.pathname === "/settings" ? " top-bar-settings-gear--active" : ""}`}
+                to="/settings"
+                aria-label="Settings"
+                aria-current={location.pathname === "/settings" ? "page" : undefined}
+              >
+                <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
+                  <path
+                    fill="currentColor"
+                    d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96c-.52-.4-1.08-.73-1.69-.98l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.61.25-1.17.59-1.69.98l-2.39-.96a.5.5 0 0 0-.6.22l-1.92 3.32a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.52.4 1.08.73 1.69.98l.36 2.54c.03.24.24.42.49.42h3.84c.25 0 .46-.18.49-.42l.36-2.54c.61-.25 1.17-.59 1.69-.98l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"
+                  />
+                </svg>
+              </Link>
+            ) : null}
+          </div>
         </div>
-
-        <label className="global-value-mode-toggle">
-          <span className="global-value-mode-label">Values:</span>
-          <select
-            value={valueMode}
-            onChange={(event) => setValueMode(event.target.value as ValueMode)}
-            aria-label="Show original or normalized values"
-          >
-            <option value="normalized">Normalized</option>
-            <option value="original">Original</option>
-          </select>
-        </label>
-        <button
-          className="theme-toggle"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-          aria-pressed={theme === "dark"}
-          type="button"
-        >
-          <span className="sr-only">
-            {theme === "dark" ? "Dark theme enabled" : "Light theme enabled"}
-          </span>
-          <span className="toggle-track">
-            <span className="toggle-thumb">
-              <img src={theme === "dark" ? moonIcon : sunIcon} alt="" />
-            </span>
-          </span>
-        </button>
-      </div>
+      )}
 
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>
@@ -243,7 +126,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <Upload key={workspaceKey} valueMode={valueMode} />
+                  <Upload key={workspaceKey} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -253,7 +136,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <AggregateTableView key={workspaceKey} valueMode={valueMode} />
+                  <AggregateTableView key={workspaceKey} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -263,7 +146,7 @@ export default function App() {
             element={
               <AuthGuard>
                 <EnterpriseGuard>
-                  <TableView key={workspaceKey} valueMode={valueMode} />
+                  <TableView key={workspaceKey} />
                 </EnterpriseGuard>
               </AuthGuard>
             }
@@ -287,6 +170,16 @@ export default function App() {
             }
           />
           <Route
+            path="/settings"
+            element={
+              <AuthGuard>
+                <EnterpriseGuard>
+                  <Settings />
+                </EnterpriseGuard>
+              </AuthGuard>
+            }
+          />
+          <Route
             path="/admin"
             element={
               <AuthGuard>
@@ -300,10 +193,18 @@ export default function App() {
           />
           <Route
             path="/auth/callback"
-            element={<AuthCallback onLogin={() => setSessionRev((r) => r + 1)} />}
+            element={<AuthCallback />}
           />
         </Routes>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppUiProvider>
+      <AppContent />
+    </AppUiProvider>
   );
 }

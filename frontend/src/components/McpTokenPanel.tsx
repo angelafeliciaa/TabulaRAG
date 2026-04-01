@@ -8,7 +8,12 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-export default function McpTokenPanel() {
+type McpTokenPanelProps = {
+  /** Omit outer box when nested inside a `.panel` (e.g. Settings). */
+  embedded?: boolean;
+};
+
+export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) {
   const [status, setStatus] = useState<McpTokenStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,11 +33,13 @@ export default function McpTokenPanel() {
     load();
   }, [load]);
 
-  const mcpUrl = `${API_BASE.replace(/\/$/, "")}/mcp`;
+  const base = API_BASE.replace(/\/$/, "");
+  const mcpUrlHttp = `${base}/mcp`;
+  const mcpUrlSse = `${base}/sse`;
   const cursorSnippet = `{
   "mcpServers": {
     "tabularag": {
-      "url": "${mcpUrl}",
+      "url": "${mcpUrlHttp}",
       "headers": {
         "Authorization": "Bearer YOUR_TOKEN_HERE"
       }
@@ -79,18 +86,10 @@ export default function McpTokenPanel() {
   }
 
   return (
-    <section
-      className="mcp-token-panel"
-      style={{
-        maxWidth: 640,
-        margin: "0 auto 1.5rem",
-        padding: "1rem 1.25rem",
-        border: "1px solid var(--border)",
-        borderRadius: 8,
-        background: "var(--surface)",
-      }}
-    >
-      <h2 style={{ fontSize: "1rem", margin: "0 0 0.5rem" }}>MCP (Cursor &amp; tools)</h2>
+    <section className={`mcp-token-panel${embedded ? " mcp-token-panel--embedded" : ""}`}>
+      {!embedded ? (
+        <h2 className="mcp-token-panel-title">MCP (Cursor &amp; tools)</h2>
+      ) : null}
       <p className="small" style={{ margin: "0 0 0.75rem", opacity: 0.85 }}>
         Create a personal token for this workspace. It stops working if you leave the enterprise. The MCP endpoint
         requires this token (or the server API key). Paste the token into{" "}
@@ -157,9 +156,42 @@ export default function McpTokenPanel() {
               {cursorSnippet}
             </pre>
             <p style={{ margin: "0.5rem 0 0", opacity: 0.8 }}>
-              Replace <code>YOUR_TOKEN_HERE</code> with your token. MCP URL:{" "}
-              <code>{mcpUrl}</code>
+              Replace <code>YOUR_TOKEN_HERE</code> with your token. Prefer streamable HTTP:{" "}
+              <code>{mcpUrlHttp}</code>. If Cursor logs SSE / 404 errors, try the same headers with{" "}
+              <code>{mcpUrlSse}</code> (or <code>{base}/mcp/sse</code>).
             </p>
+          </details>
+          <details style={{ fontSize: "0.8125rem", marginTop: "0.65rem" }}>
+            <summary style={{ cursor: "pointer", marginBottom: "0.35rem" }}>
+              Tools not listed in chat? (Cursor)
+            </summary>
+            <ul
+              style={{
+                margin: "0.25rem 0 0",
+                paddingLeft: "1.15rem",
+                lineHeight: 1.5,
+                opacity: 0.88,
+              }}
+            >
+              <li>
+                MCP tools are attached <strong>per chat session</strong>. After fixing config, open a{" "}
+                <strong>new chat</strong> so the assistant sees TabularAG tools (e.g. listing tables).
+              </li>
+              <li>
+                In Cursor, open <strong>Settings → MCP</strong> and confirm <strong>tabularag</strong> is enabled and
+                shows as connected (no error). URL and Bearer token must match this workspace.
+              </li>
+              <li>
+                If you just added or changed the token: try <strong>Developer: Reload Window</strong> from the command
+                palette, or turn the TabularAG server <strong>off</strong> then <strong>on</strong> in MCP settings.
+              </li>
+              <li>
+                Errors like <strong>SSE</strong> + <strong>404</strong> + &quot;Invalid OAuth error response&quot;
+                usually mean the client probed an SSE path we did not expose. The server now serves SSE at{" "}
+                <code>/sse</code> and <code>/mcp/sse</code> as well as HTTP at <code>/mcp</code>; switch the config{" "}
+                <code>url</code> if needed (same <code>Authorization</code> header).
+              </li>
+            </ul>
           </details>
         </>
       )}

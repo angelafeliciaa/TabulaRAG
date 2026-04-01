@@ -248,7 +248,15 @@ def ensure_querier_role_and_migrate_member() -> None:
         if "users" in inspector.get_table_names():
             user_cols = {c["name"] for c in inspector.get_columns("users")}
         if "role" in user_cols:
-            conn.execute(text("UPDATE users SET role = 'querier' WHERE role = 'member'"))
+            if dialect == "postgresql":
+                # Compare as text so WHERE 'member' is not parsed as userrole (may not exist on enum).
+                conn.execute(
+                    text(
+                        "UPDATE users SET role = 'querier'::userrole WHERE role::text = 'member'",
+                    ),
+                )
+            else:
+                conn.execute(text("UPDATE users SET role = 'querier' WHERE role = 'member'"))
 
 
 def ensure_postgres_userrole_owner_enum() -> None:

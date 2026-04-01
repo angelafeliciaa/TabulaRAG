@@ -842,3 +842,7 @@ mcp = FastApiMCP(
     auth_config=AuthConfig(dependencies=[Depends(require_mcp_connection_auth)]),
 )
 mcp.mount_http()
+# Cursor and other clients often try SSE after streamable HTTP; without these routes they get 404
+# and mis-parse FastAPI's {"detail":"Not Found"} as an OAuth error response.
+mcp.mount_sse(mount_path="/sse")
+mcp.mount_sse(mount_path="/mcp/sse")

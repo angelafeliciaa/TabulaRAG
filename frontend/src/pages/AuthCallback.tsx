@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAppUi } from "../appUiContext";
 import { exchangeGoogleCode } from "../api";
 
-interface AuthCallbackProps {
-  onLogin: () => void;
-}
-
-export default function AuthCallback({ onLogin }: AuthCallbackProps) {
+export default function AuthCallback() {
+  const { bumpSession } = useAppUi();
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -18,7 +16,7 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
 
     exchangeGoogleCode(code, redirectUri)
       .then((data) => {
-        onLogin();
+        bumpSession();
         if (data.onboarding_required) {
           navigate("/onboarding", { replace: true });
         } else {
@@ -28,7 +26,7 @@ export default function AuthCallback({ onLogin }: AuthCallbackProps) {
       .catch(() => {
         setError("Google authentication failed. Please try again.");
       });
-  }, [code, onLogin, navigate, redirectUri]);
+  }, [code, bumpSession, navigate, redirectUri]);
 
   if (!code) {
     return (
