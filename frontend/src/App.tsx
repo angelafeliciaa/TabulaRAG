@@ -46,7 +46,7 @@ function workspaceRoleSuffix(role: WorkspaceSummary["role"]): string {
 
 function AppContent() {
   const location = useLocation();
-  const { sessionRev, bumpSession, theme, setTheme } = useAppUi();
+  const { sessionRev, bumpSession } = useAppUi();
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
 
   const user = getUser();
@@ -81,12 +81,12 @@ function AppContent() {
 
   useEffect(() => {
     if (!isAuthenticated()) {
-      setWorkspaces([]);
+      queueMicrotask(() => setWorkspaces([]));
       return;
     }
     const u = getUser();
     if (!u?.enterprise_id) {
-      setWorkspaces([]);
+      queueMicrotask(() => setWorkspaces([]));
       return;
     }
     let cancelled = false;
@@ -155,8 +155,10 @@ function AppContent() {
   }, [accountMenuOpen]);
 
   useEffect(() => {
-    setAccountMenuOpen(false);
-    setWorkspaceMenuOpen(false);
+    queueMicrotask(() => {
+      setAccountMenuOpen(false);
+      setWorkspaceMenuOpen(false);
+    });
   }, [location.pathname, location.search]);
 
   useEffect(() => {
@@ -375,31 +377,6 @@ function AppContent() {
           </div>
         </div>
       )}
-
-      {/* TEMP: global theme toggle for testing — remove when done */}
-      <button
-        type="button"
-        className="dev-theme-toggle"
-        aria-label={theme === "dark" ? "Switch to light mode (temporary test)" : "Switch to dark mode (temporary test)"}
-        title="Temporary theme toggle (testing only)"
-        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      >
-        {theme === "dark" ? (
-          <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true" focusable="false">
-            <path
-              fill="currentColor"
-              d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zm0-16a1 1 0 0 1 1 1v1a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1zm0 18a1 1 0 0 1-1-1v-1a1 1 0 1 1 2 0v1a1 1 0 0 1-1 1zM5.64 5.64a1 1 0 0 1 1.41 0l.71.71a1 1 0 0 1-1.41 1.41l-.71-.71a1 1 0 0 1 0-1.41zM18.36 18.36a1 1 0 0 1-1.41 0l-.71-.71a1 1 0 1 1 1.41-1.41l.71.71a1 1 0 0 1 0 1.41zM4 13a1 1 0 0 1-1-1 1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H4zm15-1a1 1 0 0 1 1 1 1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1zM7.05 16.95a1 1 0 0 1 0-1.41l.71-.71a1 1 0 1 1 1.41 1.41l-.71.71a1 1 0 0 1-1.41 0zM16.24 7.76a1 1 0 0 1 0 1.41l-.71.71a1 1 0 1 1-1.41-1.41l.71-.71a1 1 0 0 1 1.41 0z"
-            />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true" focusable="false">
-            <path
-              fill="currentColor"
-              d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
-            />
-          </svg>
-        )}
-      </button>
 
       <main id="main-content" className="content" tabIndex={-1}>
         <Routes>

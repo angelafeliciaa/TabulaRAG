@@ -1,3 +1,5 @@
+/* eslint-disable react-refresh/only-export-components */
+
 import {
   createContext,
   useCallback,
@@ -53,7 +55,7 @@ export function AppUiProvider({ children }: { children: ReactNode }) {
     const legacy = window.localStorage.getItem(`${VALUE_MODE_STORAGE_KEY}:${eid}`);
     if (legacy === "normalized" || legacy === "original") {
       window.localStorage.setItem(VALUE_MODE_STORAGE_KEY, legacy);
-      setValueMode(legacy);
+      queueMicrotask(() => setValueMode(legacy));
     }
   }, [sessionRev]);
 

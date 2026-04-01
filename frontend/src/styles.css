@@ -166,46 +166,6 @@ h3 {
   background-size: 24px 24px;
 }
 
-/* TEMP testing only — remove: global light/dark toggle (duplicates Settings until removed) */
-.dev-theme-toggle {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 9998;
-  width: 44px;
-  height: 44px;
-  margin: 0;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  border: 1px solid var(--surface-blur-border);
-  background: var(--surface-blur-bg-strong);
-  color: var(--text-muted);
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
-}
-
-:root[data-theme="dark"] .dev-theme-toggle {
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
-}
-
-.dev-theme-toggle:hover {
-  background: var(--surface-blur-bg);
-  border-color: var(--border-soft);
-  color: var(--text);
-}
-
-.dev-theme-toggle:focus-visible {
-  outline: 2px solid var(--brand-text, #2563eb);
-  outline-offset: 2px;
-}
-
 .skip-link {
   position: absolute;
   left: 16px;
