@@ -306,24 +306,39 @@ def ensure_enterprise_name_non_unique() -> None:
                 needs_rebuild = True
         if not needs_rebuild:
             return
-        with app_db.engine.begin() as conn:
+        # SQLite note: PRAGMA foreign_keys is a no-op inside a transaction.
+        # We need to issue it before beginning transactional DDL, and re-enable
+        # afterward, on the same connection.
+        with app_db.engine.connect() as conn:
             conn.execute(text("PRAGMA foreign_keys=OFF"))
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE enterprises__nq (
-                        id INTEGER NOT NULL,
-                        name VARCHAR(255) NOT NULL,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                        PRIMARY KEY (id)
+            trans = conn.begin()
+            try:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE enterprises__nq (
+                            id INTEGER NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            PRIMARY KEY (id)
+                        )
+                        """
+                    ),
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO enterprises__nq (id, name, created_at) "
+                        "SELECT id, name, created_at FROM enterprises"
                     )
-                    """
-                ),
-            )
-            conn.execute(text("INSERT INTO enterprises__nq (id, name, created_at) SELECT id, name, created_at FROM enterprises"))
-            conn.execute(text("DROP TABLE enterprises"))
-            conn.execute(text("ALTER TABLE enterprises__nq RENAME TO enterprises"))
-            conn.execute(text("PRAGMA foreign_keys=ON"))
+                )
+                conn.execute(text("DROP TABLE enterprises"))
+                conn.execute(text("ALTER TABLE enterprises__nq RENAME TO enterprises"))
+                trans.commit()
+            except Exception:
+                trans.rollback()
+                raise
+            finally:
+                conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def promote_legacy_admin_to_owner_per_enterprise() -> None:

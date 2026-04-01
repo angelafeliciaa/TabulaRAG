@@ -30,6 +30,15 @@ def test_workspace_name_not_unique():
         assert first.json()["enterprise_id"] != second.json()["enterprise_id"]
 
 
+def test_create_workspace_rejects_too_long_name():
+    token = _create_user_and_token(google_id="u_workspace_long_name", login="u_workspace_long_name@example.com")
+    too_long = "a" * 256
+    with TestClient(app_main.app) as c:
+        res = c.post("/enterprises", headers={"Authorization": f"Bearer {token}"}, json={"name": too_long})
+        assert res.status_code == 400, res.text
+        assert res.json().get("detail") == "Workspace name is too long"
+
+
 def test_members_visible_to_any_member_and_mcp_flag_updates():
     token = _create_user_and_token(google_id="u_members", login="u_members@example.com")
 

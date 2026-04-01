@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import CopyClipboardButton from "./CopyClipboardButton";
 import {
+  API_BASE,
   createOrRotateMcpToken,
   getMcpTokenStatus,
   revokeMcpToken,
   type McpTokenStatus,
 } from "../api";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 type McpTokenPanelProps = {
   /** Omit outer box when nested inside a `.panel` (e.g. Settings). */

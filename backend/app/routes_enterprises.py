@@ -292,7 +292,9 @@ def leave_current_enterprise(current_user: AuthUser = Depends(require_auth)):
 def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = Depends(require_auth)):
     name = body.name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Enterprise name cannot be empty")
+        raise HTTPException(status_code=400, detail="Workspace name cannot be empty")
+    if len(name) > 255:
+        raise HTTPException(status_code=400, detail="Workspace name is too long")
 
     with SessionLocal() as db:
         user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
