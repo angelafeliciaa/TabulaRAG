@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
     ensure_dataset_description_column,
+    ensure_dataset_enterprise_id_column,
     ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_index_ready_column()
     ensure_dataset_description_column()
     ensure_dataset_query_context_column()
+    ensure_dataset_enterprise_id_column()
     try:
         from app.embeddings import get_model
         get_model()
