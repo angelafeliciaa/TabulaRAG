@@ -157,7 +157,10 @@ def _coerce_user_role(value) -> UserRole:
         return value
     if value is None:
         return UserRole.querier
-    return UserRole(str(value))
+    s = str(value)
+    if s == "member":
+        return UserRole.querier
+    return UserRole(s)
 
 
 def ensure_enterprise_memberships_and_last_active() -> None:
@@ -213,6 +216,39 @@ def ensure_enterprise_memberships_and_last_active() -> None:
 
 def ensure_mcp_access_tokens_table() -> None:
     McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_querier_role_and_migrate_member() -> None:
+    """Ensure 'querier' exists on PostgreSQL enum; rewrite any 'member' rows to 'querier'."""
+    inspector = inspect(app_db.engine)
+    if "enterprise_memberships" not in inspector.get_table_names():
+        return
+    dialect = app_db.engine.dialect.name
+    if dialect == "postgresql":
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'querier'"))
+        except Exception:
+            try:
+                with app_db.engine.begin() as conn:
+                    conn.execute(text("ALTER TYPE userrole ADD VALUE 'querier'"))
+            except Exception:
+                pass
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(
+                text(
+                    "UPDATE enterprise_memberships SET role = 'querier'::userrole "
+                    "WHERE role::text = 'member'",
+                ),
+            )
+        else:
+            conn.execute(text("UPDATE enterprise_memberships SET role = 'querier' WHERE role = 'member'"))
+        user_cols: set[str] = set()
+        if "users" in inspector.get_table_names():
+            user_cols = {c["name"] for c in inspector.get_columns("users")}
+        if "role" in user_cols:
+            conn.execute(text("UPDATE users SET role = 'querier' WHERE role = 'member'"))
 
 
 def ensure_postgres_userrole_owner_enum() -> None:

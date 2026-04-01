@@ -199,7 +199,10 @@ def is_admin_capable(role: UserRole | None) -> bool:
 
 def require_admin(current_user: AuthUser = Depends(require_auth)) -> AuthUser:
     if not is_admin_capable(current_user.role):
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(
+            status_code=403,
+            detail="Owner or admin access required (queriers are read-only)",
+        )
     return current_user
 
 

@@ -8,7 +8,6 @@ export interface AuthUser {
   name: string;
   avatar_url: string;
   role: "owner" | "admin" | "querier" | null;
-  enterprise_id: number | null;
 }
 
 export function getToken(): string | null {
@@ -19,7 +18,12 @@ export function getUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AuthUser;
+    const u = JSON.parse(raw) as AuthUser & { role?: string | null };
+    if (String(u.role) === "member") {
+      u.role = "querier";
+      localStorage.setItem(USER_KEY, JSON.stringify(u));
+    }
+    return u as AuthUser;
   } catch {
     return null;
   }
@@ -182,6 +186,7 @@ export async function joinEnterprise(
   return data;
 }
 
+/** True for owner or admin (can upload and edit tables); queriers are read-only in the UI. */
 export function isAdmin(): boolean {
   const r = getUser()?.role;
   return r === "admin" || r === "owner";

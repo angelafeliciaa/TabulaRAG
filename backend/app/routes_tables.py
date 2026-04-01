@@ -966,7 +966,7 @@ def patch_table_row_cell(
     dataset_id: int,
     row_index: int,
     body: RowCellUpdateRequest,
-    current_user: AuthUser = Depends(require_auth),
+    current_user: AuthUser = Depends(require_admin),
 ):
     if row_index < 0:
         raise HTTPException(status_code=400, detail="row_index must be non-negative")
@@ -1045,7 +1045,7 @@ def patch_table_row_cell(
 
 
 @router.patch("/tables/{dataset_id}/columns", include_in_schema=False)
-def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_user: AuthUser = Depends(require_auth)):
+def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_user: AuthUser = Depends(require_admin)):
     old_column = (body.column or "").strip()
     if not old_column:
         raise HTTPException(status_code=400, detail="column is required")

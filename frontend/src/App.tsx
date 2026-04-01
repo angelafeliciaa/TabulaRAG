@@ -177,7 +177,13 @@ export default function App() {
               {workspaces.map((w) => (
                 <option key={w.enterprise_id} value={w.enterprise_id}>
                   {w.enterprise_name}
-                  {w.role === "owner" ? " · owner" : w.role === "admin" ? " · admin" : ""}
+                  {w.role === "owner"
+                    ? " · owner"
+                    : w.role === "admin"
+                      ? " · admin"
+                      : w.role === "querier"
+                        ? " · querier"
+                        : ""}
                 </option>
               ))}
             </select>
