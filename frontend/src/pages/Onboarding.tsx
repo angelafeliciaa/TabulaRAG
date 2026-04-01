@@ -73,7 +73,7 @@ export default function Onboarding() {
             className={`onboarding-tab${mode === "join" ? " onboarding-tab--active" : ""}`}
             onClick={() => setMode("join")}
           >
-            Join enterprise
+            Join workspace
           </button>
         </div>
 

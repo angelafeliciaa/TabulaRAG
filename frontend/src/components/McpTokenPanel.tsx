@@ -141,16 +141,7 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
           </div>
           <details style={{ fontSize: "0.8125rem" }}>
             <summary style={{ cursor: "pointer", marginBottom: "0.35rem" }}>Example Cursor MCP config</summary>
-            <pre
-              style={{
-                margin: 0,
-                padding: "0.75rem",
-                overflow: "auto",
-                borderRadius: 6,
-                background: "var(--bg-muted, #f4f4f5)",
-                fontSize: "0.72rem",
-              }}
-            >
+            <pre className="mcp-token-panel-config-snippet">
               {cursorSnippet}
             </pre>
             <p style={{ margin: "0.5rem 0 0", opacity: 0.8 }}>

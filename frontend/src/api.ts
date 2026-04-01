@@ -259,6 +259,23 @@ export async function renameWorkspace(name: string): Promise<{ enterprise_id: nu
   return res.json();
 }
 
+function fastApiErrorMessage(bodyText: string): string | null {
+  const t = bodyText.trim();
+  if (!t.startsWith("{")) return null;
+  try {
+    const j = JSON.parse(t) as { detail?: unknown };
+    const d = j.detail;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d) && d.length > 0) {
+      const first = d[0] as { msg?: string };
+      if (typeof first?.msg === "string") return first.msg;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 export async function joinEnterprise(
   code: string,
 ): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
@@ -267,7 +284,14 @@ export async function joinEnterprise(
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ code }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 404) throw new Error("Invalid invite code");
+    if (res.status === 409) {
+      throw new Error("You're already a member of this workspace.");
+    }
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to join workspace");
+  }
   const data = (await res.json()) as {
     enterprise_id: number;
     enterprise_name: string;

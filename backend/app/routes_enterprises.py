@@ -635,6 +635,12 @@ def update_member_role(user_id: int, body: UpdateRoleRequest, current_user: Auth
         if m.role == UserRole.owner:
             raise HTTPException(status_code=403, detail="Cannot change the enterprise owner's role here")
 
+        if body.role == UserRole.querier and m.role == UserRole.admin and current_user.role != UserRole.owner:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the workspace owner can demote an admin to member",
+            )
+
         m.role = body.role
         db.add(m)
         db.commit()

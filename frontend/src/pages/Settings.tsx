@@ -477,7 +477,7 @@ export default function Settings() {
                       <strong>
                         {activeWorkspace ? workspaceRoleLabel(activeWorkspace.role) : "—"}
                       </strong>
-                      {!isAdmin() ? " (read-only)" : null}
+                      {activeWorkspace?.role === "querier" ? " (read-only)" : null}
                     </span>
                   </div>
                 </div>
@@ -519,7 +519,11 @@ export default function Settings() {
                 ) : null}
 
                 {workspaceId != null ? (
-                  <WorkspaceAdminSection workspaceId={workspaceId} isAdmin={isAdmin()} />
+                  <WorkspaceAdminSection
+                    workspaceId={workspaceId}
+                    isAdmin={isAdmin()}
+                    viewerIsOwner={isOwner()}
+                  />
                 ) : null}
 
                 {!isOwner() && workspaceId != null && activeWorkspaceName ? (

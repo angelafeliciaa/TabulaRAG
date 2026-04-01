@@ -131,3 +131,60 @@ def test_owner_cannot_leave_workspace_member_can_leave():
         assert left["enterprise_id"] is None
         assert left["role"] is None
 
+
+def test_only_owner_can_demote_admin_to_member():
+    token = _create_user_and_token(google_id="u_demote_owner", login="owner@example.com")
+    with TestClient(app_main.app) as c:
+        created = c.post("/enterprises", headers={"Authorization": f"Bearer {token}"}, json={"name": "Org"})
+        assert created.status_code == 200, created.text
+        token_owner = created.json()["token"]
+        eid = created.json()["enterprise_id"]
+
+        with SessionLocal() as db:
+            admin_a = User(
+                google_id="u_demote_admin_a",
+                login="admin_a@example.com",
+                last_active_enterprise_id=eid,
+            )
+            admin_b = User(
+                google_id="u_demote_admin_b",
+                login="admin_b@example.com",
+                last_active_enterprise_id=eid,
+            )
+            db.add(admin_a)
+            db.add(admin_b)
+            db.flush()
+            admin_b_id = admin_b.id
+            db.add(
+                EnterpriseMembership(user_id=admin_a.id, enterprise_id=eid, role=UserRole.admin),
+            )
+            db.add(
+                EnterpriseMembership(user_id=admin_b_id, enterprise_id=eid, role=UserRole.admin),
+            )
+            db.commit()
+
+        token_admin_a = create_jwt(
+            {
+                "id": "u_demote_admin_a",
+                "email": "admin_a@example.com",
+                "name": "a",
+                "picture": "",
+            },
+        )
+
+        demote = c.patch(
+            f"/enterprises/members/{admin_b_id}/role",
+            headers={"Authorization": f"Bearer {token_admin_a}"},
+            json={"role": "querier"},
+        )
+        assert demote.status_code == 403, demote.text
+        assert demote.json()["detail"] == "Only the workspace owner can demote an admin to member"
+
+        ok = c.patch(
+            f"/enterprises/members/{admin_b_id}/role",
+            headers={"Authorization": f"Bearer {token_owner}"},
+            json={"role": "querier"},
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["role"] == "querier"
+
