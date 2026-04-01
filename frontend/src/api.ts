@@ -178,11 +178,49 @@ export function isAdmin(): boolean {
   return getUser()?.role === "admin";
 }
 
+export interface McpTokenStatus {
+  configured: boolean;
+  created_at: string | null;
+  hint?: string;
+}
+
+export async function getMcpTokenStatus(): Promise<McpTokenStatus> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createOrRotateMcpToken(): Promise<{ token: string; created_at: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeMcpToken(): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function adminRevokeMemberMcpToken(userId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export interface Member {
   id: number;
   login: string;
   role: "admin" | "querier";
   joined_at: string;
+  mcp_token_configured?: boolean;
 }
 
 export interface InviteCode {

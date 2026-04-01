@@ -28,6 +28,7 @@ import {
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import McpTokenPanel from "../components/McpTokenPanel";
 import { type ValueMode, flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
@@ -1757,6 +1758,8 @@ export default function Upload({ valueMode }: UploadProps) {
           Fast-ingesting tabular data RAG with cell-level citations
         </div>
       </div>
+
+      <McpTokenPanel />
 
       {userIsAdmin && <div
         ref={uploadPanelRef}

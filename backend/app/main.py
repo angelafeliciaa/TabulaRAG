@@ -6,6 +6,7 @@ import os
 from typing import Iterable, List, Optional, Tuple
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi_mcp.types import AuthConfig
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, insert, text, select
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from app.dataset_state import (
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
+    ensure_mcp_access_tokens_table,
     set_dataset_index_ready,
 )
 from app.index_jobs import (
@@ -31,6 +33,7 @@ from app.index_worker import IndexWorker
 from app.models import Base, Dataset, DatasetColumn, DatasetRow, EnterpriseMembership, User
 from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
+from app.mcp_connection import require_mcp_connection_auth
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
 from app.routes_enterprises import router as enterprises_router
@@ -74,6 +77,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_query_context_column()
     ensure_dataset_enterprise_id_column()
     ensure_enterprise_memberships_and_last_active()
+    ensure_mcp_access_tokens_table()
     try:
         from app.embeddings import get_model
         get_model()
@@ -829,5 +833,6 @@ def ingest_table(
 mcp = FastApiMCP(
     app,
     name="TabulaRAG",
+    auth_config=AuthConfig(dependencies=[Depends(require_mcp_connection_auth)]),
 )
 mcp.mount_http()

@@ -112,6 +112,8 @@ TabulaRAG exposes two endpoints for integration with AI assistants and tool runn
 | OpenAPI               | `http://localhost:8000/openapi.json` |
 | MCP (Streamable HTTP) | `http://localhost:8000/mcp`          |
 
+MCP requires authentication: use a **personal MCP token** from the app home page (MCP section) in `Authorization: Bearer <token>`, or the server **`API_KEY`** (automation/tests). Tokens are per user and workspace; they stop working if you leave that enterprise.
+
 > **Note:** If your client is running outside the browser (e.g. inside Docker or a desktop app), replace `localhost` with your machine's local IP address. Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) to find it.
 
 ---

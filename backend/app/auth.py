@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import hashlib
 import hmac
 import os
 import secrets
@@ -13,7 +16,7 @@ from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import EnterpriseMembership, User, UserRole
+from app.models import EnterpriseMembership, McpAccessToken, User, UserRole
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -22,6 +25,41 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "168"))  # 7 days
+
+MCP_TOKEN_PREFIX = "tgr_mcp_"
+
+
+def hash_mcp_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def auth_user_from_mcp_token(raw_token: str) -> AuthUser | None:
+    """Resolve Bearer MCP token to AuthUser if membership still exists."""
+    if not raw_token or not raw_token.startswith(MCP_TOKEN_PREFIX):
+        return None
+    th = hash_mcp_token(raw_token)
+    with SessionLocal() as db:
+        row = db.execute(select(McpAccessToken).where(McpAccessToken.token_hash == th)).scalar_one_or_none()
+        if row is None:
+            return None
+        m = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == row.user_id,
+                EnterpriseMembership.enterprise_id == row.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+        if m is None:
+            return None
+        user = db.get(User, row.user_id)
+        if user is None:
+            return None
+        return AuthUser(
+            id=user.id,
+            google_id=user.google_id,
+            login=user.login,
+            enterprise_id=row.enterprise_id,
+            role=m.role,
+        )
 
 
 @dataclass
@@ -139,7 +177,10 @@ def require_auth(
             role=UserRole.admin,
         )
 
-    # Try JWT
+    mcp_user = auth_user_from_mcp_token(token)
+    if mcp_user is not None:
+        return mcp_user
+
     claims = _decode_jwt(token)
     if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")

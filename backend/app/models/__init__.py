@@ -87,6 +87,23 @@ class InviteCode(Base):
     created_by_user = relationship("User", back_populates="invite_codes_created")
 
 
+class McpAccessToken(Base):
+    """Per-user MCP bearer for one enterprise; row deleted when membership ends."""
+
+    __tablename__ = "mcp_access_tokens"
+    __table_args__ = (
+        UniqueConstraint("user_id", "enterprise_id", name="uq_mcp_tokens_user_enterprise"),
+        Index("ix_mcp_access_tokens_token_hash", "token_hash"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class Dataset(Base):
     __tablename__ = "datasets"
 
@@ -156,5 +173,6 @@ __all__ = [
     "EnterpriseMembership",
     "User",
     "InviteCode",
+    "McpAccessToken",
     "UserRole",
 ]

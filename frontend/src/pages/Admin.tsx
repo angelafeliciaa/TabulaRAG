@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  adminRevokeMemberMcpToken,
   createInviteCode,
   listInviteCodes,
   listMembers,
@@ -26,6 +27,7 @@ export default function Admin() {
   const [roleUpdating, setRoleUpdating] = useState<number | null>(null);
   const [removing, setRemoving] = useState<number | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokingMcp, setRevokingMcp] = useState<number | null>(null);
 
   useEffect(() => {
     listMembers()
@@ -77,6 +79,21 @@ export default function Admin() {
     }
   }
 
+  async function handleRevokeMcp(member: Member) {
+    setRevokingMcp(member.id);
+    setMembersError(null);
+    try {
+      await adminRevokeMemberMcpToken(member.id);
+      setMembers((prev) =>
+        prev.map((m) => (m.id === member.id ? { ...m, mcp_token_configured: false } : m)),
+      );
+    } catch (err) {
+      setMembersError(err instanceof Error ? err.message : "Failed to revoke MCP token");
+    } finally {
+      setRevokingMcp(null);
+    }
+  }
+
   async function handleRevoke(code: string) {
     setRevoking(code);
     try {
@@ -114,6 +131,7 @@ export default function Admin() {
                 <th style={{ padding: "0.5rem 0.75rem" }}>Email</th>
                 <th style={{ padding: "0.5rem 0.75rem" }}>Role</th>
                 <th style={{ padding: "0.5rem 0.75rem" }}>Joined</th>
+                <th style={{ padding: "0.5rem 0.75rem" }}>MCP</th>
                 <th style={{ padding: "0.5rem 0.75rem" }}></th>
               </tr>
             </thead>
@@ -137,6 +155,24 @@ export default function Admin() {
                     </td>
                     <td style={{ padding: "0.5rem 0.75rem", opacity: 0.6, fontSize: "0.8rem" }}>
                       {new Date(member.joined_at).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: "0.5rem 0.75rem", fontSize: "0.8rem" }}>
+                      {member.mcp_token_configured ? (
+                        <span>
+                          Yes{" "}
+                          <button
+                            type="button"
+                            className="surface-btn"
+                            style={{ fontSize: "0.75rem", padding: "0.15rem 0.45rem", marginLeft: "0.35rem" }}
+                            disabled={revokingMcp === member.id}
+                            onClick={() => void handleRevokeMcp(member)}
+                          >
+                            {revokingMcp === member.id ? "…" : "Revoke"}
+                          </button>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td style={{ padding: "0.5rem 0.75rem" }}>
                       {!isSelf && (

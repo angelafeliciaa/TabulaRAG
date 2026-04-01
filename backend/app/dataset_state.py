@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset, EnterpriseMembership, UserRole
+from app.models import Dataset, EnterpriseMembership, McpAccessToken, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -209,6 +209,10 @@ def ensure_enterprise_memberships_and_last_active() -> None:
             ),
         )
         db.commit()
+
+
+def ensure_mcp_access_tokens_table() -> None:
+    McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:

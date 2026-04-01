@@ -4,11 +4,18 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from app.auth import AuthUser, mint_token_for_user, require_admin, require_auth
+from app.auth import (
+    AuthUser,
+    MCP_TOKEN_PREFIX,
+    hash_mcp_token,
+    mint_token_for_user,
+    require_admin,
+    require_auth,
+)
 from app.db import SessionLocal
-from app.models import Enterprise, EnterpriseMembership, InviteCode, User, UserRole
+from app.models import Enterprise, EnterpriseMembership, InviteCode, McpAccessToken, User, UserRole
 
 router = APIRouter(prefix="/enterprises")
 
@@ -40,6 +47,105 @@ class SwitchEnterpriseRequest(BaseModel):
 
 class UpdateRoleRequest(BaseModel):
     role: UserRole
+
+
+@router.get("/mcp-token", include_in_schema=False)
+def get_mcp_token_status(current_user: AuthUser = Depends(require_auth)):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    with SessionLocal() as db:
+        row = db.execute(
+            select(McpAccessToken).where(
+                McpAccessToken.user_id == current_user.id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+    if row is None:
+        return {"configured": False, "created_at": None}
+    return {
+        "configured": True,
+        "created_at": row.created_at.isoformat(),
+        "hint": f"{MCP_TOKEN_PREFIX}… (full value shown only when created)",
+    }
+
+
+@router.post("/mcp-token", include_in_schema=False)
+def create_or_rotate_mcp_token(current_user: AuthUser = Depends(require_auth)):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    with SessionLocal() as db:
+        m = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == current_user.id,
+                EnterpriseMembership.enterprise_id == current_user.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+        if m is None:
+            raise HTTPException(status_code=403, detail="No membership for this workspace")
+        existing = db.execute(
+            select(McpAccessToken).where(
+                McpAccessToken.user_id == current_user.id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+        if existing is not None:
+            db.delete(existing)
+            db.flush()
+        raw = f"{MCP_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+        db.add(
+            McpAccessToken(
+                user_id=current_user.id,
+                enterprise_id=current_user.enterprise_id,
+                token_hash=hash_mcp_token(raw),
+            ),
+        )
+        db.commit()
+        row = db.execute(
+            select(McpAccessToken).where(
+                McpAccessToken.user_id == current_user.id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+        created_at = row.created_at.isoformat() if row else ""
+    return {"token": raw, "created_at": created_at}
+
+
+@router.delete("/mcp-token", include_in_schema=False)
+def revoke_own_mcp_token(current_user: AuthUser = Depends(require_auth)):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    with SessionLocal() as db:
+        db.execute(
+            delete(McpAccessToken).where(
+                McpAccessToken.user_id == current_user.id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        )
+        db.commit()
+    return {"revoked": True}
+
+
+@router.delete("/mcp-token/members/{user_id}", include_in_schema=False)
+def admin_revoke_member_mcp_token(user_id: int, current_user: AuthUser = Depends(require_admin)):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    with SessionLocal() as db:
+        m = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == user_id,
+                EnterpriseMembership.enterprise_id == current_user.enterprise_id,
+            ),
+        ).scalar_one_or_none()
+        if m is None:
+            raise HTTPException(status_code=404, detail="Member not found")
+        db.execute(
+            delete(McpAccessToken).where(
+                McpAccessToken.user_id == user_id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        )
+        db.commit()
+    return {"revoked": user_id}
 
 
 @router.get("/me", include_in_schema=False)
@@ -265,15 +371,27 @@ def list_members(current_user: AuthUser = Depends(require_admin)):
             .order_by(User.created_at.asc()),
         ).all()
 
-        return [
-            {
-                "id": u.id,
-                "login": u.login,
-                "role": role.value,
-                "joined_at": u.created_at.isoformat(),
-            }
-            for u, role in rows
-        ]
+        out = []
+        for u, role in rows:
+            has_mcp = (
+                db.execute(
+                    select(McpAccessToken.id).where(
+                        McpAccessToken.user_id == u.id,
+                        McpAccessToken.enterprise_id == current_user.enterprise_id,
+                    ).limit(1),
+                ).scalar_one_or_none()
+                is not None
+            )
+            out.append(
+                {
+                    "id": u.id,
+                    "login": u.login,
+                    "role": role.value,
+                    "joined_at": u.created_at.isoformat(),
+                    "mcp_token_configured": has_mcp,
+                },
+            )
+        return out
 
 
 @router.patch("/members/{user_id}/role", include_in_schema=False)
@@ -330,6 +448,12 @@ def remove_member(user_id: int, current_user: AuthUser = Depends(require_admin))
             target.last_active_enterprise_id = None
             db.add(target)
 
+        db.execute(
+            delete(McpAccessToken).where(
+                McpAccessToken.user_id == user_id,
+                McpAccessToken.enterprise_id == current_user.enterprise_id,
+            ),
+        )
         db.delete(m)
         db.commit()
 
