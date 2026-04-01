@@ -75,6 +75,25 @@ export async function getGoogleClientId(): Promise<string> {
   return data.client_id;
 }
 
+/** Full browser redirect to Google OAuth (used by Login and “Switch account”). */
+export async function redirectToGoogleSignIn(options?: {
+  prompt?: "select_account" | "consent" | "none";
+}): Promise<void> {
+  const clientId = await getGoogleClientId();
+  const redirectUri = `${window.location.origin}/auth/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "online",
+  });
+  if (options?.prompt) {
+    params.set("prompt", options.prompt);
+  }
+  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
 export async function exchangeGoogleCode(
   code: string,
   redirectUri: string,
@@ -94,20 +113,62 @@ export async function exchangeGoogleCode(
   return data;
 }
 
+function decodeJwtPayloadJson(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const mid = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - (mid.length % 4)) % 4;
+    const padded = mid + "=".repeat(pad);
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWorkspaceRole(role: string | null | undefined): AuthUser["role"] | null {
+  if (role === "owner" || role === "admin" || role === "querier") return role;
+  return null;
+}
+
 export function applyEnterpriseSession(
   token: string,
-  enterpriseId: number,
-  role: string,
+  enterpriseId: number | null,
+  role: string | null,
 ): void {
   localStorage.setItem(TOKEN_KEY, token);
   const prev = getUser();
+  const nextRole = normalizeWorkspaceRole(role);
   if (prev) {
     localStorage.setItem(
       USER_KEY,
       JSON.stringify({
         ...prev,
         enterprise_id: enterpriseId,
-        role: role as AuthUser["role"],
+        role: nextRole,
+      }),
+    );
+    return;
+  }
+  const claims = decodeJwtPayloadJson(token);
+  if (claims) {
+    const resolvedEid =
+      enterpriseId !== null
+        ? enterpriseId
+        : claims.enterprise_id != null && claims.enterprise_id !== undefined
+          ? Number(claims.enterprise_id)
+          : null;
+    const claimRole = normalizeWorkspaceRole(
+      typeof claims.role === "string" ? claims.role : null,
+    );
+    localStorage.setItem(
+      USER_KEY,
+      JSON.stringify({
+        login: String(claims.login ?? ""),
+        name: String(claims.name ?? claims.login ?? ""),
+        avatar_url: String(claims.avatar_url ?? ""),
+        enterprise_id: resolvedEid,
+        role: nextRole ?? claimRole,
       }),
     );
   }
@@ -118,6 +179,7 @@ export interface WorkspaceSummary {
   enterprise_name: string;
   role: "owner" | "admin" | "querier";
   is_active: boolean;
+  member_count: number;
 }
 
 export async function listMyWorkspaces(): Promise<WorkspaceSummary[]> {
@@ -145,6 +207,27 @@ export async function switchWorkspace(
   return data;
 }
 
+export async function leaveWorkspace(): Promise<{
+  token: string;
+  enterprise_id: number | null;
+  enterprise_name: string;
+  role: string | null;
+}> {
+  const res = await authFetch(`${API_BASE}/enterprises/leave`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    token: string;
+    enterprise_id: number | null;
+    enterprise_name: string;
+    role: string | null;
+  };
+  applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  return data;
+}
+
 export async function createEnterprise(
   name: string,
 ): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
@@ -164,6 +247,16 @@ export async function createEnterprise(
     applyEnterpriseSession(data.token, data.enterprise_id, data.role);
   }
   return data;
+}
+
+export async function renameWorkspace(name: string): Promise<{ enterprise_id: number; enterprise_name: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function joinEnterprise(

@@ -29,7 +29,7 @@ class Enterprise(Base):
     __tablename__ = "enterprises"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     memberships = relationship("EnterpriseMembership", back_populates="enterprise", cascade="all, delete-orphan")

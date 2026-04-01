@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.auth import (
     AuthUser,
     MCP_TOKEN_PREFIX,
+    get_active_membership,
     hash_mcp_token,
     mint_token_for_user,
     require_admin,
@@ -50,6 +51,10 @@ class CreateEnterpriseRequest(BaseModel):
     name: str
 
 
+class RenameEnterpriseRequest(BaseModel):
+    name: str
+
+
 class JoinEnterpriseRequest(BaseModel):
     code: str
 
@@ -82,7 +87,7 @@ def get_mcp_token_status(current_user: AuthUser = Depends(require_auth)):
     return {
         "configured": True,
         "created_at": row.created_at.isoformat(),
-        "hint": f"{MCP_TOKEN_PREFIX}… (full value shown only when created)",
+        "hint": f"{MCP_TOKEN_PREFIX}… (full value shown only when generated)",
     }
 
 
@@ -174,12 +179,22 @@ def list_my_enterprises(current_user: AuthUser = Depends(require_auth)):
             .where(EnterpriseMembership.user_id == current_user.id)
             .order_by(Enterprise.name.asc()),
         ).all()
+        eids = {m.enterprise_id for m, _ in rows}
+        counts: dict[int, int] = {}
+        if eids:
+            cnt_rows = db.execute(
+                select(EnterpriseMembership.enterprise_id, func.count().label("c"))
+                .where(EnterpriseMembership.enterprise_id.in_(eids))
+                .group_by(EnterpriseMembership.enterprise_id),
+            ).all()
+            counts = {int(eid): int(c) for eid, c in cnt_rows}
         return [
             {
                 "enterprise_id": m.enterprise_id,
                 "enterprise_name": name,
                 "role": m.role.value,
                 "is_active": m.enterprise_id == current_user.enterprise_id,
+                "member_count": counts.get(m.enterprise_id, 0),
             }
             for m, name in rows
         ]
@@ -213,6 +228,66 @@ def switch_enterprise(body: SwitchEnterpriseRequest, current_user: AuthUser = De
         }
 
 
+@router.post("/leave", include_in_schema=False)
+def leave_current_enterprise(current_user: AuthUser = Depends(require_auth)):
+    """Remove the current user from their active workspace. Owners must transfer ownership first."""
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    eid = current_user.enterprise_id
+
+    with SessionLocal() as db:
+        user = db.execute(select(User).where(User.id == current_user.id)).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        m = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == user.id,
+                EnterpriseMembership.enterprise_id == eid,
+            ),
+        ).scalar_one_or_none()
+        if m is None:
+            raise HTTPException(status_code=404, detail="No membership for this workspace")
+        if m.role == UserRole.owner:
+            raise HTTPException(
+                status_code=400,
+                detail="Workspace owners cannot leave until ownership is transferred to another member",
+            )
+
+        db.execute(
+            delete(McpAccessToken).where(
+                McpAccessToken.user_id == user.id,
+                McpAccessToken.enterprise_id == eid,
+            ),
+        )
+        db.delete(m)
+        db.flush()
+
+        if user.last_active_enterprise_id == eid:
+            other = db.execute(
+                select(EnterpriseMembership)
+                .where(EnterpriseMembership.user_id == user.id)
+                .order_by(EnterpriseMembership.id.asc()),
+            ).scalars().first()
+            user.last_active_enterprise_id = other.enterprise_id if other else None
+            db.add(user)
+
+        db.commit()
+        db.refresh(user)
+        token = mint_token_for_user(db, user)
+        m_active = get_active_membership(db, user)
+        ent_name = ""
+        if m_active is not None:
+            ent = db.get(Enterprise, m_active.enterprise_id)
+            ent_name = ent.name if ent else ""
+
+    return {
+        "token": token,
+        "enterprise_id": m_active.enterprise_id if m_active else None,
+        "enterprise_name": ent_name,
+        "role": m_active.role.value if m_active else None,
+    }
+
+
 @router.post("", include_in_schema=False)
 def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = Depends(require_auth)):
     name = body.name.strip()
@@ -223,10 +298,6 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
         user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
-
-        existing = db.execute(select(Enterprise).where(Enterprise.name == name)).scalar_one_or_none()
-        if existing is not None:
-            raise HTTPException(status_code=409, detail="An enterprise with that name already exists")
 
         enterprise = Enterprise(name=name)
         db.add(enterprise)
@@ -252,6 +323,30 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
             "role": UserRole.owner.value,
             "token": token,
         }
+
+
+@router.patch("/name", include_in_schema=False)
+def rename_current_enterprise(
+    body: RenameEnterpriseRequest,
+    current_user: AuthUser = Depends(require_owner),
+):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Workspace name cannot be empty")
+    if len(name) > 255:
+        raise HTTPException(status_code=400, detail="Workspace name is too long")
+
+    with SessionLocal() as db:
+        ent = db.get(Enterprise, current_user.enterprise_id)
+        if ent is None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        ent.name = name
+        db.add(ent)
+        db.commit()
+
+    return {"enterprise_id": current_user.enterprise_id, "enterprise_name": name}
 
 
 @router.post("/join", include_in_schema=False)
@@ -376,7 +471,7 @@ def revoke_invite_code(code: str, current_user: AuthUser = Depends(require_admin
 
 
 @router.get("/members", include_in_schema=False)
-def list_members(current_user: AuthUser = Depends(require_admin)):
+def list_members(current_user: AuthUser = Depends(require_auth)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
 

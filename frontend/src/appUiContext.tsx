@@ -7,7 +7,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { getUser } from "./api";
 import { type ValueMode } from "./valueMode";
+
+const VALUE_MODE_STORAGE_KEY = "valueMode";
+
+function readGlobalValueMode(): ValueMode | null {
+  const stored = window.localStorage.getItem(VALUE_MODE_STORAGE_KEY);
+  if (stored === "normalized" || stored === "original") return stored;
+  return null;
+}
 
 export type AppUiContextValue = {
   sessionRev: number;
@@ -34,13 +43,22 @@ export function AppUiProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const [valueMode, setValueMode] = useState<ValueMode>(() => {
-    const stored = window.localStorage.getItem("valueMode");
-    if (stored === "normalized" || stored === "original") return stored;
-    return "normalized";
-  });
+  const [valueMode, setValueMode] = useState<ValueMode>(() => readGlobalValueMode() ?? "normalized");
+
   useEffect(() => {
-    window.localStorage.setItem("valueMode", valueMode);
+    const fromGlobal = readGlobalValueMode();
+    if (fromGlobal != null) return;
+    const eid = getUser()?.enterprise_id;
+    if (eid == null || !Number.isFinite(eid)) return;
+    const legacy = window.localStorage.getItem(`${VALUE_MODE_STORAGE_KEY}:${eid}`);
+    if (legacy === "normalized" || legacy === "original") {
+      window.localStorage.setItem(VALUE_MODE_STORAGE_KEY, legacy);
+      setValueMode(legacy);
+    }
+  }, [sessionRev]);
+
+  useEffect(() => {
+    window.localStorage.setItem(VALUE_MODE_STORAGE_KEY, valueMode);
   }, [valueMode]);
 
   const value = useMemo(

@@ -2241,7 +2241,7 @@ export default function Upload() {
 
         {tables.length === 0 ? (
           <div className="tables-empty-state-wrapper">
-            <p className="small">No tables uploaded yet...</p>
+            <p className="small">No tables uploaded yet</p>
           </div>
         ) : (
           <div className="tables-scroll" ref={tablesScrollRef}>

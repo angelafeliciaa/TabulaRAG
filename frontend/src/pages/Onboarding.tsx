@@ -2,11 +2,15 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createEnterprise, joinEnterprise, getUser } from "../api";
 
+type OnboardingMode = "create" | "join";
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const user = getUser();
+  const displayName = (user?.name || user?.login || "there").trim();
 
-  const [enterpriseName, setEnterpriseName] = useState("");
+  const [mode, setMode] = useState<OnboardingMode>("create");
+  const [workspaceName, setWorkspaceName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -18,10 +22,10 @@ export default function Onboarding() {
     setCreateError(null);
     setCreateLoading(true);
     try {
-      await createEnterprise(enterpriseName.trim());
+      await createEnterprise(workspaceName.trim());
       navigate("/", { replace: true });
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Failed to create enterprise");
+      setCreateError(err instanceof Error ? err.message : "Failed to create workspace");
     } finally {
       setCreateLoading(false);
     }
@@ -35,81 +39,105 @@ export default function Onboarding() {
       await joinEnterprise(inviteCode.trim().toUpperCase());
       navigate("/", { replace: true });
     } catch (err) {
-      setJoinError(err instanceof Error ? err.message : "Failed to join enterprise");
+      setJoinError(err instanceof Error ? err.message : "Failed to join workspace");
     } finally {
       setJoinLoading(false);
     }
   }
 
-  const hasWorkspace = Boolean(user?.enterprise_id);
-
   return (
-    <div className="login-page">
-      {hasWorkspace && (
-        <p className="login-subtitle" style={{ maxWidth: 560, marginBottom: "1.25rem", textAlign: "center" }}>
-          You can create another workspace or join one with an invite code. Use the menu switcher to move between workspaces.
-        </p>
-      )}
-      <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap", justifyContent: "center", width: "100%", maxWidth: 760 }}>
-        <div className="login-card" style={{ flex: 1, minWidth: 280 }}>
-          <h2 className="login-title" style={{ fontSize: "1.25rem" }}>Create Enterprise</h2>
-          <p className="login-subtitle">Start a new workspace. You'll be the admin.</p>
-          <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <input
-              className="input"
-              type="text"
-              placeholder="Enterprise name"
-              value={enterpriseName}
-              onChange={(e) => setEnterpriseName(e.target.value)}
-              required
-              autoComplete="off"
-            />
-            {createError && (
-              <p className="login-error" role="alert">{createError}</p>
-            )}
-            <button
-              type="submit"
-              className="login-btn"
-              disabled={createLoading || !enterpriseName.trim()}
-            >
-              {createLoading ? "Creating..." : "Create"}
-            </button>
-          </form>
+    <div className="login-page onboarding-page">
+      <div className="login-card onboarding-panel">
+        {user ? <p className="onboarding-greeting">Hello {displayName}!</p> : null}
+
+        <div className="onboarding-tabs" role="tablist" aria-label="Create or join workspace">
+          <button
+            type="button"
+            role="tab"
+            id="onboarding-tab-create"
+            aria-selected={mode === "create"}
+            aria-controls="onboarding-panel-create"
+            tabIndex={0}
+            className={`onboarding-tab${mode === "create" ? " onboarding-tab--active" : ""}`}
+            onClick={() => setMode("create")}
+          >
+            Create workspace
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="onboarding-tab-join"
+            aria-selected={mode === "join"}
+            aria-controls="onboarding-panel-join"
+            tabIndex={0}
+            className={`onboarding-tab${mode === "join" ? " onboarding-tab--active" : ""}`}
+            onClick={() => setMode("join")}
+          >
+            Join enterprise
+          </button>
         </div>
 
-        <div className="login-card" style={{ flex: 1, minWidth: 280 }}>
-          <h2 className="login-title" style={{ fontSize: "1.25rem" }}>Join Enterprise</h2>
-          <p className="login-subtitle">Enter an invite code from your admin.</p>
-          <form onSubmit={handleJoin} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <input
-              className="input"
-              type="text"
-              placeholder="Invite code"
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-              required
-              autoComplete="off"
-              style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
-            />
-            {joinError && (
-              <p className="login-error" role="alert">{joinError}</p>
-            )}
-            <button
-              type="submit"
-              className="login-btn"
-              disabled={joinLoading || !inviteCode.trim()}
-            >
-              {joinLoading ? "Joining..." : "Join"}
-            </button>
-          </form>
-        </div>
+        {mode === "create" ? (
+          <div
+            id="onboarding-panel-create"
+            role="tabpanel"
+            aria-labelledby="onboarding-tab-create"
+            className="onboarding-tab-panel"
+          >
+            <p className="login-subtitle onboarding-panel-desc">
+              Start a new workspace. You&apos;ll be the owner.
+            </p>
+            <form className="login-form" onSubmit={handleCreate}>
+              <input
+                className="input"
+                type="text"
+                placeholder="Workspace name"
+                value={workspaceName}
+                onChange={(e) => setWorkspaceName(e.target.value)}
+                required
+                autoComplete="off"
+              />
+              {createError ? (
+                <p className="login-error" role="alert">
+                  {createError}
+                </p>
+              ) : null}
+              <button type="submit" className="login-btn" disabled={createLoading || !workspaceName.trim()}>
+                {createLoading ? "Creating..." : "Create workspace"}
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div
+            id="onboarding-panel-join"
+            role="tabpanel"
+            aria-labelledby="onboarding-tab-join"
+            className="onboarding-tab-panel"
+          >
+            <p className="login-subtitle onboarding-panel-desc">Enter an invite code from your admin.</p>
+            <form className="login-form" onSubmit={handleJoin}>
+              <input
+                className="input"
+                type="text"
+                placeholder="Invite code"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                required
+                autoComplete="off"
+                style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
+              />
+              {joinError ? (
+                <p className="login-error" role="alert">
+                  {joinError}
+                </p>
+              ) : null}
+              <button type="submit" className="login-btn" disabled={joinLoading || !inviteCode.trim()}>
+                {joinLoading ? "Joining..." : "Join workspace"}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
-
-      {user && (
-        <p style={{ marginTop: "1.5rem", opacity: 0.6, fontSize: "0.875rem" }}>
-          Signed in as <strong>{user.login}</strong>
-        </p>
-      )}
     </div>
   );
 }

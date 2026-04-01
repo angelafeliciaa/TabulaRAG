@@ -936,8 +936,10 @@ def rename_table(dataset_id: int, body: RenameRequest, current_user: AuthUser = 
         dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
         normalized_name = normalize_dataset_name_or_raise(body.name)
         target_key = dataset_name_collision_key(normalized_name)
+        eid = _scoped_enterprise_id(current_user)
+        ent_scope = Dataset.enterprise_id.is_(None) if eid is None else Dataset.enterprise_id == eid
         existing = db.execute(
-            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id)
+            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id, ent_scope),
         ).all()
         conflict = next(
             (
@@ -952,8 +954,8 @@ def rename_table(dataset_id: int, body: RenameRequest, current_user: AuthUser = 
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Dataset name '{normalized_name}' already exists. "
-                    "Use a unique dataset name."
+                    f"Dataset name '{normalized_name}' already exists in this workspace. "
+                    "Use a unique table name."
                 ),
             )
         dataset.name = normalized_name

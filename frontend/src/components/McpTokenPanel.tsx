@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import CopyClipboardButton from "./CopyClipboardButton";
 import {
   createOrRotateMcpToken,
   getMcpTokenStatus,
@@ -56,10 +57,10 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
       setStatus({
         configured: true,
         created_at: data.created_at,
-        hint: "tgr_mcp_… (full value shown only when created)",
+        hint: "tgr_mcp_… (full value shown only when generated)",
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create token");
+      setError(err instanceof Error ? err.message : "Failed to generate token");
     } finally {
       setBusy(false);
     }
@@ -90,10 +91,10 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
       {!embedded ? (
         <h2 className="mcp-token-panel-title">MCP (Cursor &amp; tools)</h2>
       ) : null}
-      <p className="small" style={{ margin: "0 0 0.75rem", opacity: 0.85 }}>
-        Create a personal token for this workspace. It stops working if you leave the enterprise. The MCP endpoint
-        requires this token (or the server API key). Paste the token into{" "}
-        <code style={{ fontSize: "0.8em" }}>Authorization: Bearer …</code> in your MCP client config.
+      <p className="mcp-token-panel-intro">
+        Generate a personal token for this workspace. It stops working if you leave the workspace. The MCP endpoint
+        requires this token—paste it into your MCP client as{" "}
+        <code className="mcp-token-panel-intro-code">Authorization: Bearer …</code>.
       </p>
       {loading && <p style={{ opacity: 0.6 }}>Loading…</p>}
       {error && (
@@ -105,7 +106,7 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
         <>
           <p style={{ margin: "0 0 0.5rem", fontSize: "0.875rem" }}>
             Status:{" "}
-            <strong>{status.configured ? "Token on file" : "No token — create one to connect"}</strong>
+            <strong>{status.configured ? "Token on file" : "No token — generate one to connect"}</strong>
             {status.created_at && (
               <span style={{ opacity: 0.7 }}>
                 {" "}
@@ -125,15 +126,13 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
                   value={revealedToken}
                   style={{ flex: "1 1 200px", fontFamily: "monospace", fontSize: "0.75rem" }}
                 />
-                <button type="button" className="surface-btn" onClick={copyToken}>
-                  Copy token
-                </button>
+                <CopyClipboardButton ariaLabel="Copy MCP token to clipboard" onClick={copyToken} />
               </div>
             </div>
           )}
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <button type="button" className="login-btn" disabled={busy} onClick={() => void onCreateOrRotate()}>
-              {status.configured ? "Regenerate token" : "Create token"}
+              {status.configured ? "Regenerate token" : "Generate token"}
             </button>
             {status.configured && (
               <button type="button" className="surface-btn" disabled={busy} onClick={() => void onRevoke()}>
@@ -175,7 +174,7 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
             >
               <li>
                 MCP tools are attached <strong>per chat session</strong>. After fixing config, open a{" "}
-                <strong>new chat</strong> so the assistant sees TabularAG tools (e.g. listing tables).
+                <strong>new chat</strong> so the assistant sees TabulaRAG tools (e.g. listing tables).
               </li>
               <li>
                 In Cursor, open <strong>Settings → MCP</strong> and confirm <strong>tabularag</strong> is enabled and
@@ -183,7 +182,7 @@ export default function McpTokenPanel({ embedded = false }: McpTokenPanelProps) 
               </li>
               <li>
                 If you just added or changed the token: try <strong>Developer: Reload Window</strong> from the command
-                palette, or turn the TabularAG server <strong>off</strong> then <strong>on</strong> in MCP settings.
+                palette, or turn the TabulaRAG server <strong>off</strong> then <strong>on</strong> in MCP settings.
               </li>
               <li>
                 Errors like <strong>SSE</strong> + <strong>404</strong> + &quot;Invalid OAuth error response&quot;

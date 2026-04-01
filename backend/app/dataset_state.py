@@ -274,6 +274,58 @@ def ensure_postgres_userrole_owner_enum() -> None:
             pass
 
 
+def ensure_enterprise_name_non_unique() -> None:
+    """Allow duplicate workspace names: drop unique constraint on enterprises.name (existing DBs)."""
+    inspector = inspect(app_db.engine)
+    if "enterprises" not in inspector.get_table_names():
+        return
+
+    ucs = inspector.get_unique_constraints("enterprises")
+    name_only = [uc for uc in ucs if set(uc.get("column_names") or []) == {"name"}]
+
+    dialect = app_db.engine.dialect.name
+
+    if dialect == "postgresql":
+        if not name_only:
+            return
+        with app_db.engine.begin() as conn:
+            for uc in name_only:
+                cname = uc.get("name")
+                if cname:
+                    conn.execute(text(f'ALTER TABLE enterprises DROP CONSTRAINT IF EXISTS "{cname}"'))
+        return
+
+    if dialect == "sqlite":
+        needs_rebuild = bool(name_only)
+        if not needs_rebuild:
+            with app_db.engine.connect() as c:
+                create_sql = c.execute(
+                    text("SELECT sql FROM sqlite_master WHERE type='table' AND name='enterprises'"),
+                ).scalar_one_or_none()
+            if create_sql and "UNIQUE" in create_sql.upper() and "name" in create_sql.lower():
+                needs_rebuild = True
+        if not needs_rebuild:
+            return
+        with app_db.engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE enterprises__nq (
+                        id INTEGER NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        PRIMARY KEY (id)
+                    )
+                    """
+                ),
+            )
+            conn.execute(text("INSERT INTO enterprises__nq (id, name, created_at) SELECT id, name, created_at FROM enterprises"))
+            conn.execute(text("DROP TABLE enterprises"))
+            conn.execute(text("ALTER TABLE enterprises__nq RENAME TO enterprises"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def promote_legacy_admin_to_owner_per_enterprise() -> None:
     """Exactly one owner per enterprise: promote oldest admin if none marked owner."""
     with app_db.SessionLocal() as db:

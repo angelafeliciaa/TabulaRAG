@@ -18,6 +18,7 @@ from app.dataset_state import (
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
+    ensure_enterprise_name_non_unique,
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
@@ -80,6 +81,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_query_context_column()
     ensure_dataset_enterprise_id_column()
     ensure_enterprise_memberships_and_last_active()
+    ensure_enterprise_name_non_unique()
     ensure_querier_role_and_migrate_member()
     ensure_postgres_userrole_owner_enum()
     promote_legacy_admin_to_owner_per_enterprise()
@@ -729,7 +731,13 @@ def ingest_table(
 
     with SessionLocal() as db:
         requested_key = dataset_name_collision_key(dataset_display_name)
-        existing_rows = db.execute(select(Dataset.id, Dataset.name)).all()
+        eid = current_user.enterprise_id
+        scope = (
+            Dataset.enterprise_id.is_(None)
+            if eid is None
+            else Dataset.enterprise_id == eid
+        )
+        existing_rows = db.execute(select(Dataset.id, Dataset.name).where(scope)).all()
         conflicting = next(
             (
                 (int(row[0]), str(row[1]))
@@ -743,8 +751,8 @@ def ingest_table(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Dataset name '{dataset_display_name}' already exists. "
-                    "Use a unique dataset name."
+                    f"Dataset name '{dataset_display_name}' already exists in this workspace. "
+                    "Use a unique table name."
                 ),
             )
 

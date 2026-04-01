@@ -166,10 +166,10 @@ function defaultFormatValue(value: unknown): string {
   return String(value);
 }
 
-function inputSizeForText(value: string): number {
-  const trimmed = value.trim();
-  // Keep inputs readable without exploding the layout on very long values.
-  return Math.max(1, Math.min(80, trimmed.length || value.length || 1));
+/** Min width in `ch` so long cell/header text is not clipped (cap avoids pathological DOM). */
+function inputMinWidthCh(value: string, maxCh = 10000): number {
+  const len = value.length || 1;
+  return Math.min(Math.max(len, 4), maxCh);
 }
 
 function getSortableValue(value: unknown): { kind: "empty" | "number" | "date" | "text"; value: string | number } {
@@ -387,7 +387,7 @@ export default function DataTable({
                           className={`table-cell-input table-header-input${headerPending ? " table-cell-pending-edit" : ""}`}
                           disabled={editableBusy}
                           defaultValue={label}
-                          size={inputSizeForText(label)}
+                          style={{ width: "100%", minWidth: `${inputMinWidthCh(label)}ch` }}
                           aria-label={`Column name ${label}`}
                           key={`${editableEpoch}-header-${column}`}
                           onBlur={(event) => {
@@ -522,7 +522,7 @@ export default function DataTable({
                             className={`table-cell-input${cellPending ? " table-cell-pending-edit" : ""}`}
                             disabled={editableBusy}
                             defaultValue={inputValue}
-                            size={inputSizeForText(inputValue)}
+                            style={{ width: "100%", minWidth: `${inputMinWidthCh(inputValue)}ch` }}
                             aria-label={`${column} row ${absoluteRowIndex + 1}`}
                             key={`${editableEpoch}-${cellKey}-${inputValue}`}
                             onClick={(event) => event.stopPropagation()}
@@ -540,10 +540,10 @@ export default function DataTable({
                               });
                             }}
                           />
-                        ) : formatCellValue ? (
-                          formatCellValue(column, rawValue)
                         ) : (
-                          defaultFormatValue(rawValue)
+                          <span className="table-cell-plain">
+                            {formatCellValue ? formatCellValue(column, rawValue) : defaultFormatValue(rawValue)}
+                          </span>
                         )}
                       </td>
                     );
