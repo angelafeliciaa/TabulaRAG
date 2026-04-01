@@ -2554,6 +2554,8 @@ export default function Upload() {
             <DataTable
               columns={preview.columns}
               rows={previewRows}
+              rowOffset={preview.offset}
+              rowIndices={preview.row_indices}
               sortable
               sortMode="server"
               serverSortColumn={previewSortColumn}
