@@ -193,9 +193,19 @@ def require_auth(
         return _auth_user_from_db_user(db, user)
 
 
+def is_admin_capable(role: UserRole | None) -> bool:
+    return role in (UserRole.admin, UserRole.owner)
+
+
 def require_admin(current_user: AuthUser = Depends(require_auth)) -> AuthUser:
-    if current_user.role != UserRole.admin:
+    if not is_admin_capable(current_user.role):
         raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+
+def require_owner(current_user: AuthUser = Depends(require_auth)) -> AuthUser:
+    if current_user.role != UserRole.owner:
+        raise HTTPException(status_code=403, detail="Enterprise owner access required")
     return current_user
 
 

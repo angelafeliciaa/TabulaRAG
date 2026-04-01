@@ -2,7 +2,7 @@ import secrets
 import string
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 
@@ -13,9 +13,22 @@ from app.auth import (
     mint_token_for_user,
     require_admin,
     require_auth,
+    require_owner,
 )
 from app.db import SessionLocal
-from app.models import Enterprise, EnterpriseMembership, InviteCode, McpAccessToken, User, UserRole
+from app.index_jobs import clear_index_job
+from app.models import (
+    Dataset,
+    DatasetColumn,
+    DatasetRow,
+    Enterprise,
+    EnterpriseMembership,
+    InviteCode,
+    McpAccessToken,
+    User,
+    UserRole,
+)
+from app.routes_tables import _delete_collection_safe
 
 router = APIRouter(prefix="/enterprises")
 
@@ -47,6 +60,10 @@ class SwitchEnterpriseRequest(BaseModel):
 
 class UpdateRoleRequest(BaseModel):
     role: UserRole
+
+
+class TransferOwnershipRequest(BaseModel):
+    user_id: int
 
 
 @router.get("/mcp-token", include_in_schema=False)
@@ -219,7 +236,7 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
             EnterpriseMembership(
                 user_id=user.id,
                 enterprise_id=enterprise.id,
-                role=UserRole.admin,
+                role=UserRole.owner,
             ),
         )
         user.last_active_enterprise_id = enterprise.id
@@ -232,7 +249,7 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
         return {
             "enterprise_id": enterprise.id,
             "enterprise_name": enterprise.name,
-            "role": UserRole.admin.value,
+            "role": UserRole.owner.value,
             "token": token,
         }
 
@@ -394,12 +411,120 @@ def list_members(current_user: AuthUser = Depends(require_admin)):
         return out
 
 
+@router.post("/transfer-ownership", include_in_schema=False)
+def transfer_ownership(body: TransferOwnershipRequest, current_user: AuthUser = Depends(require_owner)):
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    if body.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You already own this enterprise")
+
+    eid = current_user.enterprise_id
+    with SessionLocal() as db:
+        me = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == current_user.id,
+                EnterpriseMembership.enterprise_id == eid,
+            ),
+        ).scalar_one_or_none()
+        if me is None or me.role != UserRole.owner:
+            raise HTTPException(status_code=403, detail="Enterprise owner access required")
+
+        target = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == body.user_id,
+                EnterpriseMembership.enterprise_id == eid,
+            ),
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Member not found")
+        if target.role != UserRole.admin:
+            raise HTTPException(
+                status_code=400,
+                detail="Ownership can only be transferred to an existing admin",
+            )
+
+        me.role = UserRole.admin
+        target.role = UserRole.owner
+        db.add(me)
+        db.add(target)
+        db.commit()
+
+        user = db.execute(select(User).where(User.id == current_user.id)).scalars().first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        token = mint_token_for_user(db, user)
+
+    return {"token": token, "role": UserRole.admin.value}
+
+
+@router.delete("", include_in_schema=False)
+def disband_enterprise(
+    background_tasks: BackgroundTasks,
+    current_user: AuthUser = Depends(require_owner),
+):
+    """Permanently delete the enterprise, all memberships, invites, MCP tokens, and datasets."""
+    if current_user.enterprise_id is None:
+        raise HTTPException(status_code=400, detail="Not part of an enterprise")
+    eid = current_user.enterprise_id
+    dataset_ids: list[int] = []
+
+    with SessionLocal() as db:
+        me = db.execute(
+            select(EnterpriseMembership).where(
+                EnterpriseMembership.user_id == current_user.id,
+                EnterpriseMembership.enterprise_id == eid,
+                EnterpriseMembership.role == UserRole.owner,
+            ),
+        ).scalar_one_or_none()
+        if me is None:
+            raise HTTPException(status_code=403, detail="Enterprise owner access required")
+
+        ent = db.get(Enterprise, eid)
+        if ent is None:
+            raise HTTPException(status_code=404, detail="Enterprise not found")
+
+        dataset_ids = list(db.execute(select(Dataset.id).where(Dataset.enterprise_id == eid)).scalars().all())
+        for did in dataset_ids:
+            db.execute(delete(DatasetRow).where(DatasetRow.dataset_id == did))
+            db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id == did))
+            db.execute(delete(Dataset).where(Dataset.id == did))
+
+        member_user_ids = db.execute(
+            select(EnterpriseMembership.user_id).where(EnterpriseMembership.enterprise_id == eid),
+        ).scalars().all()
+        for uid in member_user_ids:
+            u = db.get(User, uid)
+            if u is not None and u.last_active_enterprise_id == eid:
+                u.last_active_enterprise_id = None
+                db.add(u)
+
+        db.execute(delete(McpAccessToken).where(McpAccessToken.enterprise_id == eid))
+        db.execute(delete(InviteCode).where(InviteCode.enterprise_id == eid))
+        db.execute(delete(EnterpriseMembership).where(EnterpriseMembership.enterprise_id == eid))
+        db.delete(ent)
+        db.commit()
+
+    for did in dataset_ids:
+        clear_index_job(did)
+        background_tasks.add_task(_delete_collection_safe, did)
+
+    return {"disbanded": True, "enterprise_id": eid}
+
+
 @router.patch("/members/{user_id}/role", include_in_schema=False)
 def update_member_role(user_id: int, body: UpdateRoleRequest, current_user: AuthUser = Depends(require_admin)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="You cannot change your own role")
+
+    if body.role == UserRole.owner:
+        raise HTTPException(
+            status_code=400,
+            detail="Use POST /enterprises/transfer-ownership to assign a new owner",
+        )
+    if body.role not in (UserRole.admin, UserRole.querier):
+        raise HTTPException(status_code=400, detail="Role must be admin or querier")
 
     with SessionLocal() as db:
         m = db.execute(
@@ -410,6 +535,8 @@ def update_member_role(user_id: int, body: UpdateRoleRequest, current_user: Auth
         ).scalar_one_or_none()
         if m is None:
             raise HTTPException(status_code=404, detail="Member not found")
+        if m.role == UserRole.owner:
+            raise HTTPException(status_code=403, detail="Cannot change the enterprise owner's role here")
 
         m.role = body.role
         db.add(m)
@@ -442,6 +569,11 @@ def remove_member(user_id: int, current_user: AuthUser = Depends(require_admin))
         ).scalar_one_or_none()
         if m is None:
             raise HTTPException(status_code=404, detail="Member not found")
+        if m.role == UserRole.owner:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot remove the enterprise owner; transfer ownership or disband the enterprise",
+            )
 
         target = db.get(User, user_id)
         if target is not None and target.last_active_enterprise_id == current_user.enterprise_id:

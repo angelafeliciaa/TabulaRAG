@@ -1,18 +1,27 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   adminRevokeMemberMcpToken,
+  applyEnterpriseSession,
   createInviteCode,
+  disbandEnterprise,
+  getUser,
+  isOwner,
   listInviteCodes,
   listMembers,
+  listMyWorkspaces,
+  patchStoredUser,
   removeMember,
   revokeInviteCode,
+  switchWorkspace,
+  transferEnterpriseOwnership,
   updateMemberRole,
-  getUser,
   type InviteCode,
   type Member,
 } from "../api";
 
 export default function Admin() {
+  const navigate = useNavigate();
   const currentUser = getUser();
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -29,6 +38,11 @@ export default function Admin() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokingMcp, setRevokingMcp] = useState<number | null>(null);
 
+  const [transferTargetId, setTransferTargetId] = useState<string>("");
+  const [transferring, setTransferring] = useState(false);
+  const [disbandConfirm, setDisbandConfirm] = useState("");
+  const [disbanding, setDisbanding] = useState(false);
+
   useEffect(() => {
     listMembers()
       .then(setMembers)
@@ -42,6 +56,7 @@ export default function Admin() {
   }, []);
 
   async function handleRoleToggle(member: Member) {
+    if (member.role === "owner") return;
     const nextRole = member.role === "admin" ? "querier" : "admin";
     setRoleUpdating(member.id);
     try {
@@ -106,6 +121,51 @@ export default function Admin() {
     }
   }
 
+  async function handleTransferOwnership() {
+    const id = Number(transferTargetId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const eid = currentUser?.enterprise_id;
+    if (eid == null) return;
+    setTransferring(true);
+    setMembersError(null);
+    try {
+      const { token, role } = await transferEnterpriseOwnership(id);
+      applyEnterpriseSession(token, eid, role);
+      const list = await listMembers();
+      setMembers(list);
+      setTransferTargetId("");
+    } catch (err) {
+      setMembersError(err instanceof Error ? err.message : "Failed to transfer ownership");
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  async function handleDisbandEnterprise() {
+    if (disbandConfirm.trim().toUpperCase() !== "DISBAND") return;
+    const leftId = currentUser?.enterprise_id;
+    setDisbanding(true);
+    setMembersError(null);
+    try {
+      await disbandEnterprise();
+      const ws = await listMyWorkspaces();
+      if (ws.length > 0) {
+        const next =
+          ws.find((w) => w.is_active) ?? ws.find((w) => w.enterprise_id !== leftId) ?? ws[0];
+        await switchWorkspace(next.enterprise_id);
+        navigate("/", { replace: true });
+      } else {
+        patchStoredUser({ enterprise_id: null, role: null });
+        navigate("/onboarding", { replace: true });
+      }
+    } catch (err) {
+      setMembersError(err instanceof Error ? err.message : "Failed to disband enterprise");
+    } finally {
+      setDisbanding(false);
+      setDisbandConfirm("");
+    }
+  }
+
   function formatExpiry(code: InviteCode): string {
     if (!code.expires_at) return "No expiry";
     const d = new Date(code.expires_at);
@@ -115,6 +175,93 @@ export default function Admin() {
   return (
     <div className="page" style={{ maxWidth: 760, margin: "0 auto", padding: "2rem 1rem" }}>
       <h1 style={{ fontSize: "1.5rem", marginBottom: "2rem" }}>Admin Panel</h1>
+
+      {isOwner() && (
+        <section
+          style={{
+            marginBottom: "2rem",
+            padding: "1rem 1.25rem",
+            border: "1px solid var(--border-color, #ddd)",
+            borderRadius: 8,
+            background: "var(--surface-elevated, rgba(0,0,0,0.03))",
+          }}
+        >
+          <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.75rem" }}>Enterprise owner</h2>
+          <p style={{ margin: "0 0 1rem", fontSize: "0.9rem", opacity: 0.85 }}>
+            Transfer ownership to an existing admin (you become an admin). Disbanding deletes this
+            workspace, all datasets, and memberships permanently.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem" }}>
+              <span>Transfer to</span>
+              <select
+                className="surface-btn"
+                style={{ fontSize: "0.85rem", padding: "0.35rem 0.6rem" }}
+                value={transferTargetId}
+                onChange={(e) => setTransferTargetId(e.target.value)}
+                aria-label="Select admin to receive ownership"
+              >
+                <option value="">— choose admin —</option>
+                {members
+                  .filter((m) => m.role === "admin" && m.login !== currentUser?.login)
+                  .map((m) => (
+                    <option key={m.id} value={String(m.id)}>
+                      {m.login}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="login-btn"
+              style={{ fontSize: "0.85rem", padding: "0.4rem 1rem" }}
+              disabled={
+                !transferTargetId ||
+                transferring ||
+                members.filter((m) => m.role === "admin" && m.login !== currentUser?.login).length === 0
+              }
+              onClick={() => void handleTransferOwnership()}
+            >
+              {transferring ? "Transferring…" : "Transfer ownership"}
+            </button>
+          </div>
+          {members.filter((m) => m.role === "admin" && m.login !== currentUser?.login).length === 0 && (
+            <p style={{ margin: "0.75rem 0 0", fontSize: "0.85rem", opacity: 0.75 }}>
+              Promote another member to admin before you can transfer ownership.
+            </p>
+          )}
+          <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--border-color, #eee)" }}>
+            <p style={{ margin: "0 0 0.5rem", fontSize: "0.85rem", opacity: 0.8 }}>
+              Type <strong>DISBAND</strong> to confirm deleting this enterprise.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
+              <input
+                type="text"
+                className="surface-btn"
+                style={{ fontSize: "0.85rem", padding: "0.35rem 0.6rem", minWidth: 200 }}
+                placeholder="DISBAND"
+                value={disbandConfirm}
+                onChange={(e) => setDisbandConfirm(e.target.value)}
+                aria-label="Type DISBAND to confirm"
+              />
+              <button
+                type="button"
+                className="surface-btn"
+                style={{
+                  fontSize: "0.85rem",
+                  padding: "0.4rem 1rem",
+                  color: "var(--danger-color, #c00)",
+                  borderColor: "var(--danger-color, #c00)",
+                }}
+                disabled={disbandConfirm.trim().toUpperCase() !== "DISBAND" || disbanding}
+                onClick={() => void handleDisbandEnterprise()}
+              >
+                {disbanding ? "Disbanding…" : "Disband enterprise"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Members */}
       <section style={{ marginBottom: "2.5rem" }}>
@@ -138,20 +285,25 @@ export default function Admin() {
             <tbody>
               {members.map((member) => {
                 const isSelf = member.login === currentUser?.login;
+                const isEnterpriseOwner = member.role === "owner";
                 return (
                   <tr key={member.id} style={{ borderBottom: "1px solid var(--border-color, #eee)" }}>
                     <td style={{ padding: "0.5rem 0.75rem" }}>{member.login}</td>
                     <td style={{ padding: "0.5rem 0.75rem" }}>
-                      <button
-                        type="button"
-                        className="surface-btn"
-                        style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem" }}
-                        disabled={isSelf || roleUpdating === member.id}
-                        onClick={() => handleRoleToggle(member)}
-                        title={isSelf ? "Cannot change your own role" : undefined}
-                      >
-                        {roleUpdating === member.id ? "Saving..." : member.role}
-                      </button>
+                      {isEnterpriseOwner ? (
+                        <span style={{ fontSize: "0.85rem", opacity: 0.9 }}>owner</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="surface-btn"
+                          style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem" }}
+                          disabled={isSelf || roleUpdating === member.id}
+                          onClick={() => void handleRoleToggle(member)}
+                          title={isSelf ? "Cannot change your own role" : undefined}
+                        >
+                          {roleUpdating === member.id ? "Saving..." : member.role}
+                        </button>
+                      )}
                     </td>
                     <td style={{ padding: "0.5rem 0.75rem", opacity: 0.6, fontSize: "0.8rem" }}>
                       {new Date(member.joined_at).toLocaleDateString()}
@@ -175,13 +327,13 @@ export default function Admin() {
                       )}
                     </td>
                     <td style={{ padding: "0.5rem 0.75rem" }}>
-                      {!isSelf && (
+                      {!isSelf && !isEnterpriseOwner && (
                         <button
                           type="button"
                           className="surface-btn"
                           style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem", color: "var(--danger-color, #c00)" }}
                           disabled={removing === member.id}
-                          onClick={() => handleRemove(member)}
+                          onClick={() => void handleRemove(member)}
                         >
                           {removing === member.id ? "Removing..." : "Remove"}
                         </button>

@@ -20,6 +20,7 @@ from app.db import Base
 
 
 class UserRole(str, enum.Enum):
+    owner = "owner"
     admin = "admin"
     querier = "querier"
 

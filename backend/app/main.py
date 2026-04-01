@@ -19,6 +19,8 @@ from app.dataset_state import (
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
     ensure_mcp_access_tokens_table,
+    ensure_postgres_userrole_owner_enum,
+    promote_legacy_admin_to_owner_per_enterprise,
     set_dataset_index_ready,
 )
 from app.index_jobs import (
@@ -77,6 +79,8 @@ async def lifespan(app: FastAPI):
     ensure_dataset_query_context_column()
     ensure_dataset_enterprise_id_column()
     ensure_enterprise_memberships_and_last_active()
+    ensure_postgres_userrole_owner_enum()
+    promote_legacy_admin_to_owner_per_enterprise()
     ensure_mcp_access_tokens_table()
     try:
         from app.embeddings import get_model

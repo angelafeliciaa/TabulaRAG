@@ -7,7 +7,7 @@ export interface AuthUser {
   login: string;
   name: string;
   avatar_url: string;
-  role: "admin" | "querier" | null;
+  role: "owner" | "admin" | "querier" | null;
   enterprise_id: number | null;
 }
 
@@ -38,6 +38,14 @@ export function authHeaders(): Record<string, string> {
 export function logout(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+/** Merge into stored user (e.g. clear workspace after disbanding the last one). */
+export function patchStoredUser(partial: Partial<AuthUser>): void {
+  const u = getUser();
+  if (u) {
+    localStorage.setItem(USER_KEY, JSON.stringify({ ...u, ...partial }));
+  }
 }
 
 async function authFetch(
@@ -81,7 +89,7 @@ export async function exchangeGoogleCode(
   return data;
 }
 
-function applyEnterpriseSession(
+export function applyEnterpriseSession(
   token: string,
   enterpriseId: number,
   role: string,
@@ -103,7 +111,7 @@ function applyEnterpriseSession(
 export interface WorkspaceSummary {
   enterprise_id: number;
   enterprise_name: string;
-  role: "admin" | "querier";
+  role: "owner" | "admin" | "querier";
   is_active: boolean;
 }
 
@@ -175,7 +183,12 @@ export async function joinEnterprise(
 }
 
 export function isAdmin(): boolean {
-  return getUser()?.role === "admin";
+  const r = getUser()?.role;
+  return r === "admin" || r === "owner";
+}
+
+export function isOwner(): boolean {
+  return getUser()?.role === "owner";
 }
 
 export interface McpTokenStatus {
@@ -218,7 +231,7 @@ export async function adminRevokeMemberMcpToken(userId: number): Promise<void> {
 export interface Member {
   id: number;
   login: string;
-  role: "admin" | "querier";
+  role: "owner" | "admin" | "querier";
   joined_at: string;
   mcp_token_configured?: boolean;
 }
@@ -252,6 +265,30 @@ export async function removeMember(userId: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
+}
+
+export async function transferEnterpriseOwnership(
+  userId: number,
+): Promise<{ token: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/transfer-ownership`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function disbandEnterprise(): Promise<{
+  disbanded: boolean;
+  enterprise_id: number;
+}> {
+  const res = await authFetch(`${API_BASE}/enterprises`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function listInviteCodes(): Promise<InviteCode[]> {

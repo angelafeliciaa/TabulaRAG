@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset, EnterpriseMembership, McpAccessToken, UserRole
+from app.models import Dataset, Enterprise, EnterpriseMembership, McpAccessToken, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -213,6 +213,48 @@ def ensure_enterprise_memberships_and_last_active() -> None:
 
 def ensure_mcp_access_tokens_table() -> None:
     McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_postgres_userrole_owner_enum() -> None:
+    """Add 'owner' to native PostgreSQL enum for enterprise_memberships.role."""
+    if app_db.engine.dialect.name != "postgresql":
+        return
+    try:
+        with app_db.engine.begin() as conn:
+            conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'owner'"))
+    except Exception:
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(text("ALTER TYPE userrole ADD VALUE 'owner'"))
+        except Exception:
+            pass
+
+
+def promote_legacy_admin_to_owner_per_enterprise() -> None:
+    """Exactly one owner per enterprise: promote oldest admin if none marked owner."""
+    with app_db.SessionLocal() as db:
+        eids = db.execute(select(Enterprise.id)).scalars().all()
+        for eid in eids:
+            has_owner = db.execute(
+                select(EnterpriseMembership.id).where(
+                    EnterpriseMembership.enterprise_id == eid,
+                    EnterpriseMembership.role == UserRole.owner,
+                ).limit(1),
+            ).scalar_one_or_none()
+            if has_owner is not None:
+                continue
+            first_admin = db.execute(
+                select(EnterpriseMembership)
+                .where(
+                    EnterpriseMembership.enterprise_id == eid,
+                    EnterpriseMembership.role == UserRole.admin,
+                )
+                .order_by(EnterpriseMembership.id.asc()),
+            ).scalars().first()
+            if first_admin is not None:
+                first_admin.role = UserRole.owner
+                db.add(first_admin)
+        db.commit()
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:
