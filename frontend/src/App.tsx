@@ -1,7 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppUiProvider, useAppUi } from "./appUiContext";
-import { getUser, isAdmin, isAuthenticated } from "./api";
+import {
+  getUser,
+  isAdmin,
+  isAuthenticated,
+  listMyWorkspaces,
+  switchWorkspace,
+  type WorkspaceSummary,
+} from "./api";
 import logo from "./images/logo-64.webp";
 import HighlightView from "./pages/HighlightView";
 import TableView from "./pages/TableView";
@@ -31,10 +38,40 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
 
 function AppContent() {
   const location = useLocation();
-  const { sessionRev } = useAppUi();
+  const { sessionRev, bumpSession } = useAppUi();
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
 
   const user = getUser();
   const workspaceKey = `${user?.enterprise_id ?? "none"}-${sessionRev}`;
+  const onHomePage = location.pathname === "/";
+  const showWorkspaceSwitcher = Boolean(user?.enterprise_id && workspaces.length > 0);
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      setWorkspaces([]);
+      return;
+    }
+    const u = getUser();
+    if (!u?.enterprise_id) {
+      setWorkspaces([]);
+      return;
+    }
+    let cancelled = false;
+    listMyWorkspaces()
+      .then((list) => {
+        if (!cancelled) {
+          setWorkspaces(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaces([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRev, user?.enterprise_id]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -91,8 +128,41 @@ function AppContent() {
       </a>
 
       {isAuthenticated() && user && (
-        <div className="top-bar top-bar--compact">
+        <div
+          className={`top-bar top-bar--compact${showWorkspaceSwitcher ? " top-bar--with-workspace-switch" : ""}`}
+        >
           <div className="user-menu user-menu--compact">
+            {showWorkspaceSwitcher && (
+              <label className="top-bar-workspace-switch">
+                <span className="sr-only">Switch workspace</span>
+                <select
+                  className="top-bar-workspace-select"
+                  aria-label="Switch workspace"
+                  title="Switch workspace"
+                  value={user.enterprise_id ?? ""}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    if (!Number.isFinite(id) || id === user.enterprise_id) {
+                      return;
+                    }
+                    void switchWorkspace(id).then(() => bumpSession());
+                  }}
+                >
+                  {workspaces.map((w) => (
+                    <option key={w.enterprise_id} value={w.enterprise_id}>
+                      {w.enterprise_name}
+                      {w.role === "owner"
+                        ? " · owner"
+                        : w.role === "admin"
+                          ? " · admin"
+                          : w.role === "querier"
+                            ? " · querier"
+                            : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {user.avatar_url ? (
               <img src={user.avatar_url} alt="" className="user-avatar" />
             ) : (
@@ -100,12 +170,11 @@ function AppContent() {
                 {(user.name || user.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
               </span>
             )}
-            {user.enterprise_id ? (
+            {onHomePage && user.enterprise_id ? (
               <Link
-                className={`top-bar-settings-gear${location.pathname === "/settings" ? " top-bar-settings-gear--active" : ""}`}
+                className="top-bar-settings-gear"
                 to="/settings"
                 aria-label="Settings"
-                aria-current={location.pathname === "/settings" ? "page" : undefined}
               >
                 <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
                   <path
