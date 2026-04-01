@@ -45,13 +45,12 @@ def test_auth_verify_no_token():
 
 def test_auth_verify_jwt(client):
     from app.db import SessionLocal
-    from app.models import User, UserRole
+    from app.models import User
 
     with SessionLocal() as db:
         db.add(User(
             google_id="test_google_id",
             login="tester",
-            role=UserRole.querier
         ))
         db.commit()
 

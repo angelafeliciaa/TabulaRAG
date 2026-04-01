@@ -20,6 +20,7 @@ from app.db import Base
 
 
 class UserRole(str, enum.Enum):
+    owner = "owner"
     admin = "admin"
     querier = "querier"
 
@@ -28,12 +29,32 @@ class Enterprise(Base):
     __tablename__ = "enterprises"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    users = relationship("User", back_populates="enterprise")
+    memberships = relationship("EnterpriseMembership", back_populates="enterprise", cascade="all, delete-orphan")
     datasets = relationship("Dataset", back_populates="enterprise")
     invite_codes = relationship("InviteCode", back_populates="enterprise")
+
+
+class EnterpriseMembership(Base):
+    """A user's role within one enterprise (users may belong to many)."""
+
+    __tablename__ = "enterprise_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "enterprise_id", name="uq_enterprise_memberships_user_enterprise"),
+        Index("ix_enterprise_memberships_user_id", "user_id"),
+        Index("ix_enterprise_memberships_enterprise_id", "enterprise_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False)
+    role = Column(Enum(UserRole), nullable=False, default=UserRole.querier)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = relationship("User", back_populates="memberships")
+    enterprise = relationship("Enterprise", back_populates="memberships")
 
 
 class User(Base):
@@ -42,11 +63,14 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     google_id = Column(String(64), unique=True, nullable=False)
     login = Column(String(255), nullable=False)
-    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="SET NULL"), nullable=True)
-    role = Column(Enum(UserRole), nullable=False, default=UserRole.querier)
+    last_active_enterprise_id = Column(
+        Integer,
+        ForeignKey("enterprises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    enterprise = relationship("Enterprise", back_populates="users")
+    memberships = relationship("EnterpriseMembership", back_populates="user", cascade="all, delete-orphan")
     invite_codes_created = relationship("InviteCode", back_populates="created_by_user")
 
 
@@ -62,6 +86,23 @@ class InviteCode(Base):
 
     enterprise = relationship("Enterprise", back_populates="invite_codes")
     created_by_user = relationship("User", back_populates="invite_codes_created")
+
+
+class McpAccessToken(Base):
+    """Per-user MCP bearer for one enterprise; row deleted when membership ends."""
+
+    __tablename__ = "mcp_access_tokens"
+    __table_args__ = (
+        UniqueConstraint("user_id", "enterprise_id", name="uq_mcp_tokens_user_enterprise"),
+        Index("ix_mcp_access_tokens_token_hash", "token_hash"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class Dataset(Base):
@@ -124,4 +165,15 @@ class DatasetRow(Base):
     )
 
 
-__all__ = ["Base", "Dataset", "DatasetColumn", "DatasetRow", "Enterprise", "User", "InviteCode", "UserRole"]
+__all__ = [
+    "Base",
+    "Dataset",
+    "DatasetColumn",
+    "DatasetRow",
+    "Enterprise",
+    "EnterpriseMembership",
+    "User",
+    "InviteCode",
+    "McpAccessToken",
+    "UserRole",
+]

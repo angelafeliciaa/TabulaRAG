@@ -1,5 +1,5 @@
--r requirements.txt
+# Backend app + tests (includes google-auth for app.auth)
+-r backend/requirements.txt
 pytest
 pytest-asyncio
 pytest-cov
-httpx

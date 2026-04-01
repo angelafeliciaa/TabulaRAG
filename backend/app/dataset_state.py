@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect, text, update
+from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset
+from app.models import Dataset, Enterprise, EnterpriseMembership, McpAccessToken, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -150,6 +150,222 @@ def ensure_dataset_enterprise_id_column() -> None:
             )
         else:
             conn.execute(text("ALTER TABLE datasets ADD COLUMN enterprise_id INTEGER NULL"))
+
+
+def _coerce_user_role(value) -> UserRole:
+    if isinstance(value, UserRole):
+        return value
+    if value is None:
+        return UserRole.querier
+    s = str(value)
+    if s == "member":
+        return UserRole.querier
+    return UserRole(s)
+
+
+def ensure_enterprise_memberships_and_last_active() -> None:
+    """Memberships table, users.last_active_enterprise_id, backfill from legacy user.enterprise_id/role."""
+    EnterpriseMembership.__table__.create(bind=app_db.engine, checkfirst=True)
+
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    user_cols = {c["name"] for c in inspector.get_columns("users")}
+    dialect = app_db.engine.dialect.name
+
+    if "last_active_enterprise_id" not in user_cols:
+        with app_db.engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN last_active_enterprise_id INTEGER NULL "
+                        "REFERENCES enterprises(id) ON DELETE SET NULL"
+                    )
+                )
+            else:
+                conn.execute(text("ALTER TABLE users ADD COLUMN last_active_enterprise_id INTEGER NULL"))
+
+    if "enterprise_id" not in user_cols:
+        return
+
+    with app_db.SessionLocal() as db:
+        legacy_rows = db.execute(
+            text("SELECT id, enterprise_id, role FROM users WHERE enterprise_id IS NOT NULL"),
+        ).all()
+        for row in legacy_rows:
+            uid, eid, role_raw = int(row[0]), int(row[1]), row[2]
+            role = _coerce_user_role(role_raw)
+            exists = db.execute(
+                select(EnterpriseMembership).where(
+                    EnterpriseMembership.user_id == uid,
+                    EnterpriseMembership.enterprise_id == eid,
+                ),
+            ).scalar_one_or_none()
+            if exists is None:
+                db.add(EnterpriseMembership(user_id=uid, enterprise_id=eid, role=role))
+
+        db.execute(
+            text(
+                "UPDATE users SET last_active_enterprise_id = enterprise_id "
+                "WHERE enterprise_id IS NOT NULL AND last_active_enterprise_id IS NULL",
+            ),
+        )
+        db.commit()
+
+
+def ensure_mcp_access_tokens_table() -> None:
+    McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_querier_role_and_migrate_member() -> None:
+    """Ensure 'querier' exists on PostgreSQL enum; rewrite any 'member' rows to 'querier'."""
+    inspector = inspect(app_db.engine)
+    if "enterprise_memberships" not in inspector.get_table_names():
+        return
+    dialect = app_db.engine.dialect.name
+    if dialect == "postgresql":
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'querier'"))
+        except Exception:
+            try:
+                with app_db.engine.begin() as conn:
+                    conn.execute(text("ALTER TYPE userrole ADD VALUE 'querier'"))
+            except Exception:
+                pass
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(
+                text(
+                    "UPDATE enterprise_memberships SET role = 'querier'::userrole "
+                    "WHERE role::text = 'member'",
+                ),
+            )
+        else:
+            conn.execute(text("UPDATE enterprise_memberships SET role = 'querier' WHERE role = 'member'"))
+        user_cols: set[str] = set()
+        if "users" in inspector.get_table_names():
+            user_cols = {c["name"] for c in inspector.get_columns("users")}
+        if "role" in user_cols:
+            if dialect == "postgresql":
+                # Compare as text so WHERE 'member' is not parsed as userrole (may not exist on enum).
+                conn.execute(
+                    text(
+                        "UPDATE users SET role = 'querier'::userrole WHERE role::text = 'member'",
+                    ),
+                )
+            else:
+                conn.execute(text("UPDATE users SET role = 'querier' WHERE role = 'member'"))
+
+
+def ensure_postgres_userrole_owner_enum() -> None:
+    """Add 'owner' to native PostgreSQL enum for enterprise_memberships.role."""
+    if app_db.engine.dialect.name != "postgresql":
+        return
+    try:
+        with app_db.engine.begin() as conn:
+            conn.execute(text("ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'owner'"))
+    except Exception:
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(text("ALTER TYPE userrole ADD VALUE 'owner'"))
+        except Exception:
+            pass
+
+
+def ensure_enterprise_name_non_unique() -> None:
+    """Allow duplicate workspace names: drop unique constraint on enterprises.name (existing DBs)."""
+    inspector = inspect(app_db.engine)
+    if "enterprises" not in inspector.get_table_names():
+        return
+
+    ucs = inspector.get_unique_constraints("enterprises")
+    name_only = [uc for uc in ucs if set(uc.get("column_names") or []) == {"name"}]
+
+    dialect = app_db.engine.dialect.name
+
+    if dialect == "postgresql":
+        if not name_only:
+            return
+        with app_db.engine.begin() as conn:
+            for uc in name_only:
+                cname = uc.get("name")
+                if cname:
+                    conn.execute(text(f'ALTER TABLE enterprises DROP CONSTRAINT IF EXISTS "{cname}"'))
+        return
+
+    if dialect == "sqlite":
+        needs_rebuild = bool(name_only)
+        if not needs_rebuild:
+            with app_db.engine.connect() as c:
+                create_sql = c.execute(
+                    text("SELECT sql FROM sqlite_master WHERE type='table' AND name='enterprises'"),
+                ).scalar_one_or_none()
+            if create_sql and "UNIQUE" in create_sql.upper() and "name" in create_sql.lower():
+                needs_rebuild = True
+        if not needs_rebuild:
+            return
+        # SQLite note: PRAGMA foreign_keys is a no-op inside a transaction.
+        # We need to issue it before beginning transactional DDL, and re-enable
+        # afterward, on the same connection.
+        with app_db.engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            trans = conn.begin()
+            try:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE enterprises__nq (
+                            id INTEGER NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                            PRIMARY KEY (id)
+                        )
+                        """
+                    ),
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO enterprises__nq (id, name, created_at) "
+                        "SELECT id, name, created_at FROM enterprises"
+                    )
+                )
+                conn.execute(text("DROP TABLE enterprises"))
+                conn.execute(text("ALTER TABLE enterprises__nq RENAME TO enterprises"))
+                trans.commit()
+            except Exception:
+                trans.rollback()
+                raise
+            finally:
+                conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def promote_legacy_admin_to_owner_per_enterprise() -> None:
+    """Exactly one owner per enterprise: promote oldest admin if none marked owner."""
+    with app_db.SessionLocal() as db:
+        eids = db.execute(select(Enterprise.id)).scalars().all()
+        for eid in eids:
+            has_owner = db.execute(
+                select(EnterpriseMembership.id).where(
+                    EnterpriseMembership.enterprise_id == eid,
+                    EnterpriseMembership.role == UserRole.owner,
+                ).limit(1),
+            ).scalar_one_or_none()
+            if has_owner is not None:
+                continue
+            first_admin = db.execute(
+                select(EnterpriseMembership)
+                .where(
+                    EnterpriseMembership.enterprise_id == eid,
+                    EnterpriseMembership.role == UserRole.admin,
+                )
+                .order_by(EnterpriseMembership.id.asc()),
+            ).scalars().first()
+            if first_admin is not None:
+                first_admin.role = UserRole.owner
+                db.add(first_admin)
+        db.commit()
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:

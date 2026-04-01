@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 const TOKEN_KEY = "tabularag_token";
 const USER_KEY = "tabularag_user";
@@ -7,7 +7,7 @@ export interface AuthUser {
   login: string;
   name: string;
   avatar_url: string;
-  role: "admin" | "querier" | null;
+  role: "owner" | "admin" | "querier" | null;
   enterprise_id: number | null;
 }
 
@@ -19,7 +19,12 @@ export function getUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AuthUser;
+    const u = JSON.parse(raw) as AuthUser & { role?: string | null };
+    if (String(u.role) === "member") {
+      u.role = "querier";
+      localStorage.setItem(USER_KEY, JSON.stringify(u));
+    }
+    return u as AuthUser;
   } catch {
     return null;
   }
@@ -38,6 +43,14 @@ export function authHeaders(): Record<string, string> {
 export function logout(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+/** Merge into stored user (e.g. clear workspace after disbanding the last one). */
+export function patchStoredUser(partial: Partial<AuthUser>): void {
+  const u = getUser();
+  if (u) {
+    localStorage.setItem(USER_KEY, JSON.stringify({ ...u, ...partial }));
+  }
 }
 
 async function authFetch(
@@ -62,6 +75,25 @@ export async function getGoogleClientId(): Promise<string> {
   return data.client_id;
 }
 
+/** Full browser redirect to Google OAuth (used by Login and “Switch account”). */
+export async function redirectToGoogleSignIn(options?: {
+  prompt?: "select_account" | "consent" | "none";
+}): Promise<void> {
+  const clientId = await getGoogleClientId();
+  const redirectUri = `${window.location.origin}/auth/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "online",
+  });
+  if (options?.prompt) {
+    params.set("prompt", options.prompt);
+  }
+  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
 export async function exchangeGoogleCode(
   code: string,
   redirectUri: string,
@@ -81,11 +113,145 @@ export async function exchangeGoogleCode(
   return data;
 }
 
+function decodeJwtPayloadJson(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const mid = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - (mid.length % 4)) % 4;
+    const padded = mid + "=".repeat(pad);
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWorkspaceRole(role: string | null | undefined): AuthUser["role"] | null {
+  if (role === "owner" || role === "admin" || role === "querier") return role;
+  return null;
+}
+
+export function applyEnterpriseSession(
+  token: string,
+  enterpriseId: number | null,
+  role: string | null,
+): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  const prev = getUser();
+  const nextRole = normalizeWorkspaceRole(role);
+  if (prev) {
+    localStorage.setItem(
+      USER_KEY,
+      JSON.stringify({
+        ...prev,
+        enterprise_id: enterpriseId,
+        role: nextRole,
+      }),
+    );
+    return;
+  }
+  const claims = decodeJwtPayloadJson(token);
+  if (claims) {
+    const resolvedEid =
+      enterpriseId !== null
+        ? enterpriseId
+        : claims.enterprise_id != null && claims.enterprise_id !== undefined
+          ? Number(claims.enterprise_id)
+          : null;
+    const claimRole = normalizeWorkspaceRole(
+      typeof claims.role === "string" ? claims.role : null,
+    );
+    localStorage.setItem(
+      USER_KEY,
+      JSON.stringify({
+        login: String(claims.login ?? ""),
+        name: String(claims.name ?? claims.login ?? ""),
+        avatar_url: String(claims.avatar_url ?? ""),
+        enterprise_id: resolvedEid,
+        role: nextRole ?? claimRole,
+      }),
+    );
+  }
+}
+
+export interface WorkspaceSummary {
+  enterprise_id: number;
+  enterprise_name: string;
+  role: "owner" | "admin" | "querier";
+  is_active: boolean;
+  member_count: number;
+}
+
+export async function listMyWorkspaces(): Promise<WorkspaceSummary[]> {
+  const res = await authFetch(`${API_BASE}/enterprises/me`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function switchWorkspace(
+  enterpriseId: number,
+): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ enterprise_id: enterpriseId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    token: string;
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+  };
+  applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  return data;
+}
+
+export async function leaveWorkspace(): Promise<{
+  token: string;
+  enterprise_id: number | null;
+  enterprise_name: string;
+  role: string | null;
+}> {
+  const res = await authFetch(`${API_BASE}/enterprises/leave`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    token: string;
+    enterprise_id: number | null;
+    enterprise_name: string;
+    role: string | null;
+  };
+  applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  return data;
+}
+
 export async function createEnterprise(
   name: string,
 ): Promise<{ enterprise_id: number; enterprise_name: string; role: string }> {
   const res = await authFetch(`${API_BASE}/enterprises`, {
     method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+    token?: string;
+  };
+  if (data.token) {
+    applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  }
+  return data;
+}
+
+export async function renameWorkspace(name: string): Promise<{ enterprise_id: number; enterprise_name: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/name`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ name }),
   });
@@ -102,18 +268,71 @@ export async function joinEnterprise(
     body: JSON.stringify({ code }),
   });
   if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as {
+    enterprise_id: number;
+    enterprise_name: string;
+    role: string;
+    token?: string;
+  };
+  if (data.token) {
+    applyEnterpriseSession(data.token, data.enterprise_id, data.role);
+  }
+  return data;
+}
+
+/** True for owner or admin (can upload and edit tables); queriers are read-only in the UI. */
+export function isAdmin(): boolean {
+  const r = getUser()?.role;
+  return r === "admin" || r === "owner";
+}
+
+export function isOwner(): boolean {
+  return getUser()?.role === "owner";
+}
+
+export interface McpTokenStatus {
+  configured: boolean;
+  created_at: string | null;
+  hint?: string;
+}
+
+export async function getMcpTokenStatus(): Promise<McpTokenStatus> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export function isAdmin(): boolean {
-  return getUser()?.role === "admin";
+export async function createOrRotateMcpToken(): Promise<{ token: string; created_at: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeMcpToken(): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function adminRevokeMemberMcpToken(userId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/enterprises/mcp-token/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 export interface Member {
   id: number;
   login: string;
-  role: "admin" | "querier";
+  role: "owner" | "admin" | "querier";
   joined_at: string;
+  mcp_token_configured?: boolean;
 }
 
 export interface InviteCode {
@@ -145,6 +364,30 @@ export async function removeMember(userId: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
+}
+
+export async function transferEnterpriseOwnership(
+  userId: number,
+): Promise<{ token: string; role: string }> {
+  const res = await authFetch(`${API_BASE}/enterprises/transfer-ownership`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function disbandEnterprise(): Promise<{
+  disbanded: boolean;
+  enterprise_id: number;
+}> {
+  const res = await authFetch(`${API_BASE}/enterprises`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function listInviteCodes(): Promise<InviteCode[]> {

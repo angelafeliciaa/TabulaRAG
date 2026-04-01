@@ -30,10 +30,22 @@ from app.normalization import (
     strip_internal_fields,
 )
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
-from app.auth import require_admin, require_auth
-from app.models import Dataset, DatasetColumn, DatasetRow, User
+from app.auth import AuthUser, require_admin, require_auth
 
 router = APIRouter()
+
+
+def _scoped_enterprise_id(auth: AuthUser) -> Optional[int]:
+    """API key may use None (all tenants). Interactive users must have an active workspace."""
+    if auth.google_id == "api_key":
+        return auth.enterprise_id
+    if auth.enterprise_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Join or create a workspace to access tables.",
+        )
+    return auth.enterprise_id
+
 
 PUBLIC_UI_BASE_URL = os.getenv("PUBLIC_UI_BASE_URL", "http://localhost:5173")
 SLICE_RESPONSE_URL_REQUIREMENT_TEXT = (
@@ -521,13 +533,13 @@ def list_tables(
         le=200,
         description="Optional cap on number of datasets returned. If omitted, returns all ready datasets.",
     ),
-    current_user: User = Depends(require_auth),
+    current_user: AuthUser = Depends(require_auth),
 ):
     return _list_tables_payload(
         include_pending=include_pending,
         sample_rows=3,
         limit=limit,
-        enterprise_id=current_user.enterprise_id,
+        enterprise_id=_scoped_enterprise_id(current_user),
     )
 
 
@@ -568,9 +580,9 @@ def _get_cols_payload(dataset_id: int) -> dict:
     description="Returns column names and indexes for a dataset. Always call this to understand the data structure and actual column names before querying.",
     include_in_schema=False,
 )
-def get_cols_for_dataset(dataset_id: int, current_user: User = Depends(require_auth)):
+def get_cols_for_dataset(dataset_id: int, current_user: AuthUser = Depends(require_auth)):
     with SessionLocal() as db:
-        _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
     return _get_cols_payload(dataset_id)
 
 
@@ -583,11 +595,11 @@ def get_cols_for_dataset(dataset_id: int, current_user: User = Depends(require_a
     ),
     include_in_schema=False,
 )
-def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest, current_user: User = Depends(require_auth)):
+def post_rows_by_indices(dataset_id: int, body: RowsByIndicesRequest, current_user: AuthUser = Depends(require_auth)):
     ordered_indices = list(body.row_indices)
     unique_set = set(ordered_indices)
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
 
         columns_meta = (
             db.execute(
@@ -707,10 +719,10 @@ def get_table_slice(
         default=None,
         description="When set, only rows where any cell (original or normalized value) contains this string (case-insensitive) are returned. Pagination applies to the filtered set.",
     ),
-    current_user: User = Depends(require_auth),
+    current_user: AuthUser = Depends(require_auth),
 ):
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
 
         search_trimmed = search.strip() if search else None
         like_pattern = _slice_search_like_pattern(search_trimmed) if search_trimmed else None
@@ -834,12 +846,12 @@ def get_table_slice(
 @router.get("/tables/index-status", include_in_schema=False)
 def list_index_status(
     dataset_id: Optional[List[int]] = Query(default=None),
-    current_user: User = Depends(require_auth),
+    current_user: AuthUser = Depends(require_auth),
 ):
     with SessionLocal() as db:
         query = select(Dataset.id, Dataset.row_count)
-        if current_user.enterprise_id is not None:
-            query = query.where(Dataset.enterprise_id == current_user.enterprise_id)
+        if _scoped_enterprise_id(current_user) is not None:
+            query = query.where(Dataset.enterprise_id == _scoped_enterprise_id(current_user))
         if dataset_id:
             query = query.where(Dataset.id.in_(dataset_id))
         dataset_rows = db.execute(query.order_by(Dataset.id.desc())).all()
@@ -905,9 +917,9 @@ def list_index_status(
 
 
 @router.delete("/tables/{dataset_id}", include_in_schema=False)
-def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_user: User = Depends(require_admin)):
+def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_user: AuthUser = Depends(require_admin)):
     with SessionLocal() as db:
-        _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
         # Use direct SQL deletes to avoid expensive ORM cascade object loading.
         db.execute(delete(DatasetRow).where(DatasetRow.dataset_id == dataset_id))
         db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id == dataset_id))
@@ -919,13 +931,15 @@ def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_use
 
 
 @router.patch("/tables/{dataset_id}", include_in_schema=False)
-def rename_table(dataset_id: int, body: RenameRequest, current_user: User = Depends(require_admin)):
+def rename_table(dataset_id: int, body: RenameRequest, current_user: AuthUser = Depends(require_admin)):
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
         normalized_name = normalize_dataset_name_or_raise(body.name)
         target_key = dataset_name_collision_key(normalized_name)
+        eid = _scoped_enterprise_id(current_user)
+        ent_scope = Dataset.enterprise_id.is_(None) if eid is None else Dataset.enterprise_id == eid
         existing = db.execute(
-            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id)
+            select(Dataset.id, Dataset.name).where(Dataset.id != dataset_id, ent_scope),
         ).all()
         conflict = next(
             (
@@ -940,8 +954,8 @@ def rename_table(dataset_id: int, body: RenameRequest, current_user: User = Depe
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Dataset name '{normalized_name}' already exists. "
-                    "Use a unique dataset name."
+                    f"Dataset name '{normalized_name}' already exists in this workspace. "
+                    "Use a unique table name."
                 ),
             )
         dataset.name = normalized_name
@@ -954,7 +968,7 @@ def patch_table_row_cell(
     dataset_id: int,
     row_index: int,
     body: RowCellUpdateRequest,
-    current_user: User = Depends(require_auth),
+    current_user: AuthUser = Depends(require_admin),
 ):
     if row_index < 0:
         raise HTTPException(status_code=400, detail="row_index must be non-negative")
@@ -966,7 +980,7 @@ def patch_table_row_cell(
     new_row_data: Optional[Dict[str, Any]] = None
 
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
 
         columns = (
             db.execute(
@@ -1033,7 +1047,7 @@ def patch_table_row_cell(
 
 
 @router.patch("/tables/{dataset_id}/columns", include_in_schema=False)
-def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_user: User = Depends(require_auth)):
+def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_user: AuthUser = Depends(require_admin)):
     old_column = (body.column or "").strip()
     if not old_column:
         raise HTTPException(status_code=400, detail="column is required")
@@ -1045,7 +1059,7 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_
     new_column = normalize_headers([requested_name])[0]
 
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
 
         columns = (
             db.execute(
@@ -1118,10 +1132,10 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_
 
 
 @router.patch("/tables/{dataset_id}/description", include_in_schema=False)
-def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest, current_user: User = Depends(require_admin)):
+def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest, current_user: AuthUser = Depends(require_admin)):
     normalized_description = _normalize_dataset_description(body.description)
     with SessionLocal() as db:
-        dataset = _get_dataset_or_404(db, dataset_id, current_user.enterprise_id)
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
         dataset.description = normalized_description
         db.commit()
         return {

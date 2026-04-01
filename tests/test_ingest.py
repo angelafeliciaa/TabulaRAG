@@ -120,6 +120,99 @@ def test_rename_rejects_duplicate_dataset_name(client):
     assert "already exists" in rename.json()["detail"]
 
 
+def test_same_dataset_name_allowed_in_different_enterprise():
+    """Table names are unique per workspace; two enterprises may use the same name."""
+    from fastapi.testclient import TestClient
+
+    import app.main as app_main
+    from app.auth import create_jwt
+    from app.db import SessionLocal
+    from app.models import Dataset, Enterprise, EnterpriseMembership, User, UserRole
+
+    with SessionLocal() as db:
+        u = User(google_id="multi_ent_user", login="me@example.com", last_active_enterprise_id=None)
+        db.add(u)
+        db.flush()
+        e1 = Enterprise(name="Org One")
+        e2 = Enterprise(name="Org Two")
+        db.add_all([e1, e2])
+        db.flush()
+        db.add(EnterpriseMembership(user_id=u.id, enterprise_id=e1.id, role=UserRole.owner))
+        db.add(EnterpriseMembership(user_id=u.id, enterprise_id=e2.id, role=UserRole.owner))
+        u.last_active_enterprise_id = e2.id
+        db.add(u)
+        db.add(
+            Dataset(
+                name="SharedName",
+                enterprise_id=e1.id,
+                column_count=1,
+                row_count=0,
+                delimiter=",",
+                has_header=True,
+                is_index_ready=True,
+            ),
+        )
+        db.commit()
+
+    token = create_jwt(
+        {
+            "id": "multi_ent_user",
+            "email": "me@example.com",
+            "name": "Me",
+            "picture": "",
+        },
+    )
+
+    with TestClient(app_main.app) as c:
+        resp = c.post(
+            "/ingest",
+            headers={"Authorization": f"Bearer {token}"},
+            files=make_csv("a,b\n1,2\n"),
+            data={"dataset_name": "SharedName", "has_header": "true"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "SharedName"
+
+
+def test_duplicate_table_name_rejected_within_enterprise():
+    """Within one workspace, table names are unique (collision-key)."""
+    from fastapi.testclient import TestClient
+
+    import app.main as app_main
+    from app.auth import create_jwt
+    from app.db import SessionLocal
+    from app.models import User
+
+    with SessionLocal() as db:
+        db.add(User(google_id="dup_in_ent_user", login="dup_in_ent_user@example.com"))
+        db.commit()
+
+    token = create_jwt(
+        {"id": "dup_in_ent_user", "email": "dup_in_ent_user@example.com", "name": "Me", "picture": ""},
+    )
+
+    with TestClient(app_main.app) as c:
+        created = c.post("/enterprises", headers={"Authorization": f"Bearer {token}"}, json={"name": "Org"})
+        assert created.status_code == 200, created.text
+        tok = created.json()["token"]
+
+        first = c.post(
+            "/ingest",
+            headers={"Authorization": f"Bearer {tok}"},
+            files=make_csv("a,b\n1,2\n"),
+            data={"dataset_name": "Shared Table", "has_header": "true"},
+        )
+        assert first.status_code == 200, first.text
+
+        second = c.post(
+            "/ingest",
+            headers={"Authorization": f"Bearer {tok}"},
+            files=make_csv("a,b\n3,4\n", filename="other.csv"),
+            data={"dataset_name": "shared-table", "has_header": "true"},
+        )
+        assert second.status_code == 409, second.text
+
+
 def test_bom_utf8(client):
     content = "\ufeffname,age\nAlice,30\n".encode("utf-8-sig")
     response = client.post(
