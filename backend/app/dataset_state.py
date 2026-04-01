@@ -126,6 +126,32 @@ def ensure_dataset_query_context_column() -> None:
         )
 
 
+def ensure_dataset_enterprise_id_column() -> None:
+    """Add datasets.enterprise_id for multi-tenant enterprises (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "datasets" not in inspector.get_table_names():
+        return
+    if "enterprises" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("datasets")}
+    if "enterprise_id" in column_names:
+        return
+
+    dialect = app_db.engine.dialect.name
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(
+                text(
+                    "ALTER TABLE datasets "
+                    "ADD COLUMN enterprise_id INTEGER NULL "
+                    "REFERENCES enterprises(id) ON DELETE SET NULL"
+                )
+            )
+        else:
+            conn.execute(text("ALTER TABLE datasets ADD COLUMN enterprise_id INTEGER NULL"))
+
+
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:
     with app_db.SessionLocal() as db:
         db.execute(
