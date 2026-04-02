@@ -25,6 +25,25 @@ class UserRole(str, enum.Enum):
     querier = "querier"
 
 
+class FolderPrivacy(str, enum.Enum):
+    public = "public"
+    protected = "protected"
+    private = "private"
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id = Column(Integer, primary_key=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    privacy = Column(Enum(FolderPrivacy), nullable=False, default=FolderPrivacy.protected)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    datasets = relationship("Dataset", back_populates="folder")
+
+
 class Enterprise(Base):
     __tablename__ = "enterprises"
 
@@ -124,9 +143,11 @@ class Dataset(Base):
         default=False,
         server_default=false(),
     )
+    folder_id = Column(Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     enterprise = relationship("Enterprise", back_populates="datasets")
+    folder = relationship("Folder", back_populates="datasets")
     columns = relationship("DatasetColumn", back_populates="dataset", cascade="all, delete-orphan")
     rows = relationship("DatasetRow", back_populates="dataset", cascade="all, delete-orphan")
 
@@ -172,6 +193,8 @@ __all__ = [
     "DatasetRow",
     "Enterprise",
     "EnterpriseMembership",
+    "Folder",
+    "FolderPrivacy",
     "User",
     "InviteCode",
     "McpAccessToken",

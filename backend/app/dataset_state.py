@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset, Enterprise, EnterpriseMembership, McpAccessToken, UserRole
+from app.models import Dataset, Enterprise, EnterpriseMembership, Folder, McpAccessToken, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -216,6 +216,57 @@ def ensure_enterprise_memberships_and_last_active() -> None:
 
 def ensure_mcp_access_tokens_table() -> None:
     McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_folders_table() -> None:
+    """Create the folders table (and folderprivacy enum on PostgreSQL) for existing DB volumes."""
+    inspector = inspect(app_db.engine)
+    if "folders" in inspector.get_table_names():
+        return
+
+    dialect = app_db.engine.dialect.name
+    if dialect == "postgresql":
+        # Create the native enum type before the table references it.
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "DO $$ BEGIN "
+                        "CREATE TYPE folderprivacy AS ENUM ('public', 'protected', 'private'); "
+                        "EXCEPTION WHEN duplicate_object THEN NULL; "
+                        "END $$"
+                    )
+                )
+        except Exception:
+            pass
+
+    Folder.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_dataset_folder_id_column() -> None:
+    """Add datasets.folder_id for folder-based access control (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "datasets" not in inspector.get_table_names():
+        return
+    if "folders" not in inspector.get_table_names():
+        return
+
+    column_names = {c["name"] for c in inspector.get_columns("datasets")}
+    if "folder_id" in column_names:
+        return
+
+    dialect = app_db.engine.dialect.name
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(
+                text(
+                    "ALTER TABLE datasets "
+                    "ADD COLUMN folder_id INTEGER NULL "
+                    "REFERENCES folders(id) ON DELETE SET NULL"
+                )
+            )
+        else:
+            conn.execute(text("ALTER TABLE datasets ADD COLUMN folder_id INTEGER NULL"))
 
 
 def ensure_querier_role_and_migrate_member() -> None:

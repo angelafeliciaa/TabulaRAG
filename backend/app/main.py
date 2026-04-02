@@ -14,11 +14,13 @@ from app.db import SessionLocal, engine
 from app.dataset_state import (
     ensure_dataset_description_column,
     ensure_dataset_enterprise_id_column,
+    ensure_dataset_folder_id_column,
     ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
     ensure_enterprise_name_non_unique,
+    ensure_folders_table,
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
@@ -86,6 +88,8 @@ async def lifespan(app: FastAPI):
     ensure_postgres_userrole_owner_enum()
     promote_legacy_admin_to_owner_per_enterprise()
     ensure_mcp_access_tokens_table()
+    ensure_folders_table()
+    ensure_dataset_folder_id_column()
     try:
         from app.embeddings import get_model
         get_model()
