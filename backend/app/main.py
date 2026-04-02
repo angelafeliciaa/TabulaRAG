@@ -22,6 +22,7 @@ from app.dataset_state import (
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
+    ensure_user_google_auth_columns,
     promote_legacy_admin_to_owner_per_enterprise,
     set_dataset_index_ready,
 )
@@ -75,6 +76,7 @@ INDEX_WORKER_CONCURRENCY = max(1, int(os.getenv("INDEX_WORKER_CONCURRENCY", "4")
 async def lifespan(app: FastAPI):
     global _index_worker
     Base.metadata.create_all(bind=engine)
+    ensure_user_google_auth_columns()
     ensure_dataset_columns_normalized_columns()
     ensure_dataset_index_ready_column()
     ensure_dataset_description_column()
@@ -658,8 +660,17 @@ async def auth_google_callback(body: dict):
     with SessionLocal() as db:
         user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
         if user is None:
-            user = User(google_id=google_id, login=login)
-            db.add(user)
+            user = db.execute(select(User).where(User.login == login)).scalar_one_or_none()
+            if user is None:
+                user = User(google_id=google_id, login=login)
+                db.add(user)
+            elif not user.google_id:
+                user.google_id = google_id
+            elif user.google_id != google_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A different Google account is already linked to this email",
+                )
         elif user.login != login:
             user.login = login
         db.commit()

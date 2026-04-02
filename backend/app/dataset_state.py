@@ -6,6 +6,103 @@ import app.db as app_db
 from app.models import Dataset, Enterprise, EnterpriseMembership, McpAccessToken, UserRole
 
 
+def ensure_user_google_auth_columns() -> None:
+    """Make older users tables compatible with the current Google-login model."""
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    user_cols = {c["name"] for c in inspector.get_columns("users")}
+    dialect = app_db.engine.dialect.name
+    login_added = False
+    google_id_added = False
+
+    with app_db.engine.begin() as conn:
+        if "login" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN login VARCHAR(255)"))
+            login_added = True
+        if "google_id" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN google_id VARCHAR(64)"))
+            google_id_added = True
+
+    with app_db.engine.begin() as conn:
+        if "login" in user_cols or login_added:
+            if "email" in user_cols:
+                conn.execute(
+                    text(
+                        "UPDATE users SET login = email "
+                        "WHERE login IS NULL AND email IS NOT NULL",
+                    )
+                )
+            if dialect == "postgresql":
+                conn.execute(
+                    text(
+                        "UPDATE users SET login = 'legacy_user_' || id::text "
+                        "WHERE login IS NULL",
+                    )
+                )
+                conn.execute(text("ALTER TABLE users ALTER COLUMN login SET NOT NULL"))
+            else:
+                conn.execute(
+                    text(
+                        "UPDATE users SET login = 'legacy_user_' || CAST(id AS TEXT) "
+                        "WHERE login IS NULL",
+                    )
+                )
+
+        if ("google_id" in user_cols or google_id_added) and "user_identities" in inspector.get_table_names():
+            if dialect == "postgresql":
+                conn.execute(
+                    text(
+                        """
+                        UPDATE users AS u
+                        SET google_id = ui.subject
+                        FROM user_identities AS ui
+                        WHERE ui.user_id = u.id
+                          AND ui.provider = 'google'
+                          AND (u.google_id IS NULL OR u.google_id = '')
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_id
+                        ON users (google_id)
+                        WHERE google_id IS NOT NULL
+                        """
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE users
+                        SET google_id = (
+                            SELECT ui.subject
+                            FROM user_identities AS ui
+                            WHERE ui.user_id = users.id
+                              AND ui.provider = 'google'
+                            LIMIT 1
+                        )
+                        WHERE (google_id IS NULL OR google_id = '')
+                          AND EXISTS (
+                              SELECT 1
+                              FROM user_identities AS ui
+                              WHERE ui.user_id = users.id
+                                AND ui.provider = 'google'
+                          )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_id "
+                        "ON users (google_id)",
+                    )
+                )
+
+
 def ensure_dataset_columns_normalized_columns() -> None:
     """Migrate dataset_columns from name to original_name + normalized_name if needed."""
     inspector = inspect(app_db.engine)

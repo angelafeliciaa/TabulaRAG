@@ -102,6 +102,58 @@ def test_google_callback_success(client):
     assert body["user"]["login"] == "octocat@example.com"
 
 
+def test_google_callback_links_existing_user_by_login(client):
+    from app.db import SessionLocal
+    from app.models import User
+
+    with SessionLocal() as db:
+        db.add(User(google_id="", login="octocat@example.com"))
+        db.commit()
+
+    mock_user = {
+        "id": "42",
+        "email": "octocat@example.com",
+        "name": "Octo",
+        "picture": "",
+    }
+
+    with patch("app.main.exchange_google_code", new_callable=AsyncMock, return_value=mock_user):
+        resp = client.post(
+            "/auth/google/callback",
+            json={"code": "abc123", "redirect_uri": "https://example.com/callback"},
+        )
+
+    assert resp.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.login == "octocat@example.com").one()
+        assert user.google_id == "42"
+
+
+def test_google_callback_rejects_conflicting_google_link(client):
+    from app.db import SessionLocal
+    from app.models import User
+
+    with SessionLocal() as db:
+        db.add(User(google_id="existing-google-id", login="octocat@example.com"))
+        db.commit()
+
+    mock_user = {
+        "id": "42",
+        "email": "octocat@example.com",
+        "name": "Octo",
+        "picture": "",
+    }
+
+    with patch("app.main.exchange_google_code", new_callable=AsyncMock, return_value=mock_user):
+        resp = client.post(
+            "/auth/google/callback",
+            json={"code": "abc123", "redirect_uri": "https://example.com/callback"},
+        )
+
+    assert resp.status_code == 409
+
+
 # ── Ingest edge cases ────────────────────────────────────────────
 
 
