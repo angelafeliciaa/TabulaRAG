@@ -9,7 +9,7 @@
 
   --bg: #eef0f2;
   --bg-elev: #f6f7f9;
-  --bg-elev-2: #F4F5F8;
+  --bg-elev-2: #f4f5f8;
   --border: #cfd3d8;
   --border-soft: #889098;
   --text: #1a1d21;
@@ -47,8 +47,12 @@
   --surface-blur-border: #d0d5dc;
   --surface-blur-edge: rgba(26, 35, 50, 0.05);
   --blur-saturate: 180%;
-  --page-bg: #E4E6EA;
-  --page-bg-dots: radial-gradient(circle, rgba(100, 120, 150, 0.2) 1px, transparent 1px);
+  --page-bg: #e4e6ea;
+  --page-bg-dots: radial-gradient(
+    circle,
+    rgba(100, 120, 150, 0.2) 1px,
+    transparent 1px
+  );
   --search-bar-max-width: 260px;
 
   color-scheme: light;
@@ -97,7 +101,11 @@
   --surface-blur-edge: rgba(255, 255, 255, 0.08);
   --blur-saturate: 160%;
   --page-bg: linear-gradient(180deg, #0c0c0a 0%, #141412 50%, #0f0f0d 100%);
-  --page-bg-dots: radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  --page-bg-dots: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.08) 1px,
+    transparent 1px
+  );
 
   color-scheme: dark;
 }
@@ -1389,7 +1397,9 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   cursor: pointer;
   color: inherit;
   background: transparent;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .settings-nav-item:hover {
@@ -1562,7 +1572,8 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  scrollbar-color: color-mix(in srgb, var(--text-muted) 55%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 55%, transparent)
+    transparent;
   scrollbar-width: thin;
 }
 
@@ -1655,7 +1666,9 @@ a.settings-my-workspaces-add-link {
   color: var(--info);
   border: none;
   background: none;
-  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    text-decoration-color 0.15s ease;
 }
 
 a.settings-my-workspaces-add-link:hover {
@@ -2076,7 +2089,11 @@ button.surface-btn.settings-workspace-admin-remove {
   font-weight: 600;
   border: 1px solid var(--danger);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface-blur-bg-strong));
+  background: color-mix(
+    in srgb,
+    var(--danger) 10%,
+    var(--surface-blur-bg-strong)
+  );
   color: var(--danger);
   box-shadow: none;
   transition:
@@ -2086,7 +2103,11 @@ button.surface-btn.settings-workspace-admin-remove {
 }
 
 button.surface-btn.settings-workspace-admin-remove:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 16%, var(--surface-blur-bg-strong));
+  background: color-mix(
+    in srgb,
+    var(--danger) 16%,
+    var(--surface-blur-bg-strong)
+  );
   border-color: var(--danger-strong);
   color: var(--danger-strong);
 }
@@ -2409,7 +2430,8 @@ button.surface-btn.settings-workspace-admin-remove:focus-visible {
   background-clip: padding-box;
 }
 
-:root[data-theme="dark"] .upload-home-page-scroll::-webkit-scrollbar-thumb:hover {
+:root[data-theme="dark"]
+  .upload-home-page-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.45);
   background-clip: padding-box;
 }
@@ -2998,7 +3020,6 @@ ul {
   border-color: var(--surface-blur-border);
 }
 
-
 .rename-input {
   width: 100%;
   border: 1px solid var(--border-soft);
@@ -3125,7 +3146,6 @@ ul {
 :root[data-theme="dark"] .list-item.selected {
   background: var(--surface-blur-bg-strong);
 }
-
 
 .index-job {
   width: 178px;
@@ -3515,7 +3535,7 @@ ul {
   color: var(--text);
 }
 
-/* View Full Table link: same design as .sort-toggle-button */
+/* Edit Full Table link: same design as .sort-toggle-button */
 a.sort-toggle-button.preview-open-link {
   flex-shrink: 0;
   text-decoration: none;
@@ -3532,7 +3552,9 @@ a.sort-toggle-button.preview-open-link {
 }
 
 /* PNG open icon: light-on-dark in dark theme (selector was wrongly .preview-open-icon-link) */
-:root[data-theme="dark"] a.sort-toggle-button.preview-open-link .preview-open-link-icon {
+:root[data-theme="dark"]
+  a.sort-toggle-button.preview-open-link
+  .preview-open-link-icon {
   filter: brightness(0) invert(1);
   opacity: 1;
 }
@@ -4075,7 +4097,8 @@ a.sort-toggle-button.preview-open-link {
   max-height: none;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-area.full-table-area {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -4083,7 +4106,9 @@ a.sort-toggle-button.preview-open-link {
   max-height: none;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area .card.table-card {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-area.full-table-area
+  .card.table-card {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -4092,7 +4117,10 @@ a.sort-toggle-button.preview-open-link {
  * Full table preview: allow wide datasets to expand horizontally.
  * This prevents many-column tables from compressing cells so values get cut off.
  */
-.page-stack.full-table-page.full-table-page-dataset-wide .table-area.full-table-area .table-scroll table {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-area.full-table-area
+  .table-scroll
+  table {
   width: max-content;
   min-width: 100%;
 }
@@ -4475,7 +4503,11 @@ tr:hover th[scope="row"] {
   right: 24px;
   z-index: 120;
   max-width: min(360px, calc(100% - 24px));
-  background: color-mix(in srgb, var(--surface-blur-bg-strong) 68%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--surface-blur-bg-strong) 68%,
+    transparent
+  );
   border: 1px solid var(--surface-blur-border);
   border-radius: 12px;
   padding: 10px 12px 10px;
@@ -4538,12 +4570,22 @@ tr:hover th[scope="row"] {
 
 tr.table-row-highlighted td,
 tr.table-row-highlighted th[scope="row"] {
-  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
+  background: rgba(
+    253,
+    224,
+    71,
+    var(--table-row-highlight-alpha, 0.5)
+  ) !important;
 }
 
 .table-row-highlighted td,
 .table-row-highlighted th[scope="row"] {
-  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
+  background: rgba(
+    253,
+    224,
+    71,
+    var(--table-row-highlight-alpha, 0.5)
+  ) !important;
 }
 
 .hl {
@@ -4554,7 +4596,12 @@ tr.table-row-highlighted th[scope="row"] {
 
 .table-row-highlighted td.hl,
 .table-row-highlighted th[scope="row"].hl {
-  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
+  background: rgba(
+    253,
+    224,
+    71,
+    var(--table-row-highlight-alpha, 0.5)
+  ) !important;
   border-radius: 0;
 }
 
@@ -4570,7 +4617,12 @@ tr:hover th[scope="row"].hl {
 
 tr.table-row-highlighted:hover td,
 tr.table-row-highlighted:hover th[scope="row"] {
-  background: rgba(253, 224, 71, var(--table-row-highlight-alpha, 0.5)) !important;
+  background: rgba(
+    253,
+    224,
+    71,
+    var(--table-row-highlight-alpha, 0.5)
+  ) !important;
 }
 
 /* Multi-highlight: current row strong; other highlighted rows subtler */
@@ -5398,7 +5450,8 @@ a.login-repo-btn:hover {
   color: var(--bg);
 }
 
-:root[data-theme="dark"] .login-btn:not(.login-btn-google):hover:not(:disabled) {
+:root[data-theme="dark"]
+  .login-btn:not(.login-btn-google):hover:not(:disabled) {
   opacity: 0.92;
   filter: brightness(1.05);
 }
@@ -5480,7 +5533,9 @@ a.login-repo-btn:hover {
 
 .top-bar-account-trigger:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand-text, #2563eb);
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px var(--brand-text, #2563eb);
 }
 
 .top-bar-account-trigger--open .user-avatar,
@@ -5594,7 +5649,11 @@ a.login-repo-btn:hover {
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--danger);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface-blur-bg-strong));
+  background: color-mix(
+    in srgb,
+    var(--danger) 10%,
+    var(--surface-blur-bg-strong)
+  );
   color: var(--danger);
   font-size: 0.8125rem;
   font-weight: 600;
@@ -5607,7 +5666,11 @@ a.login-repo-btn:hover {
 }
 
 .logout-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 16%, var(--surface-blur-bg-strong));
+  background: color-mix(
+    in srgb,
+    var(--danger) 16%,
+    var(--surface-blur-bg-strong)
+  );
   border-color: var(--danger-strong);
   color: var(--danger-strong);
 }
@@ -6025,7 +6088,9 @@ a.login-repo-btn:hover {
   cursor: pointer;
   font-family: inherit;
   width: calc(100% - 2rem);
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 .folder-panel__new-btn svg {
   width: 1em;

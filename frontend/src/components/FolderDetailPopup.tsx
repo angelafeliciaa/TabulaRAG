@@ -31,6 +31,9 @@ export default function FolderDetailPopup({ folder, onClose, isAdmin, onAssigned
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const isOpen = folder !== null;
 
+  // Queriers can write to public folders.
+  const canWrite = isAdmin || folder?.privacy === "public";
+
   // Load data when popup opens
   useEffect(() => {
     if (!folder) {
@@ -40,18 +43,19 @@ export default function FolderDetailPopup({ folder, onClose, isAdmin, onAssigned
       return;
     }
 
+    const fetchAll = isAdmin || folder.privacy === "public";
     let cancelled = false;
     setLoading(true);
     setError(null);
 
     Promise.all([
       listFolderDatasets(folder.folder_id),
-      isAdmin ? listTables() : Promise.resolve([] as TableSummary[]),
+      fetchAll ? listTables() : Promise.resolve([] as TableSummary[]),
     ])
       .then(([fd, all]) => {
         if (cancelled) return;
         setFolderData(fd);
-        if (isAdmin) {
+        if (fetchAll) {
           setUnassigned(all.filter((t) => t.folder_id === null));
         }
       })
@@ -204,7 +208,7 @@ export default function FolderDetailPopup({ folder, onClose, isAdmin, onAssigned
                       <span className="folder-detail-item-meta">
                         {d.row_count} rows · {d.column_count} cols
                       </span>
-                      {isAdmin && (
+                      {canWrite && (
                         <button
                           type="button"
                           className="surface-btn folder-detail-remove-btn"
@@ -222,8 +226,8 @@ export default function FolderDetailPopup({ folder, onClose, isAdmin, onAssigned
               )}
             </section>
 
-            {/* Add existing datasets (admin only) */}
-            {isAdmin && (
+            {/* Add existing datasets (admin, or querier in a public folder) */}
+            {canWrite && (
               <section className="folder-detail-section">
                 <h4 className="folder-detail-section-title">
                   Add existing datasets

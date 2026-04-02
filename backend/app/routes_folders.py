@@ -231,12 +231,12 @@ def list_folder_datasets(
 def assign_dataset_folder(
     dataset_id: int,
     body: AssignFolderRequest,
-    current_user: AuthUser = Depends(require_admin),
+    current_user: AuthUser = Depends(require_auth),
 ):
     """
     Assign a dataset to a folder, or unassign it (folder_id: null).
     The target folder must belong to the same workspace.
-    Admins and owners only.
+    Queriers may only assign to (or unassign from) public folders.
     """
     enterprise_id = _scoped_enterprise_id(current_user)
 
@@ -251,8 +251,15 @@ def assign_dataset_folder(
         if body.folder_id is not None:
             # Validate the target folder belongs to the same enterprise.
             folder = _get_folder_or_404(db, body.folder_id, enterprise_id)
+            if not _is_admin(current_user) and folder.privacy != FolderPrivacy.public:
+                raise HTTPException(status_code=403, detail="You can only add datasets to a public folder.")
             dataset.folder_id = folder.id
         else:
+            # Unassigning — queriers may only remove from public folders.
+            if not _is_admin(current_user) and dataset.folder_id is not None:
+                current_folder = db.get(Folder, dataset.folder_id)
+                if current_folder is None or current_folder.privacy != FolderPrivacy.public:
+                    raise HTTPException(status_code=403, detail="You can only remove datasets from a public folder.")
             dataset.folder_id = None
 
         db.commit()

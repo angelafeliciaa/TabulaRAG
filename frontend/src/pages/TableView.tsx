@@ -417,6 +417,7 @@ export default function TableView() {
   const [highlightErr, setHighlightErr] = useState<string | null>(null);
   const [tableName, setTableName] = useState<string | null>(null);
   const [tableDescription, setTableDescription] = useState<string>("");
+  const [tableFolderPrivacy, setTableFolderPrivacy] = useState<string | null>(null);
   const [tableNotFound, setTableNotFound] = useState(false);
   const awaitingCatalog =
     isPlainDatasetView && tableName === null && !tableNotFound;
@@ -446,6 +447,7 @@ export default function TableView() {
   const [multiHighlightTruncated, setMultiHighlightTruncated] = useState(false);
   const [activeHighlightCursor, setActiveHighlightCursor] = useState(0);
   const [multiHighlightLabel, setMultiHighlightLabel] = useState("All matching rows");
+  const canEdit = userIsAdmin || tableFolderPrivacy === "public";
   const dateMenuId = useId();
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
   const dateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -463,6 +465,7 @@ export default function TableView() {
     setData(null);
     setTableName(null);
     setTableDescription("");
+    setTableFolderPrivacy(null);
     setTableNotFound(false);
     setServerError(false);
     setTableRowCount(0);
@@ -481,6 +484,7 @@ export default function TableView() {
         }
         setTableName(table.name);
         setTableDescription((table.description || "").trim());
+        setTableFolderPrivacy(table.folder_privacy ?? null);
         if (typeof table.row_count === "number") {
           setTableRowCount(Math.max(0, table.row_count));
         }
@@ -1492,7 +1496,7 @@ export default function TableView() {
             )}
           </div>
           <div className="table-view-tools">
-            {isPlainDatasetView && hasUnsavedChanges && userIsAdmin && (
+            {isPlainDatasetView && hasUnsavedChanges && canEdit && (
               <div className="table-view-save-edits-wrap">
                 <button
                   type="button"
@@ -1626,11 +1630,11 @@ export default function TableView() {
                 event.preventDefault();
                 setDateMenu({ x: event.clientX, y: event.clientY });
               }}
-              editable={isPlainDatasetView && userIsAdmin}
+              editable={isPlainDatasetView && canEdit}
               editableBusy={isSavingEdits || loading}
               editableEpoch={sliceEpoch}
               onCellDraftChange={handleCellDraftChange}
-              editableHeaders={isPlainDatasetView && userIsAdmin}
+              editableHeaders={isPlainDatasetView && canEdit}
               onHeaderDraftChange={handleHeaderDraftChange}
               pendingCellEditKeys={isPlainDatasetView ? pendingCellEditKeys : undefined}
               pendingCellEditValues={isPlainDatasetView ? pendingCellEditValues : undefined}
