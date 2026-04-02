@@ -5616,3 +5616,521 @@ a.login-repo-btn:hover {
   outline: 2px solid var(--brand-text, #2563eb);
   outline-offset: 2px;
 }
+
+/* ── FolderDetailPopup ──────────────────────────────────────────────────── */
+.folder-detail-overlay {
+  z-index: 300;
+}
+
+.folder-detail-modal {
+  width: 520px;
+  max-width: calc(100vw - 2rem);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.folder-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.folder-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  min-width: 0;
+}
+
+.folder-detail-icon {
+  width: 1.1em;
+  height: 1.1em;
+  fill: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.folder-detail-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-detail-close {
+  flex-shrink: 0;
+}
+
+.folder-detail-error {
+  font-size: 0.8125rem;
+  color: var(--danger);
+  padding: 0.5rem 1rem 0;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.folder-detail-muted {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0.25rem 0;
+}
+
+.folder-detail-section {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.folder-detail-section:last-child {
+  border-bottom: none;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.folder-detail-section-title {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.folder-detail-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--tag);
+  border-radius: 999px;
+  padding: 0.05em 0.5em;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.folder-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.folder-detail-list--add {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.folder-detail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: var(--tag);
+}
+
+.folder-detail-item-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-detail-item-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.folder-detail-remove-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  flex-shrink: 0;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.folder-detail-remove-btn:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.folder-detail-add-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.6rem;
+  flex-shrink: 0;
+}
+
+.folder-detail-search {
+  margin-bottom: 0.5rem;
+  max-width: 100%;
+}
+
+/* ── Upload page — folder additions ────────────────────────────────────── */
+.folder-panel-toggle {
+  /* matches sort-toggle-button but signals folder */
+}
+
+.uploaded-table-folder-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-top: 0.2em;
+}
+
+.uploaded-table-folder-name {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 10em;
+}
+
+.uploaded-table-folder-badge {
+  font-size: 0.65rem !important;
+  padding: 0.1em 0.4em !important;
+}
+
+.upload-queue-folder-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-top: 0.25rem;
+}
+
+.upload-queue-folder-label-text {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.upload-queue-folder-select {
+  font-size: 0.8125rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elev);
+  color: var(--text);
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+.upload-queue-folder-select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.upload-queue-folder-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── FolderSidePanel ────────────────────────────────────────────────────── */
+.folder-panel-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 200;
+  backdrop-filter: blur(1px);
+}
+.folder-panel-backdrop--open {
+  display: block;
+}
+
+.folder-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 90vw;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.1);
+}
+.folder-panel--open {
+  transform: translateX(0);
+}
+
+.folder-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.folder-panel__title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.folder-panel__close {
+  margin-left: auto;
+}
+
+.folder-panel__error {
+  font-size: 0.8125rem;
+  color: var(--danger);
+  padding: 0.5rem 1rem 0;
+  margin: 0;
+}
+
+.folder-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0 1rem;
+}
+
+.folder-panel__muted {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  padding: 0.75rem 1rem;
+  margin: 0;
+}
+
+.folder-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.folder-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem 0.35rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.folder-panel__item:last-child {
+  border-bottom: none;
+}
+
+.folder-panel__item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-panel__folder-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  background: none;
+  border: none;
+  padding: 0.25rem 0;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: inherit;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+.folder-panel__folder-name:hover {
+  color: var(--info);
+}
+.folder-panel__folder-name:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.folder-panel__folder-icon {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.folder-panel__dataset-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--tag);
+  border-radius: 999px;
+  padding: 0.05em 0.45em;
+  min-width: 1.4em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.folder-panel__rename-input {
+  width: 100%;
+  font-size: 0.875rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.folder-panel__item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.folder-panel__action-btn {
+  opacity: 0.55;
+}
+.folder-panel__action-btn:hover:not(:disabled) {
+  opacity: 1;
+}
+.folder-panel__action-btn--danger:hover:not(:disabled) {
+  color: var(--danger);
+  opacity: 1;
+}
+
+/* create form */
+.folder-panel__new-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin: 0.75rem 1rem 0;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  width: calc(100% - 2rem);
+  transition: border-color 0.15s, color 0.15s;
+}
+.folder-panel__new-btn svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+}
+.folder-panel__new-btn:hover {
+  border-color: var(--border-soft);
+  color: var(--text);
+}
+.folder-panel__new-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.folder-panel__create-form {
+  padding: 0.75rem 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.folder-panel__create-input {
+  width: 100%;
+  font-size: 0.875rem;
+}
+
+.folder-panel__create-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.folder-panel__create-submit {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+/* ── FolderPrivacyBadge ─────────────────────────────────────────────────── */
+.privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.18em 0.55em;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+.privacy-badge__dot {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* colours */
+.privacy-badge--success {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  color: var(--success-text);
+}
+.privacy-badge--success .privacy-badge__dot {
+  background: var(--success);
+}
+
+.privacy-badge--warning {
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  color: var(--warning-strong);
+}
+.privacy-badge--warning .privacy-badge__dot {
+  background: var(--warning);
+}
+
+.privacy-badge--muted {
+  background: var(--tag);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.privacy-badge--muted .privacy-badge__dot {
+  background: var(--text-muted);
+}
+
+/* select (admin editable) variant */
+.privacy-badge--select {
+  appearance: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding-right: 1.4em;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.45em center;
+  background-size: 0.55em;
+}
+.privacy-badge--select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.privacy-badge--select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

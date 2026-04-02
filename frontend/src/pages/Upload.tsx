@@ -17,17 +17,22 @@ import {
   deleteTable,
   getSlice,
   isAdmin,
+  listFolders,
   listIndexStatus,
   listTables,
   patchTableDescription,
   renameTable,
   uploadTable,
+  type Folder,
   type TableIndexStatus,
   type TableSlice,
   type TableSummary,
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import FolderDetailPopup from "../components/FolderDetailPopup";
+import FolderPrivacyBadge from "../components/FolderPrivacyBadge";
+import FolderSidePanel from "../components/FolderSidePanel";
 import { useAppUi } from "../appUiContext";
 import { flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
@@ -61,6 +66,7 @@ type UploadQueueItem = {
   estimatedCols: number | null;
   error: string | null;
   description: string;
+  folderId: number | null;
 };
 
 type FileSystemEntryLike = {
@@ -382,6 +388,9 @@ export default function Upload() {
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
   const [deletingTableIds, setDeletingTableIds] = useState<Record<number, boolean>>({});
   const [isDragActive, setIsDragActive] = useState(false);
+  const [folderPanelOpen, setFolderPanelOpen] = useState(false);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
   const [pinnedTableIds, setPinnedTableIds] = useState<number[]>(() => {
     try {
       const raw = window.localStorage.getItem(PINNED_TABLES_STORAGE_KEY);
@@ -444,6 +453,10 @@ export default function Upload() {
       JSON.stringify(pinnedTableIds),
     );
   }, [pinnedTableIds]);
+
+  useEffect(() => {
+    listFolders().then(setFolders).catch(() => {});
+  }, []);
 
   async function estimateFileStats(nextFile: File): Promise<{
     rows: number | null;
@@ -1063,7 +1076,7 @@ export default function Upload() {
                   : current,
               ),
             );
-          });
+          }, item.folderId);
 
           successCount += 1;
           lastUploadedDatasetId = result.dataset_id;
@@ -1278,6 +1291,7 @@ export default function Upload() {
         estimatedCols: null,
         error: null,
         description: "",
+        folderId: null,
       });
     }
 
@@ -1387,6 +1401,15 @@ export default function Upload() {
             description: nextDescription,
           }
           : item,
+      ),
+    );
+  }
+
+  function onChangeQueuedFolder(queueItemId: string, nextFolderId: number | null) {
+    if (busy) return;
+    setUploadQueue((previous) =>
+      previous.map((item) =>
+        item.id === queueItemId ? { ...item, folderId: nextFolderId } : item,
       ),
     );
   }
@@ -1676,6 +1699,27 @@ export default function Upload() {
 
   return (
     <div className="upload-home-page-scroll">
+      <FolderSidePanel
+        open={folderPanelOpen}
+        onClose={() => {
+          setFolderPanelOpen(false);
+          listFolders().then(setFolders).catch(() => {});
+        }}
+        isAdmin={userIsAdmin}
+        onSelectFolder={(folder) => {
+          setSelectedFolder(folder);
+          setFolderPanelOpen(false);
+        }}
+      />
+      <FolderDetailPopup
+        folder={selectedFolder}
+        onClose={() => setSelectedFolder(null)}
+        isAdmin={userIsAdmin}
+        onAssigned={() => {
+          void refresh();
+          listFolders().then(setFolders).catch(() => {});
+        }}
+      />
       <div className="page page-stack upload-home-page">
       {toast && (
         <div key={toast.id} className="toast success" role="status" aria-live="polite">
@@ -2054,6 +2098,33 @@ export default function Upload() {
                             disabled={busy || !canEditQueuedName}
                           />
                         </label>
+                        {canEditQueuedName && folders.length > 0 && (
+                          <label className="upload-queue-folder-label">
+                            <span className="upload-queue-folder-label-text">Folder</span>
+                            <select
+                              className="upload-queue-folder-select"
+                              value={item.folderId ?? ""}
+                              disabled={busy}
+                              aria-label="Assign to folder"
+                              onChange={(e) =>
+                                onChangeQueuedFolder(
+                                  item.id,
+                                  e.target.value !== "" ? Number(e.target.value) : null,
+                                )
+                              }
+                            >
+                              {userIsAdmin && <option value="">No folder</option>}
+                              {(userIsAdmin
+                                ? folders
+                                : folders.filter((f) => f.privacy === "public")
+                              ).map((folder) => (
+                                <option key={folder.folder_id} value={folder.folder_id}>
+                                  {folder.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                       </div>
                       <div className="upload-queue-right">
                         {progressLabel && (
@@ -2171,6 +2242,19 @@ export default function Upload() {
         <div className="row tables-header-row">
           <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
           <div className="tables-header-controls">
+            <button
+              type="button"
+              className={`sort-toggle-button folder-panel-toggle${folderPanelOpen ? " active" : ""}`}
+              onClick={() => setFolderPanelOpen((open) => !open)}
+              aria-label="Toggle folders panel"
+              title="Folders"
+              aria-expanded={folderPanelOpen}
+            >
+              <svg viewBox="0 0 24 24" role="presentation" className="sort-toggle-icon" aria-hidden="true">
+                <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+              </svg>
+              <span className="sort-toggle-text">Folders</span>
+            </button>
             <label className="tables-search-input-wrap" aria-label="Search table name">
               <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
                 <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
@@ -2381,6 +2465,12 @@ export default function Upload() {
                               <span className="small uploaded-table-meta">
                                 ({table.row_count} rows, {table.column_count} cols)
                               </span>
+                              {table.folder_name && table.folder_privacy ? (
+                                <span className="uploaded-table-folder-row">
+                                  <FolderPrivacyBadge privacy={table.folder_privacy} className="uploaded-table-folder-badge" />
+                                  <span className="uploaded-table-folder-name">{table.folder_name}</span>
+                                </span>
+                              ) : null}
                             </span>
                           </button>
                         </div>
