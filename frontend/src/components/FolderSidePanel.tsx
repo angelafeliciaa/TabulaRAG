@@ -3,6 +3,7 @@ import {
   createFolder,
   deleteFolder,
   grantGroupFolderAccess,
+  isOwner,
   listFolderGroups,
   listFolders,
   listGroups,
@@ -69,7 +70,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
     const fetches: [Promise<Folder[]>, Promise<UserGroup[]>] = [
       listFolders(),
-      isAdmin ? listGroups() : Promise.resolve([]),
+      isOwner() ? listGroups() : Promise.resolve([]),
     ];
 
     Promise.all(fetches)
@@ -350,8 +351,8 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
                       {isAdmin && !isEditing && (
                         <>
-                          {/* Group restrictions toggle — only for protected folders */}
-                          {folder.privacy === "protected" && (
+                          {/* Group restrictions toggle — owner only, protected folders only */}
+                          {isOwner() && folder.privacy === "protected" && (
                             <button
                               type="button"
                               className={`icon-button folder-panel__action-btn${isGroupsExpanded ? " folder-panel__action-btn--active" : ""}`}
@@ -396,7 +397,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                     </div>
 
                     {/* Group restrictions inline panel */}
-                    {isAdmin && isGroupsExpanded && (
+                    {isOwner() && isGroupsExpanded && (
                       <div className="folder-panel__groups-panel">
                         <p className="folder-panel__groups-label">Group restrictions</p>
                         {groupsState?.loading ? (
