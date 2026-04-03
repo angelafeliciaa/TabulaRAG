@@ -94,7 +94,7 @@ class AssignFolderRequest(BaseModel):
 # Routes
 # ---------------------------------------------------------------------------
 
-@router.get("")
+@router.get("", include_in_schema=False)
 def list_folders(current_user: AuthUser = Depends(require_auth)):
     """
     List all folders for the current workspace.

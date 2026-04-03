@@ -47,7 +47,7 @@ class SetFolderAccessRequest(BaseModel):
 # Groups CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("")
+@router.get("", include_in_schema=False)
 def list_groups(current_user: AuthUser = Depends(require_owner)):
     """List all user groups for the current workspace."""
     enterprise_id = current_user.enterprise_id
@@ -79,7 +79,7 @@ def list_groups(current_user: AuthUser = Depends(require_owner)):
         return result
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, include_in_schema=False)
 def create_group(
     body: CreateGroupRequest,
     current_user: AuthUser = Depends(require_owner),
@@ -116,7 +116,7 @@ def create_group(
         }
 
 
-@router.patch("/{group_id}")
+@router.patch("/{group_id}", include_in_schema=False)
 def update_group(
     group_id: int,
     body: UpdateGroupRequest,
@@ -150,7 +150,7 @@ def update_group(
         return {"group_id": group.id, "name": group.name}
 
 
-@router.delete("/{group_id}", status_code=204)
+@router.delete("/{group_id}", status_code=204, include_in_schema=False)
 def delete_group(
     group_id: int,
     current_user: AuthUser = Depends(require_owner),
@@ -170,7 +170,7 @@ def delete_group(
 # Group membership
 # ---------------------------------------------------------------------------
 
-@router.get("/{group_id}/members")
+@router.get("/{group_id}/members", include_in_schema=False)
 def list_members(
     group_id: int,
     current_user: AuthUser = Depends(require_owner),
@@ -201,7 +201,7 @@ def list_members(
         ]
 
 
-@router.post("/{group_id}/members", status_code=201)
+@router.post("/{group_id}/members", status_code=201, include_in_schema=False)
 def add_member(
     group_id: int,
     body: AddMemberRequest,
@@ -255,7 +255,7 @@ def add_member(
         }
 
 
-@router.delete("/{group_id}/members/{user_id}", status_code=204)
+@router.delete("/{group_id}/members/{user_id}", status_code=204, include_in_schema=False)
 def remove_member(
     group_id: int,
     user_id: int,
@@ -286,7 +286,7 @@ def remove_member(
 # Folder access grants
 # ---------------------------------------------------------------------------
 
-@router.get("/{group_id}/folders")
+@router.get("/{group_id}/folders", include_in_schema=False)
 def list_folder_accesses(
     group_id: int,
     current_user: AuthUser = Depends(require_owner),
@@ -318,7 +318,7 @@ def list_folder_accesses(
         ]
 
 
-@router.post("/{group_id}/folders", status_code=201)
+@router.post("/{group_id}/folders", status_code=201, include_in_schema=False)
 def grant_folder_access(
     group_id: int,
     body: SetFolderAccessRequest,
@@ -375,7 +375,7 @@ def grant_folder_access(
         }
 
 
-@router.delete("/{group_id}/folders/{folder_id}", status_code=204)
+@router.delete("/{group_id}/folders/{folder_id}", status_code=204, include_in_schema=False)
 def revoke_folder_access(
     group_id: int,
     folder_id: int,
