@@ -732,14 +732,9 @@ export default function TableView() {
 
     let rowFrom: number;
     let rowTo: number;
-    if (isMultiHighlightMode) {
-      const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
-      rowFrom = pageOffset;
-      rowTo = pageOffset + ROWS_PER_PAGE;
-    } else {
-      rowFrom = 0;
-      rowTo = Math.max(1, tableRowCount);
-    }
+    const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
+    rowFrom = pageOffset;
+    rowTo = pageOffset + ROWS_PER_PAGE;
 
     getSlice(numericDatasetId, rowFrom, rowTo, { flatten: false, sort })
       .then((slice) => {
@@ -751,14 +746,12 @@ export default function TableView() {
         setSliceEpoch((v) => v + 1);
         setTableRowCount((previous) => Math.max(previous, Math.max(0, slice.row_count || 0)));
 
-        if (isMultiHighlightMode) {
-          const fetchedTotalPages = Math.max(
-            1,
-            Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE),
-          );
-          if (currentPage > fetchedTotalPages) {
-            setCurrentPage(fetchedTotalPages);
-          }
+        const fetchedTotalPages = Math.max(
+          1,
+          Math.ceil(Math.max(0, slice.row_count || 0) / ROWS_PER_PAGE),
+        );
+        if (currentPage > fetchedTotalPages) {
+          setCurrentPage(fetchedTotalPages);
         }
       })
       .catch((error: unknown) => {
@@ -783,7 +776,7 @@ export default function TableView() {
     };
   }, [
     numericDatasetId,
-    isMultiHighlightMode ? currentPage : 0,
+    currentPage,
     sortColumn,
     sortDirection,
     isMultiHighlightMode,
@@ -918,9 +911,7 @@ export default function TableView() {
     setSliceEpoch((v) => v + 1);
   }, [isSavingEdits]);
 
-  const totalPages = isPlainDatasetView
-    ? 1
-    : Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const hasQueryContext = returnPath !== "/";
   const effectiveHighlightRow = isMultiHighlightMode ? activeMultiHighlightedRow : highlightedRow;
@@ -1171,16 +1162,13 @@ export default function TableView() {
   }, [displayRows.length, data?.columns.length, data?.offset, loading, err, dateViewMode]);
 
   useEffect(() => {
-    if (isPlainDatasetView) {
-      return;
-    }
     const container = tableAreaRef.current;
     const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
     if (!element) {
       return;
     }
     element.scrollTo({ top: 0, behavior: "auto" });
-  }, [currentPage, isPlainDatasetView]);
+  }, [currentPage]);
 
   useEffect(() => {
     setPageInput(String(safeCurrentPage));
@@ -1655,7 +1643,7 @@ export default function TableView() {
           </div>
         </div>
       )}
-      {data && effectiveRowCount > 0 && isMultiHighlightMode && (
+      {data && effectiveRowCount > 0 && totalPages > 1 && (
         <div className="table-view-pagination" aria-label="Full table pagination">
           <div className="table-view-pagination-controls">
             <button
