@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.auth import AuthUser, require_admin, require_auth
 from app.db import SessionLocal
-from app.models import Dataset, Folder, FolderPrivacy, UserRole
+from app.models import Dataset, Folder, FolderGroupAccess, FolderPrivacy, UserGroup, UserGroupMembership, UserRole
 
 router = APIRouter(prefix="/folders")
 
@@ -37,10 +37,39 @@ def _get_folder_or_404(db, folder_id: int, enterprise_id: Optional[int]) -> Fold
     return folder
 
 
-def _assert_folder_visible(folder: Folder, auth: AuthUser) -> None:
-    """Raise 404 if a querier tries to access a private folder."""
-    if not _is_admin(auth) and folder.privacy == FolderPrivacy.private:
+def _querier_can_see_protected_folder(db, folder_id: int, user_id: int) -> bool:
+    """A protected folder is visible to all queriers unless group restrictions exist,
+    in which case the querier must belong to at least one permitted group."""
+    restriction_count = db.execute(
+        select(func.count(FolderGroupAccess.id))
+        .where(FolderGroupAccess.folder_id == folder_id)
+    ).scalar_one()
+
+    if restriction_count == 0:
+        return True  # no restrictions → all queriers can see it
+
+    user_access = db.execute(
+        select(FolderGroupAccess.id)
+        .join(UserGroupMembership, UserGroupMembership.group_id == FolderGroupAccess.group_id)
+        .where(
+            FolderGroupAccess.folder_id == folder_id,
+            UserGroupMembership.user_id == user_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+    return user_access is not None
+
+
+def _assert_folder_visible(db, folder: Folder, auth: AuthUser) -> None:
+    """Raise 404 if a querier cannot access the folder."""
+    if _is_admin(auth):
+        return
+    if folder.privacy == FolderPrivacy.private:
         raise HTTPException(status_code=404, detail="Folder not found")
+    if folder.privacy == FolderPrivacy.protected:
+        if not _querier_can_see_protected_folder(db, folder.id, auth.id):
+            raise HTTPException(status_code=404, detail="Folder not found")
 
 
 # ---------------------------------------------------------------------------
@@ -89,16 +118,20 @@ def list_folders(current_user: AuthUser = Depends(require_auth)):
 
         rows = db.execute(stmt).all()
 
-        return [
-            {
+        result = []
+        for folder, dataset_count in rows:
+            # For queriers: additionally filter protected folders by group access.
+            if not _is_admin(current_user) and folder.privacy == FolderPrivacy.protected:
+                if not _querier_can_see_protected_folder(db, folder.id, current_user.id):
+                    continue
+            result.append({
                 "folder_id": folder.id,
                 "name": folder.name,
                 "privacy": folder.privacy,
                 "dataset_count": dataset_count,
                 "created_at": folder.created_at.isoformat(),
-            }
-            for folder, dataset_count in rows
-        ]
+            })
+        return result
 
 
 @router.post("", status_code=201, include_in_schema=False)
@@ -201,7 +234,7 @@ def list_folder_datasets(
 
     with SessionLocal() as db:
         folder = _get_folder_or_404(db, folder_id, enterprise_id)
-        _assert_folder_visible(folder, current_user)
+        _assert_folder_visible(db, folder, current_user)
 
         datasets = db.execute(
             select(Dataset)

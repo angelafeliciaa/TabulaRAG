@@ -11,7 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.indexing import upsert_dataset_row_index
-from app.models import Dataset, DatasetColumn, DatasetRow, Folder, FolderPrivacy, UserRole
+from app.models import Dataset, DatasetColumn, DatasetRow, Folder, FolderGroupAccess, FolderPrivacy, UserGroupMembership, UserRole
 from app.qdrant_client import delete_collection, get_collection_point_count
 from app.normalization import (
     flatten_row_data_to_original,
@@ -463,6 +463,7 @@ def _list_tables_payload(
     limit: Optional[int],
     enterprise_id: Optional[int] = None,
     role: Optional[UserRole] = None,
+    user_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     is_admin = role in (UserRole.owner, UserRole.admin)
     with SessionLocal() as db:
@@ -476,10 +477,47 @@ def _list_tables_payload(
         if enterprise_id is not None:
             query = query.where(Dataset.enterprise_id == enterprise_id)
         if not is_admin:
-            # Exclude datasets whose folder is private; unassigned datasets are always visible.
-            query = query.outerjoin(Folder, Dataset.folder_id == Folder.id).where(
-                (Dataset.folder_id.is_(None)) | (Folder.privacy != FolderPrivacy.private)
-            )
+            # Compute protected folder IDs that have group restrictions
+            # this querier cannot satisfy.
+            blocked_folder_ids: List[int] = []
+            if user_id is not None and enterprise_id is not None:
+                protected_fids = db.execute(
+                    select(Folder.id).where(
+                        Folder.enterprise_id == enterprise_id,
+                        Folder.privacy == FolderPrivacy.protected,
+                    )
+                ).scalars().all()
+                for fid in protected_fids:
+                    restriction_count = db.execute(
+                        select(func.count(FolderGroupAccess.id))
+                        .where(FolderGroupAccess.folder_id == fid)
+                    ).scalar_one()
+                    if restriction_count > 0:
+                        user_ok = db.execute(
+                            select(FolderGroupAccess.id)
+                            .join(UserGroupMembership, UserGroupMembership.group_id == FolderGroupAccess.group_id)
+                            .where(
+                                FolderGroupAccess.folder_id == fid,
+                                UserGroupMembership.user_id == user_id,
+                            )
+                            .limit(1)
+                        ).scalar_one_or_none()
+                        if user_ok is None:
+                            blocked_folder_ids.append(fid)
+
+            # Exclude private folders and any blocked protected folders.
+            if blocked_folder_ids:
+                query = query.outerjoin(Folder, Dataset.folder_id == Folder.id).where(
+                    (Dataset.folder_id.is_(None)) | (
+                        (Folder.privacy != FolderPrivacy.private) &
+                        Dataset.folder_id.not_in(blocked_folder_ids)
+                    )
+                )
+            else:
+                # Unassigned datasets are always visible.
+                query = query.outerjoin(Folder, Dataset.folder_id == Folder.id).where(
+                    (Dataset.folder_id.is_(None)) | (Folder.privacy != FolderPrivacy.private)
+                )
         if limit is not None:
             query = query.limit(limit)
         datasets = db.execute(query).scalars().unique().all()
@@ -576,6 +614,7 @@ def list_tables(
         limit=limit,
         enterprise_id=_scoped_enterprise_id(current_user),
         role=current_user.role,
+        user_id=current_user.id,
     )
 
 
