@@ -45,6 +45,7 @@ from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
 from app.routes_enterprises import router as enterprises_router
 from app.routes_folders import router as folders_router
+from app.routes_groups import router as groups_router
 from app.normalization import (
     infer_date_formats_for_columns,
     infer_measurement_columns,
@@ -123,6 +124,7 @@ app.include_router(tables_router)
 app.include_router(query_router)
 app.include_router(enterprises_router)
 app.include_router(folders_router)
+app.include_router(groups_router)
 
 
 @app.get("/health", include_in_schema=False)
