@@ -10,6 +10,7 @@ import {
 import { Link } from "react-router-dom";
 import { focusByIndex, focusByOffset, trapFocus } from "../accessibility";
 import {
+  assignDatasetToFolder,
   deleteTable,
   getSlice,
   isAdmin,
@@ -417,6 +418,7 @@ export default function Upload() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDescription, setEditingDescription] = useState("");
+  const [editingFolderId, setEditingFolderId] = useState<number | null>(null);
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
@@ -1351,11 +1353,17 @@ export default function Upload() {
         datasetId,
         nextDescription.length > 0 ? nextDescription : null,
       );
+      const currentTable = tables.find((t) => t.dataset_id === datasetId);
+      if (currentTable && editingFolderId !== currentTable.folder_id) {
+        await assignDatasetToFolder(datasetId, editingFolderId);
+      }
       setEditingId(null);
       setEditingName("");
       setEditingDescription("");
+      setEditingFolderId(null);
       setRenameHintId(null);
       await refresh();
+      listFolders().then(setFolders).catch(() => {});
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
     }
@@ -2708,6 +2716,32 @@ export default function Upload() {
                                 disabled={busy}
                                 aria-label={`Edit description for ${table.name}`}
                               />
+                              {folders.length > 0 && (userIsAdmin || table.folder_privacy === "public") && (
+                                <label className="upload-queue-folder-label">
+                                  <span className="upload-queue-folder-label-text">Folder</span>
+                                  <select
+                                    className="upload-queue-folder-select"
+                                    value={editingFolderId ?? ""}
+                                    disabled={busy}
+                                    aria-label="Assign to folder"
+                                    onChange={(e) =>
+                                      setEditingFolderId(
+                                        e.target.value !== "" ? Number(e.target.value) : null,
+                                      )
+                                    }
+                                  >
+                                    <option value="">No folder</option>
+                                    {(userIsAdmin
+                                      ? folders
+                                      : folders.filter((f) => f.privacy === "public")
+                                    ).map((f) => (
+                                      <option key={f.folder_id} value={f.folder_id}>
+                                        {f.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              )}
                             </div>
                           ) : (
                             <div className="uploaded-table-main">
@@ -2815,6 +2849,7 @@ export default function Upload() {
                                     table.description || "",
                                   ),
                                 );
+                                setEditingFolderId(table.folder_id);
                                 setRenameHintId(null);
                               }
                             }}

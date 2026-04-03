@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset, Enterprise, EnterpriseMembership, Folder, McpAccessToken, UserRole
+from app.models import Dataset, Enterprise, EnterpriseMembership, Folder, FolderGroupAccess, McpAccessToken, UserGroup, UserGroupMembership, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -417,6 +417,13 @@ def promote_legacy_admin_to_owner_per_enterprise() -> None:
                 first_admin.role = UserRole.owner
                 db.add(first_admin)
         db.commit()
+
+
+def ensure_user_groups_tables() -> None:
+    """Create user_groups, user_group_memberships, and folder_group_accesses tables for existing DB volumes."""
+    UserGroup.__table__.create(bind=app_db.engine, checkfirst=True)
+    UserGroupMembership.__table__.create(bind=app_db.engine, checkfirst=True)
+    FolderGroupAccess.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:

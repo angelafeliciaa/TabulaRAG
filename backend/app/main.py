@@ -24,6 +24,7 @@ from app.dataset_state import (
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
+    ensure_user_groups_tables,
     promote_legacy_admin_to_owner_per_enterprise,
     set_dataset_index_ready,
 )
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     ensure_mcp_access_tokens_table()
     ensure_folders_table()
     ensure_dataset_folder_id_column()
+    ensure_user_groups_tables()
     try:
         from app.embeddings import get_model
         get_model()
