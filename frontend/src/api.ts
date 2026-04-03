@@ -978,6 +978,21 @@ export async function listFolderDatasets(folderId: number): Promise<FolderDatase
   return (await res.json()) as FolderDatasets;
 }
 
+export interface FolderGroupGrant {
+  access_id: number;
+  group_id: number;
+  group_name: string;
+  granted_at: string;
+}
+
+export async function listFolderGroups(folderId: number): Promise<FolderGroupGrant[]> {
+  const res = await authFetch(`${API_BASE}/folders/${folderId}/groups`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as FolderGroupGrant[];
+}
+
 export async function assignDatasetToFolder(
   datasetId: number,
   folderId: number | null,
@@ -1086,4 +1101,113 @@ export async function filterRowIndices(params: unknown): Promise<FilterRowIndice
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// User Groups
+// ---------------------------------------------------------------------------
+
+export interface UserGroup {
+  group_id: number;
+  name: string;
+  member_count: number;
+  folder_access_count: number;
+  created_at: string;
+}
+
+export interface GroupMember {
+  membership_id: number;
+  user_id: number;
+  login: string;
+  added_at: string;
+}
+
+export interface GroupFolderAccess {
+  access_id: number;
+  folder_id: number;
+  folder_name: string;
+  privacy: FolderPrivacy;
+  granted_at: string;
+}
+
+export async function listGroups(): Promise<UserGroup[]> {
+  const res = await authFetch(`${API_BASE}/groups`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as UserGroup[];
+}
+
+export async function createGroup(name: string): Promise<UserGroup> {
+  const res = await authFetch(`${API_BASE}/groups`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as UserGroup;
+}
+
+export async function updateGroup(groupId: number, name: string): Promise<{ group_id: number; name: string }> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as { group_id: number; name: string };
+}
+
+export async function deleteGroup(groupId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function listGroupMembers(groupId: number): Promise<GroupMember[]> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/members`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as GroupMember[];
+}
+
+export async function addGroupMember(groupId: number, userId: number): Promise<GroupMember> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/members`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as GroupMember;
+}
+
+export async function removeGroupMember(groupId: number, userId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function listGroupFolderAccesses(groupId: number): Promise<GroupFolderAccess[]> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/folders`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as GroupFolderAccess[];
+}
+
+export async function grantGroupFolderAccess(groupId: number, folderId: number): Promise<GroupFolderAccess> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/folders`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ folder_id: folderId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as GroupFolderAccess;
+}
+
+export async function revokeGroupFolderAccess(groupId: number, folderId: number): Promise<void> {
+  const res = await authFetch(`${API_BASE}/groups/${groupId}/folders/${folderId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }

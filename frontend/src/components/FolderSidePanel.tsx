@@ -2,10 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import {
   createFolder,
   deleteFolder,
+  grantGroupFolderAccess,
+  listFolderGroups,
   listFolders,
+  listGroups,
+  revokeGroupFolderAccess,
   updateFolder,
   type Folder,
+  type FolderGroupGrant,
   type FolderPrivacy,
+  type UserGroup,
 } from "../api";
 import FolderPrivacyBadge from "./FolderPrivacyBadge";
 
@@ -18,6 +24,7 @@ type Props = {
 };
 
 type EditState = { folderId: number; name: string };
+type GroupsState = { grants: FolderGroupGrant[]; loading: boolean; error: string | null };
 
 export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder }: Props) {
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -42,18 +49,39 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
   const [createBusy, setCreateBusy] = useState(false);
   const createInputRef = useRef<HTMLInputElement>(null);
 
-  // load folders whenever panel opens
+  // group restriction picker (admin, protected folders only)
+  const [allGroups, setAllGroups] = useState<UserGroup[]>([]);
+  const [expandedGroupsFolderId, setExpandedGroupsFolderId] = useState<number | null>(null);
+  const [folderGroupsMap, setFolderGroupsMap] = useState<Map<number, GroupsState>>(new Map());
+  const [addGroupId, setAddGroupId] = useState<number | "">("");
+  const [addGroupBusy, setAddGroupBusy] = useState(false);
+  const [addGroupError, setAddGroupError] = useState<string | null>(null);
+  const [revokingGroupId, setRevokingGroupId] = useState<number | null>(null);
+
+  // load folders (and groups for admin) whenever panel opens
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    listFolders()
-      .then((list) => { if (!cancelled) setFolders(list); })
+    setExpandedGroupsFolderId(null);
+    setFolderGroupsMap(new Map());
+
+    const fetches: [Promise<Folder[]>, Promise<UserGroup[]>] = [
+      listFolders(),
+      isAdmin ? listGroups() : Promise.resolve([]),
+    ];
+
+    Promise.all(fetches)
+      .then(([folderList, groupList]) => {
+        if (cancelled) return;
+        setFolders(folderList);
+        setAllGroups(groupList);
+      })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load folders"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, isAdmin]);
 
   // focus rename input when editing starts
   useEffect(() => {
@@ -123,6 +151,92 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
     }
   }
 
+  function toggleGroupsPicker(folderId: number) {
+    if (expandedGroupsFolderId === folderId) {
+      setExpandedGroupsFolderId(null);
+      return;
+    }
+    setExpandedGroupsFolderId(folderId);
+    setAddGroupId("");
+    setAddGroupError(null);
+    if (!folderGroupsMap.has(folderId)) {
+      setFolderGroupsMap((prev) => {
+        const next = new Map(prev);
+        next.set(folderId, { grants: [], loading: true, error: null });
+        return next;
+      });
+      listFolderGroups(folderId)
+        .then((grants) => {
+          setFolderGroupsMap((prev) => {
+            const next = new Map(prev);
+            next.set(folderId, { grants, loading: false, error: null });
+            return next;
+          });
+        })
+        .catch((err) => {
+          setFolderGroupsMap((prev) => {
+            const next = new Map(prev);
+            next.set(folderId, { grants: [], loading: false, error: err instanceof Error ? err.message : "Failed to load groups" });
+            return next;
+          });
+        });
+    }
+  }
+
+  async function handleGrantGroup(folderId: number) {
+    if (addGroupId === "") return;
+    const gid = Number(addGroupId);
+    const groupName = allGroups.find((g) => g.group_id === gid)?.name ?? "";
+    setAddGroupBusy(true);
+    setAddGroupError(null);
+    try {
+      const access = await grantGroupFolderAccess(gid, folderId);
+      const grant: FolderGroupGrant = {
+        access_id: access.access_id,
+        group_id: gid,
+        group_name: groupName,
+        granted_at: access.granted_at,
+      };
+      setFolderGroupsMap((prev) => {
+        const next = new Map(prev);
+        const state = next.get(folderId);
+        if (state) {
+          const already = state.grants.some((g) => g.group_id === gid);
+          next.set(folderId, {
+            ...state,
+            grants: already ? state.grants : [...state.grants, grant]
+              .sort((a, b) => a.group_name.localeCompare(b.group_name)),
+          });
+        }
+        return next;
+      });
+      setAddGroupId("");
+    } catch (err) {
+      setAddGroupError(err instanceof Error ? err.message : "Failed to grant access");
+    } finally {
+      setAddGroupBusy(false);
+    }
+  }
+
+  async function handleRevokeGroup(folderId: number, groupId: number) {
+    setRevokingGroupId(groupId);
+    try {
+      await revokeGroupFolderAccess(groupId, folderId);
+      setFolderGroupsMap((prev) => {
+        const next = new Map(prev);
+        const state = next.get(folderId);
+        if (state) {
+          next.set(folderId, { ...state, grants: state.grants.filter((g) => g.group_id !== groupId) });
+        }
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke access");
+    } finally {
+      setRevokingGroupId(null);
+    }
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = newName.trim();
@@ -185,6 +299,11 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                 const isPrivacyBusy = privacyBusyId === folder.folder_id;
                 const isEditing = editing?.folderId === folder.folder_id;
 
+                const isGroupsExpanded = expandedGroupsFolderId === folder.folder_id;
+                const groupsState = folderGroupsMap.get(folder.folder_id);
+                const grantedGroupIds = new Set(groupsState?.grants.map((g) => g.group_id) ?? []);
+                const addableGroups = allGroups.filter((g) => !grantedGroupIds.has(g.group_id));
+
                 return (
                   <li key={folder.folder_id} className="folder-panel__item">
                     <div className="folder-panel__item-main">
@@ -231,6 +350,21 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
                       {isAdmin && !isEditing && (
                         <>
+                          {/* Group restrictions toggle — only for protected folders */}
+                          {folder.privacy === "protected" && (
+                            <button
+                              type="button"
+                              className={`icon-button folder-panel__action-btn${isGroupsExpanded ? " folder-panel__action-btn--active" : ""}`}
+                              aria-label={`Group restrictions for "${folder.name}"`}
+                              aria-expanded={isGroupsExpanded}
+                              title="Manage group restrictions"
+                              onClick={() => toggleGroupsPicker(folder.folder_id)}
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+                              </svg>
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="icon-button folder-panel__action-btn"
@@ -260,6 +394,73 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                         </>
                       )}
                     </div>
+
+                    {/* Group restrictions inline panel */}
+                    {isAdmin && isGroupsExpanded && (
+                      <div className="folder-panel__groups-panel">
+                        <p className="folder-panel__groups-label">Group restrictions</p>
+                        {groupsState?.loading ? (
+                          <p className="folder-panel__groups-muted">Loading…</p>
+                        ) : groupsState?.error ? (
+                          <p className="folder-panel__groups-muted folder-panel__groups-error">{groupsState.error}</p>
+                        ) : (
+                          <>
+                            {groupsState?.grants.length === 0 ? (
+                              <p className="folder-panel__groups-muted">
+                                No restrictions — all queriers can see this folder.
+                              </p>
+                            ) : (
+                              <ul className="folder-panel__groups-list" role="list">
+                                {groupsState.grants.map((grant) => (
+                                  <li key={grant.group_id} className="folder-panel__groups-row">
+                                    <span className="folder-panel__groups-name">{grant.group_name}</span>
+                                    <button
+                                      type="button"
+                                      className="surface-btn folder-panel__groups-revoke"
+                                      disabled={revokingGroupId === grant.group_id}
+                                      onClick={() => void handleRevokeGroup(folder.folder_id, grant.group_id)}
+                                    >
+                                      {revokingGroupId === grant.group_id ? "…" : "Revoke"}
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {addableGroups.length > 0 && (
+                              <div className="folder-panel__groups-add-row">
+                                <select
+                                  className="input folder-panel__groups-select"
+                                  value={addGroupId}
+                                  onChange={(e) => setAddGroupId(e.target.value === "" ? "" : Number(e.target.value))}
+                                  aria-label="Select group to grant access"
+                                >
+                                  <option value="">Add a group…</option>
+                                  {addableGroups.map((g) => (
+                                    <option key={g.group_id} value={g.group_id}>{g.name}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  className="login-btn folder-panel__groups-grant-btn"
+                                  disabled={addGroupId === "" || addGroupBusy}
+                                  onClick={() => void handleGrantGroup(folder.folder_id)}
+                                >
+                                  {addGroupBusy ? "…" : "Grant"}
+                                </button>
+                              </div>
+                            )}
+                            {addGroupError && (
+                              <p className="folder-panel__groups-muted folder-panel__groups-error">{addGroupError}</p>
+                            )}
+                            {allGroups.length === 0 && (
+                              <p className="folder-panel__groups-muted">
+                                No groups exist yet. Create groups in Settings → Groups.
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </li>
                 );
               })}

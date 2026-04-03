@@ -221,6 +221,38 @@ def delete_folder(
         db.commit()
 
 
+@router.get("/{folder_id}/groups", include_in_schema=False)
+def list_folder_groups(
+    folder_id: int,
+    current_user: AuthUser = Depends(require_admin),
+):
+    """
+    List all groups that have explicit access to a protected folder.
+    Admin and owners only.
+    """
+    enterprise_id = _scoped_enterprise_id(current_user)
+
+    with SessionLocal() as db:
+        folder = _get_folder_or_404(db, folder_id, enterprise_id)
+
+        rows = db.execute(
+            select(FolderGroupAccess, UserGroup)
+            .join(UserGroup, UserGroup.id == FolderGroupAccess.group_id)
+            .where(FolderGroupAccess.folder_id == folder.id)
+            .order_by(UserGroup.name)
+        ).all()
+
+        return [
+            {
+                "access_id": a.id,
+                "group_id": g.id,
+                "group_name": g.name,
+                "granted_at": a.created_at.isoformat(),
+            }
+            for a, g in rows
+        ]
+
+
 @router.get("/{folder_id}/datasets")
 def list_folder_datasets(
     folder_id: int,

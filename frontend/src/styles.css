@@ -5906,6 +5906,237 @@ a.login-repo-btn:hover {
   cursor: not-allowed;
 }
 
+/* ── UserGroupsSection ──────────────────────────────────────────────────── */
+
+.settings-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-groups-error {
+  margin: 0;
+}
+
+.settings-groups-muted {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.settings-subsection-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.settings-groups-create-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.settings-groups-create-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-groups-create-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.settings-groups-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.settings-groups-item {
+  border: 1px solid var(--surface-blur-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.settings-groups-item--expanded {
+  border-color: var(--accent);
+}
+
+.settings-groups-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.settings-groups-item-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 0.25rem 0;
+  color: var(--text);
+  min-width: 0;
+}
+
+.settings-groups-chevron {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+
+.settings-groups-chevron--open {
+  transform: rotate(90deg);
+}
+
+.settings-groups-item-name {
+  font-weight: 500;
+  font-size: 0.9375rem;
+  flex-shrink: 0;
+}
+
+.settings-groups-rename-input {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  padding: 0.2rem 0.5rem;
+  height: auto;
+  min-width: 0;
+  width: 180px;
+}
+
+.settings-groups-item-meta {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  margin-left: 0.25rem;
+  white-space: nowrap;
+}
+
+.settings-groups-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.settings-groups-action-btn {
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.625rem;
+}
+
+.settings-groups-delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--danger, #e53e3e);
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.375rem;
+  border-radius: 4px;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.settings-groups-delete-btn:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.settings-groups-delete-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-groups-detail {
+  border-top: 1px solid var(--surface-blur-border);
+  padding: 1rem 1rem 1rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  background: var(--surface-secondary, var(--surface));
+}
+
+.settings-groups-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-groups-subsection-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.settings-groups-subsection-desc {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.settings-groups-member-list,
+.settings-groups-folder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.settings-groups-member-row,
+.settings-groups-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.settings-groups-member-login,
+.settings-groups-folder-name {
+  flex: 1;
+  font-size: 0.875rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-groups-remove-btn {
+  font-size: 0.8125rem;
+  padding: 0.2rem 0.5rem;
+  flex-shrink: 0;
+}
+
+.settings-groups-add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.settings-groups-add-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.settings-groups-add-btn {
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
 /* ── FolderSidePanel ────────────────────────────────────────────────────── */
 .folder-panel-backdrop {
   display: none;
@@ -6128,6 +6359,90 @@ a.login-repo-btn:hover {
 .folder-panel__create-submit {
   padding: 0.3rem 0.75rem;
   font-size: 0.8125rem;
+}
+
+/* folder-panel action-btn active state (group picker toggle) */
+.folder-panel__action-btn--active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* ── Folder group restriction picker ───────────────────────────────────── */
+.folder-panel__groups-panel {
+  border-top: 1px solid var(--surface-blur-border);
+  padding: 0.625rem 0.875rem 0.75rem;
+  background: var(--surface-secondary, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.folder-panel__groups-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.folder-panel__groups-muted {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.folder-panel__groups-error {
+  color: var(--danger, #e53e3e);
+}
+
+.folder-panel__groups-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.folder-panel__groups-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.folder-panel__groups-name {
+  flex: 1;
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-panel__groups-revoke {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  flex-shrink: 0;
+}
+
+.folder-panel__groups-add-row {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.folder-panel__groups-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.5rem;
+  height: auto;
+}
+
+.folder-panel__groups-grant-btn {
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.625rem;
+  flex-shrink: 0;
 }
 
 /* ── FolderPrivacyBadge ─────────────────────────────────────────────────── */
