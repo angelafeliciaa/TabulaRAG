@@ -730,11 +730,9 @@ export default function TableView() {
         ? { sortColumn, sortDirection }
         : null;
 
-    let rowFrom: number;
-    let rowTo: number;
     const pageOffset = (currentPage - 1) * ROWS_PER_PAGE;
-    rowFrom = pageOffset;
-    rowTo = pageOffset + ROWS_PER_PAGE;
+    const rowFrom = pageOffset;
+    const rowTo = pageOffset + ROWS_PER_PAGE;
 
     getSlice(numericDatasetId, rowFrom, rowTo, { flatten: false, sort })
       .then((slice) => {
