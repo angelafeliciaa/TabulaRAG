@@ -411,7 +411,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                               </p>
                             ) : (
                               <ul className="folder-panel__groups-list" role="list">
-                                {groupsState.grants.map((grant) => (
+                                {groupsState?.grants.map((grant) => (
                                   <li key={grant.group_id} className="folder-panel__groups-row">
                                     <span className="folder-panel__groups-name">{grant.group_name}</span>
                                     <button

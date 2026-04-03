@@ -6155,7 +6155,7 @@ a.login-repo-btn:hover {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 380px;
+  width: 33.333vw;
   max-width: 90vw;
   background: var(--bg-elev);
   border-right: 1px solid var(--border);
