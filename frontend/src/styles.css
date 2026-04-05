@@ -227,6 +227,13 @@ h3 {
   overflow: hidden;
 }
 
+.page-top-bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 0 0;
+  margin-left: -152px;
+}
+
 .hero {
   text-align: center;
   padding: 8px 0 2px;
