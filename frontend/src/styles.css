@@ -3251,6 +3251,8 @@ ul {
 }
 
 .uploaded-table-meta {
+  display: inline-flex;
+  align-items: center;
   margin-left: 8px;
   white-space: nowrap;
   flex: 0 0 auto;
@@ -3265,7 +3267,7 @@ ul {
 
 .uploaded-table-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   width: 100%;
   gap: 10px;
@@ -3274,7 +3276,7 @@ ul {
 
 .uploaded-table-title-line {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   flex: 1 1 0;
   width: 0;
@@ -3411,6 +3413,30 @@ ul {
   color: var(--success-text);
   text-align: center;
   padding: 3px 0;
+}
+
+.index-job--privacy .index-job-ready {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 100%;
+}
+
+.index-job--privacy {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+}
+
+.index-job-privacy-badge {
+  width: 100%;
+  min-height: var(--table-row-control-height);
+  justify-content: center;
+  border-color: transparent;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  padding: 0 0.8em;
 }
 
 .index-job.queued .index-job-ready {
@@ -6574,7 +6600,15 @@ a.login-repo-btn:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.3em;
-  margin-top: 0.2em;
+  margin-top: 0;
+}
+
+.uploaded-table-folder-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  object-fit: contain;
+  flex-shrink: 0;
+  opacity: 0.72;
 }
 
 .uploaded-table-folder-name {
@@ -6587,9 +6621,9 @@ a.login-repo-btn:hover {
   max-width: 10em;
 }
 
-.uploaded-table-folder-badge {
-  font-size: 0.65rem !important;
-  padding: 0.1em 0.4em !important;
+:root[data-theme="dark"] .uploaded-table-folder-icon {
+  filter: brightness(0) invert(1);
+  opacity: 0.8;
 }
 
 .upload-queue-folder-label {

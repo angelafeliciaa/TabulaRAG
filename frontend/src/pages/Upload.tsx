@@ -35,6 +35,7 @@ import { flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
+import folderIcon from "../images/folder.png";
 import openIcon from "../images/open.png";
 import plusIcon from "../images/plus.png";
 import uploadLogo from "../images/upload.png";
@@ -113,6 +114,64 @@ const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
   { value: "rows", label: "Most rows" },
   { value: "alphabet", label: "Alphabetical" },
 ];
+
+function compareTablesBySortMode(
+  a: TableSummary,
+  b: TableSummary,
+  sortMode: TableSortMode,
+): number {
+  if (sortMode === "alphabet") {
+    const byName = a.name.localeCompare(b.name, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (byName !== 0) {
+      return byName;
+    }
+  } else if (sortMode === "rows") {
+    const byRows = b.row_count - a.row_count;
+    if (byRows !== 0) {
+      return byRows;
+    }
+  }
+
+  const aTime = Number.isFinite(Date.parse(a.created_at))
+    ? Date.parse(a.created_at)
+    : a.dataset_id;
+  const bTime = Number.isFinite(Date.parse(b.created_at))
+    ? Date.parse(b.created_at)
+    : b.dataset_id;
+  return bTime - aTime;
+}
+
+function sortTablesForDisplay(
+  tables: TableSummary[],
+  pinnedIds: Set<number>,
+  sortMode: TableSortMode,
+): TableSummary[] {
+  const next = [...tables];
+  next.sort((a, b) => {
+    const aPinned = pinnedIds.has(a.dataset_id);
+    const bPinned = pinnedIds.has(b.dataset_id);
+    if (aPinned !== bPinned) {
+      return aPinned ? -1 : 1;
+    }
+    return compareTablesBySortMode(a, b, sortMode);
+  });
+  return next;
+}
+
+function filterTablesForDisplay(
+  tables: TableSummary[],
+  normalizedQuery: string,
+): TableSummary[] {
+  if (!normalizedQuery) {
+    return tables;
+  }
+  return tables.filter((table) =>
+    table.name.toLowerCase().includes(normalizedQuery),
+  );
+}
 
 function getErrorMessage(error: unknown): string {
   const normalize = (message: string): string => {
@@ -638,6 +697,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const refresh = useCallback(async () => {
     const nextTables = await listTables({ includePending: true });
     setTables(nextTables);
+    return nextTables;
   }, []);
 
   useEffect(() => {
@@ -1103,6 +1163,57 @@ export default function Upload({ homeControls = null }: UploadProps) {
     2,
     String(previewTotalPages).length + 1,
   );
+  const normalizedTableSearchQuery = tableSearchQuery.trim().toLowerCase();
+
+  const clearPreviewSelection = useCallback(() => {
+    setActiveTableId(null);
+    setPreview(null);
+    setPreviewErr(null);
+    setPreviewBusy(false);
+    setPreviewPage(1);
+    setPreviewRowCount(0);
+    setPreviewSearchQuery("");
+    setPreviewSortColumn(null);
+    setPreviewSortDirection("asc");
+  }, []);
+
+  const getTopDisplayedTable = useCallback(
+    (
+      nextTables: TableSummary[],
+      nextPinnedTableIds: number[] = pinnedTableIds,
+    ): TableSummary | null => {
+      const nextPinnedSet = new Set(nextPinnedTableIds);
+      const nextSortedTables = sortTablesForDisplay(
+        nextTables,
+        nextPinnedSet,
+        tableSortMode,
+      );
+      const nextFilteredTables = filterTablesForDisplay(
+        nextSortedTables,
+        normalizedTableSearchQuery,
+      );
+      return nextFilteredTables[0] ?? nextSortedTables[0] ?? null;
+    },
+    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode],
+  );
+
+  const previewTopDisplayedTable = useCallback(
+    async (
+      nextTables: TableSummary[],
+      nextPinnedTableIds: number[] = pinnedTableIds,
+    ) => {
+      const nextTopTable = getTopDisplayedTable(nextTables, nextPinnedTableIds);
+      if (!nextTopTable) {
+        clearPreviewSelection();
+        return;
+      }
+      await loadPreview(nextTopTable.dataset_id, 1, {
+        sortColumn: null,
+        sortDirection: "asc",
+      });
+    },
+    [clearPreviewSelection, getTopDisplayedTable, loadPreview, pinnedTableIds],
+  );
 
   function commitPreviewPageInput() {
     const parsed = parseInt(previewPageInput, 10);
@@ -1139,7 +1250,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
     let successCount = 0;
     let failureCount = 0;
     let firstFailureMessage: string | null = null;
-    let lastUploadedDatasetId: number | null = null;
     const occupiedNameKeys = new Set(
       tables.map((table) =>
         getNameKey(stripSupportedFileExtension(table.name) || "table"),
@@ -1192,7 +1302,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
           );
 
           try {
-            const result = await uploadTable(
+            await uploadTable(
               item.file,
               normalizedName,
               normalizedDescription || null,
@@ -1214,9 +1324,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
               },
               item.folderId,
             );
-
             successCount += 1;
-            lastUploadedDatasetId = result.dataset_id;
             setUploadQueue((previous) =>
               previous.map((current) =>
                 current.id === item.id
@@ -1255,12 +1363,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
     window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
 
     try {
-      await refresh();
-      if (lastUploadedDatasetId !== null) {
-        await loadPreview(lastUploadedDatasetId, 1, {
-          sortColumn: null,
-          sortDirection: "asc",
-        });
+      const nextTables = await refresh();
+      if (successCount > 0) {
+        await previewTopDisplayedTable(nextTables);
       }
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
@@ -1301,33 +1406,39 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
     try {
       await deleteTable(datasetId);
-      setTables((previous) =>
-        previous.filter((current) => current.dataset_id !== datasetId),
+      const nextTables = tables.filter(
+        (current) => current.dataset_id !== datasetId,
       );
-      setPinnedTableIds((previous) =>
-        previous.filter((currentId) => currentId !== datasetId),
+      const nextPinnedTableIds = pinnedTableIds.filter(
+        (currentId) => currentId !== datasetId,
       );
+      setTables(nextTables);
+      setPinnedTableIds(nextPinnedTableIds);
       setIndexStatusByTable((previous) => {
         const next = { ...previous };
         delete next[datasetId];
         return next;
       });
       setDeleteConfirmTable(null);
+      await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
       if (isTableNotFoundError(error)) {
-        setTables((previous) =>
-          previous.filter((current) => current.dataset_id !== datasetId),
+        const nextTables = tables.filter(
+          (current) => current.dataset_id !== datasetId,
         );
-        setPinnedTableIds((previous) =>
-          previous.filter((currentId) => currentId !== datasetId),
+        const nextPinnedTableIds = pinnedTableIds.filter(
+          (currentId) => currentId !== datasetId,
         );
+        setTables(nextTables);
+        setPinnedTableIds(nextPinnedTableIds);
         setIndexStatusByTable((previous) => {
           const next = { ...previous };
           delete next[datasetId];
           return next;
         });
         setDeleteConfirmTable(null);
+        await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
         showSuccessToast(`Successfully deleted table '${table.name}'`);
       } else {
         setErr(getErrorMessage(error));
@@ -1717,51 +1828,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
     [pinnedTableIds],
   );
   const sortedTables = useMemo(() => {
-    const sortByMode = (a: TableSummary, b: TableSummary): number => {
-      if (tableSortMode === "alphabet") {
-        const byName = a.name.localeCompare(b.name, undefined, {
-          sensitivity: "base",
-          numeric: true,
-        });
-        if (byName !== 0) {
-          return byName;
-        }
-      } else if (tableSortMode === "rows") {
-        const byRows = b.row_count - a.row_count;
-        if (byRows !== 0) {
-          return byRows;
-        }
-      }
-
-      // Default/fallback ordering is most recent first.
-      const aTime = Number.isFinite(Date.parse(a.created_at))
-        ? Date.parse(a.created_at)
-        : a.dataset_id;
-      const bTime = Number.isFinite(Date.parse(b.created_at))
-        ? Date.parse(b.created_at)
-        : b.dataset_id;
-      return bTime - aTime;
-    };
-
-    const next = [...tables];
-    next.sort((a, b) => {
-      const aPinned = pinnedTableIdSet.has(a.dataset_id);
-      const bPinned = pinnedTableIdSet.has(b.dataset_id);
-      if (aPinned !== bPinned) {
-        return aPinned ? -1 : 1;
-      }
-      return sortByMode(a, b);
-    });
-    return next;
+    return sortTablesForDisplay(tables, pinnedTableIdSet, tableSortMode);
   }, [tables, pinnedTableIdSet, tableSortMode]);
-  const normalizedTableSearchQuery = tableSearchQuery.trim().toLowerCase();
   const filteredTables = useMemo(() => {
-    if (!normalizedTableSearchQuery) {
-      return sortedTables;
-    }
-    return sortedTables.filter((table) =>
-      table.name.toLowerCase().includes(normalizedTableSearchQuery),
-    );
+    return filterTablesForDisplay(sortedTables, normalizedTableSearchQuery);
   }, [sortedTables, normalizedTableSearchQuery]);
   const visibleTables = useMemo(
     () => filteredTables.slice(0, visibleTableCount),
@@ -2733,6 +2803,15 @@ export default function Upload({ homeControls = null }: UploadProps) {
                           ? "Index failed"
                           : "Indexed";
                   const isIndexing = indexState === "indexing";
+                  const readyPrivacyLabel = table.folder_privacy
+                    ? `${table.folder_privacy.charAt(0).toUpperCase()}${table.folder_privacy.slice(1)}`
+                    : null;
+                  const showReadyPrivacyBadge =
+                    indexState === "ready" && table.folder_privacy !== null;
+                  const readyStatusLabel =
+                    showReadyPrivacyBadge && readyPrivacyLabel
+                      ? readyPrivacyLabel
+                      : indexLabel;
 
                   return (
                     <li key={table.dataset_id}>
@@ -2887,9 +2966,11 @@ export default function Upload({ homeControls = null }: UploadProps) {
                                   </span>
                                   {table.folder_name && table.folder_privacy ? (
                                     <span className="uploaded-table-folder-row">
-                                      <FolderPrivacyBadge
-                                        privacy={table.folder_privacy}
-                                        className="uploaded-table-folder-badge"
+                                      <img
+                                        src={folderIcon}
+                                        alt=""
+                                        aria-hidden="true"
+                                        className="uploaded-table-folder-icon"
                                       />
                                       <span className="uploaded-table-folder-name">
                                         {table.folder_name}
@@ -2903,13 +2984,13 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         </div>
 
                         <div
-                          className={`index-job ${indexState}`}
-                          title={indexStatus?.message || indexLabel}
+                          className={`index-job ${indexState}${showReadyPrivacyBadge ? " index-job--privacy" : ""}`}
+                          title={indexStatus?.message || readyStatusLabel}
                           role={isIndexing ? "progressbar" : "status"}
                           aria-label={
                             isIndexing
                               ? `${table.name} index status`
-                              : `${table.name}: ${indexLabel}`
+                              : `${table.name}: ${readyStatusLabel}`
                           }
                           aria-valuemin={isIndexing ? 0 : undefined}
                           aria-valuemax={isIndexing ? 100 : undefined}
@@ -2920,7 +3001,16 @@ export default function Upload({ homeControls = null }: UploadProps) {
                               : undefined
                           }
                         >
-                          <div className="index-job-ready">{indexLabel}</div>
+                          <div className="index-job-ready">
+                            {showReadyPrivacyBadge && table.folder_privacy ? (
+                              <FolderPrivacyBadge
+                                privacy={table.folder_privacy}
+                                className="index-job-privacy-badge"
+                              />
+                            ) : (
+                              indexLabel
+                            )}
+                          </div>
                           {isIndexing && (
                             <div className="index-job-track" aria-hidden="true">
                               <div
