@@ -304,7 +304,11 @@ h3 {
 }
 
 .upload-home-header__end {
-  display: none;
+  justify-content: flex-end;
+  min-height: 40px;
+  margin-left: auto;
+  position: relative;
+  z-index: 1;
 }
 
 .upload-home-brand {
@@ -484,9 +488,9 @@ h3 {
 }
 
 .upload-panel-status {
-  min-height: 1.5rem;
   display: flex;
   align-items: flex-start;
+  order: 1;
 }
 
 .upload-panel-status__message {
@@ -501,6 +505,10 @@ h3 {
   padding: 2px 8px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--danger-soft) 82%, transparent);
+}
+
+.upload-panel-status:empty {
+  display: none;
 }
 
 /* Queue view: menu must paint above the scrollable list and not be clipped by the panel. */
@@ -526,7 +534,8 @@ h3 {
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(980px, calc(100vw - 36px));
-  height: min(78vh, 760px);
+  height: auto;
+  max-height: min(78vh, 760px);
   background: var(--surface-blur-bg-strong);
   border: 1px solid var(--surface-blur-border);
   border-radius: 24px;
@@ -543,8 +552,9 @@ h3 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 42px;
+  padding: 0 14px 0 12px;
   line-height: 1;
 }
 
@@ -614,16 +624,15 @@ h3 {
   color: currentColor;
 }
 
-.upload-add-more-button.upload-icon-only {
-  width: 42px;
-  min-width: 42px;
-  padding: 0;
+.upload-add-more-button__icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: 0 0 18px;
 }
 
-.upload-add-more-button.upload-icon-only img {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
+.upload-add-more-button__label {
+  white-space: nowrap;
 }
 
 .upload-plus-icon {
@@ -737,7 +746,7 @@ h3 {
   filter: brightness(0) invert(1);
 }
 
-:root[data-theme="dark"] .upload-add-more-button.upload-icon-only img,
+:root[data-theme="dark"] .upload-add-more-button__icon,
 :root[data-theme="dark"] .upload-plus-icon {
   filter: brightness(0) invert(1);
 }
@@ -861,6 +870,11 @@ h3 {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+}
+
+.upload-panel.in-modal .upload-queue-list {
+  flex: 0 1 auto;
+  max-height: min(42vh, 420px);
 }
 
 .upload-queue-item {
@@ -1064,6 +1078,7 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  order: 2;
 }
 
 .upload-queue-footer .small {
@@ -1075,11 +1090,6 @@ h3 {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-}
-
-body.upload-dialog-open .top-bar {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .upload-cancel-all-button {
@@ -1220,9 +1230,11 @@ body.upload-dialog-open .top-bar {
 }
 
 .top-bar--home {
-  top: 24px;
-  right: 24px;
+  position: static;
+  top: auto;
+  right: auto;
   gap: 8px;
+  z-index: 1;
 }
 
 /* Home: workspace switcher uses same control + menu pattern as “Sort uploaded tables” */
@@ -4890,7 +4902,7 @@ input:focus-visible,
 @media (max-width: 1100px) {
   .upload-home-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     width: calc(100vw - 32px);
     margin-left: calc(50% - 50vw + 16px);
     gap: 14px;
@@ -4914,8 +4926,9 @@ input:focus-visible,
     max-width: 30rem;
   }
 
-  .top-bar--home {
-    right: 16px;
+  .upload-home-header__end {
+    margin-left: 0;
+    justify-self: end;
   }
 
   .top-bar--home .top-bar-workspace-toggle {
@@ -4947,16 +4960,33 @@ input:focus-visible,
     padding-top: 72px;
   }
 
+  .page-stack.upload-home-page {
+    padding-top: 16px;
+  }
+
   .upload-home-header {
     width: calc(100vw - 24px);
     margin-left: calc(50% - 50vw + 12px);
+    margin-top: -56px;
+    padding-top: 56px;
     grid-template-columns: 1fr;
     gap: 12px;
     align-items: start;
   }
 
+  .upload-home-header__start {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+  }
+
   .upload-home-header__end {
-    display: none;
+    position: absolute;
+    top: 0;
+    right: 0;
+    margin-left: 0;
+    z-index: 2;
   }
 
   .upload-home-brand {
@@ -4981,8 +5011,7 @@ input:focus-visible,
   }
 
   .top-bar--home {
-    top: 16px;
-    right: 12px;
+    gap: 6px;
   }
 
   .top-bar--home .top-bar-workspace-toggle {

@@ -36,6 +36,7 @@ import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
 import openIcon from "../images/open.png";
+import plusIcon from "../images/plus.png";
 import uploadLogo from "../images/upload.png";
 
 const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
@@ -64,6 +65,10 @@ type UploadQueueItem = {
   error: string | null;
   description: string;
   folderId: number | null;
+};
+
+type UploadProps = {
+  homeControls?: React.ReactNode;
 };
 
 type FileSystemEntryLike = {
@@ -173,6 +178,16 @@ function getFileIdentity(file: File): string {
 function hasSupportedExtension(fileName: string): boolean {
   const lowerName = fileName.toLowerCase();
   return lowerName.endsWith(".csv") || lowerName.endsWith(".tsv");
+}
+
+function isIgnorableMetadataFile(fileName: string): boolean {
+  const normalizedName = fileName.trim().toLowerCase();
+  return (
+    normalizedName === ".ds_store" ||
+    normalizedName === "thumbs.db" ||
+    normalizedName === "desktop.ini" ||
+    normalizedName.startsWith("._")
+  );
 }
 
 function isLikelyDirectoryPlaceholder(file: File): boolean {
@@ -388,7 +403,7 @@ function smoothIndexStatus(
   };
 }
 
-export default function Upload() {
+export default function Upload({ homeControls = null }: UploadProps) {
   const { valueMode } = useAppUi();
   const userIsAdmin = isAdmin();
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
@@ -475,6 +490,8 @@ export default function Upload() {
   const uploadPickerQueueRef = useRef<HTMLDivElement | null>(null);
   const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
   const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
+  const uploadDropClickLockRef = useRef(false);
+  const uploadDropClickLockTimeoutRef = useRef<number | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedDescriptionInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -506,7 +523,7 @@ export default function Upload() {
   useEffect(() => {
     listFolders()
       .then(setFolders)
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   async function estimateFileStats(nextFile: File): Promise<{
@@ -702,13 +719,6 @@ export default function Upload() {
   }, [isUploadDialogOpen]);
 
   useEffect(() => {
-    document.body.classList.toggle("upload-dialog-open", isUploadDialogOpen);
-    return () => {
-      document.body.classList.remove("upload-dialog-open");
-    };
-  }, [isUploadDialogOpen]);
-
-  useEffect(() => {
     if (!isUploadDialogOpen) {
       return;
     }
@@ -850,6 +860,9 @@ export default function Upload() {
   useEffect(() => {
     return () => {
       clearToastTimer();
+      if (uploadDropClickLockTimeoutRef.current !== null) {
+        window.clearTimeout(uploadDropClickLockTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -979,9 +992,9 @@ export default function Upload() {
       };
       const sortParam = effectiveSort.sortColumn
         ? {
-            sortColumn: effectiveSort.sortColumn,
-            sortDirection: effectiveSort.sortDirection,
-          }
+          sortColumn: effectiveSort.sortColumn,
+          sortDirection: effectiveSort.sortDirection,
+        }
         : undefined;
       const searchParam = previewSearchQuery.trim() || undefined;
 
@@ -1168,12 +1181,12 @@ export default function Upload() {
             previous.map((current) =>
               current.id === item.id
                 ? {
-                    ...current,
-                    name: normalizedName,
-                    phase: "uploading",
-                    progress: 2,
-                    error: null,
-                  }
+                  ...current,
+                  name: normalizedName,
+                  phase: "uploading",
+                  progress: 2,
+                  error: null,
+                }
                 : current,
             ),
           );
@@ -1188,13 +1201,13 @@ export default function Upload() {
                   previous.map((current) =>
                     current.id === item.id
                       ? {
-                          ...current,
-                          phase: progress.phase,
-                          progress: Math.max(
-                            current.progress,
-                            progress.percent,
-                          ),
-                        }
+                        ...current,
+                        phase: progress.phase,
+                        progress: Math.max(
+                          current.progress,
+                          progress.percent,
+                        ),
+                      }
                       : current,
                   ),
                 );
@@ -1208,11 +1221,11 @@ export default function Upload() {
               previous.map((current) =>
                 current.id === item.id
                   ? {
-                      ...current,
-                      phase: "success",
-                      progress: 100,
-                      error: null,
-                    }
+                    ...current,
+                    phase: "success",
+                    progress: 100,
+                    error: null,
+                  }
                   : current,
               ),
             );
@@ -1346,7 +1359,7 @@ export default function Upload() {
       (table) =>
         table.dataset_id !== datasetId &&
         getNameKey(stripSupportedFileExtension(table.name) || "table") ===
-          nextNameKey,
+        nextNameKey,
     );
     if (hasDuplicateName) {
       setErr("Name already exists, please choose a different name.");
@@ -1371,7 +1384,7 @@ export default function Upload() {
       setEditingFolderId(null);
       setRenameHintId(null);
       await refresh();
-      listFolders().then(setFolders).catch(() => {});
+      listFolders().then(setFolders).catch(() => { });
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
     }
@@ -1379,7 +1392,7 @@ export default function Upload() {
 
   function validateSelectedFile(nextFile: File): string | null {
     if (!hasSupportedExtension(nextFile.name)) {
-      return "File must have a .csv or .tsv extension.";
+      return "Only CSV and TSV files can be uploaded.";
     }
     return null;
   }
@@ -1409,18 +1422,21 @@ export default function Upload() {
     const rejectedMessages: string[] = [];
 
     for (const nextFile of Array.from(nextFiles)) {
-      if (isLikelyDirectoryPlaceholder(nextFile)) {
+      if (
+        isLikelyDirectoryPlaceholder(nextFile) ||
+        isIgnorableMetadataFile(nextFile.name)
+      ) {
         continue;
       }
       const validationError = validateSelectedFile(nextFile);
       if (validationError) {
-        rejectedMessages.push(`${nextFile.name}: ${validationError}`);
+        rejectedMessages.push(validationError);
         continue;
       }
 
       const fileKey = getFileIdentity(nextFile);
       if (existingFileKeys.has(fileKey)) {
-        rejectedMessages.push(`${nextFile.name}: already selected.`);
+        rejectedMessages.push("A selected file is already in the upload list.");
         continue;
       }
       existingFileKeys.add(fileKey);
@@ -1442,7 +1458,7 @@ export default function Upload() {
     }
 
     if (nextItems.length === 0) {
-      setErr(rejectedMessages[0] || "No valid files selected.");
+      setErr(rejectedMessages[0] || "No valid CSV or TSV files selected.");
       return;
     }
 
@@ -1459,10 +1475,10 @@ export default function Upload() {
           previous.map((current) =>
             current.id === item.id
               ? {
-                  ...current,
-                  estimatedRows: stats.rows,
-                  estimatedCols: stats.cols,
-                }
+                ...current,
+                estimatedRows: stats.rows,
+                estimatedCols: stats.cols,
+              }
               : current,
           ),
         );
@@ -1534,9 +1550,9 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-              ...item,
-              name: nextName,
-            }
+            ...item,
+            name: nextName,
+          }
           : item,
       ),
     );
@@ -1552,9 +1568,9 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-              ...item,
-              description: nextDescription,
-            }
+            ...item,
+            description: nextDescription,
+          }
           : item,
       ),
     );
@@ -1630,9 +1646,21 @@ export default function Upload() {
     setUploadPickerOpen((current) => (current === target ? null : target));
   }
 
+  function lockUploadDropClick() {
+    if (uploadDropClickLockTimeoutRef.current !== null) {
+      window.clearTimeout(uploadDropClickLockTimeoutRef.current);
+    }
+    uploadDropClickLockRef.current = true;
+    uploadDropClickLockTimeoutRef.current = window.setTimeout(() => {
+      uploadDropClickLockRef.current = false;
+      uploadDropClickLockTimeoutRef.current = null;
+    }, 250);
+  }
+
   function onUploadFiles(target: UploadPickerTarget) {
     setUploadPickerOpen(null);
     if (target === "empty") {
+      lockUploadDropClick();
       uploadDropFileInputRef.current?.click();
       return;
     }
@@ -1642,6 +1670,7 @@ export default function Upload() {
   function onUploadFolder(target: UploadPickerTarget) {
     setUploadPickerOpen(null);
     if (target === "empty") {
+      lockUploadDropClick();
       uploadDropFolderInputRef.current?.click();
       return;
     }
@@ -1654,7 +1683,7 @@ export default function Upload() {
   const activeTableName =
     activeTableId !== null
       ? tables.find((table) => table.dataset_id === activeTableId)?.name ||
-        "Table"
+      "Table"
       : null;
   const deleteConfirmBusy = deleteConfirmTable
     ? Boolean(deletingTableIds[deleteConfirmTable.dataset_id])
@@ -1774,7 +1803,7 @@ export default function Upload() {
     }
     setVisibleTableCount(
       Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) *
-        TABLES_RENDER_BATCH_SIZE,
+      TABLES_RENDER_BATCH_SIZE,
     );
   }, [activeTableId, filteredTables, visibleTableCount]);
 
@@ -1881,7 +1910,7 @@ export default function Upload() {
           setFolderPanelOpen(false);
           listFolders()
             .then(setFolders)
-            .catch(() => {});
+            .catch(() => { });
         }}
         isAdmin={userIsAdmin}
         onSelectFolder={(folder) => {
@@ -1897,7 +1926,7 @@ export default function Upload() {
           void refresh();
           listFolders()
             .then(setFolders)
-            .catch(() => {});
+            .catch(() => { });
         }}
       />
       <div className="page page-stack upload-home-page">
@@ -2017,7 +2046,7 @@ export default function Upload() {
             </div>
           </div>
 
-          <div className="upload-home-header__end" aria-hidden="true" />
+          <div className="upload-home-header__end">{homeControls}</div>
         </div>
 
         <div
@@ -2046,7 +2075,11 @@ export default function Upload() {
               aria-describedby={uploadDropDescriptionId}
               onClick={(event) => {
                 const target = event.target as HTMLElement | null;
-                if (busy || target?.closest(".upload-picker-wrap")) {
+                if (
+                  busy ||
+                  uploadDropClickLockRef.current ||
+                  target?.closest(".upload-picker-wrap")
+                ) {
                   return;
                 }
                 uploadDropFileInputRef.current?.click();
@@ -2114,12 +2147,22 @@ export default function Upload() {
                       className="upload-picker-menu"
                       role="menu"
                       aria-label="Upload options"
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
                     >
                       <button
                         type="button"
                         role="menuitem"
                         className="upload-picker-item"
-                        onClick={() => onUploadFiles("empty")}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onUploadFiles("empty");
+                        }}
                       >
                         Upload files
                       </button>
@@ -2127,7 +2170,11 @@ export default function Upload() {
                         type="button"
                         role="menuitem"
                         className="upload-picker-item"
-                        onClick={() => onUploadFolder("empty")}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onUploadFolder("empty");
+                        }}
                       >
                         Upload folder
                       </button>
@@ -2136,7 +2183,7 @@ export default function Upload() {
                 </div>
               </div>
               <div id="upload-drop-title" className="upload-title">
-                Select or Drag &amp; Drop Your File(s) to Start Uploading
+                Select or Drag &amp; Drop to Start Uploading
               </div>
               <div id={uploadDropDescriptionId} className="upload-subtitle">
                 Supported file formats: .csv, .tsv, and folders.
@@ -2178,31 +2225,44 @@ export default function Upload() {
                     ref={uploadPickerQueueButtonRef}
                     onClick={() => openUploadPicker("queue")}
                     type="button"
-                    className={`surface-btn upload-add-more-button upload-icon-only ${uploadPickerOpen === "queue" ? "active" : ""}`}
-                    aria-label="Upload options"
-                    title="Upload options"
+                    className={`surface-btn upload-add-more-button ${uploadPickerOpen === "queue" ? "active" : ""}`}
+                    aria-label="Add more files"
+                    title="Add more files"
                     aria-haspopup="menu"
                     aria-expanded={uploadPickerOpen === "queue"}
                     disabled={busy || isQueueInProgress}
                   >
                     <img
-                      src={uploadLogo}
+                      src={plusIcon}
                       alt=""
                       aria-hidden="true"
-                      className="upload-plus-icon"
+                      className="upload-add-more-button__icon"
                     />
+                    <span className="upload-add-more-button__label">
+                      Add more files
+                    </span>
                   </button>
                   {uploadPickerOpen === "queue" && (
                     <div
                       className="upload-picker-menu"
                       role="menu"
                       aria-label="Upload options"
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
                     >
                       <button
                         type="button"
                         role="menuitem"
                         className="upload-picker-item"
-                        onClick={() => onUploadFiles("queue")}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onUploadFiles("queue");
+                        }}
                       >
                         Upload files
                       </button>
@@ -2210,7 +2270,11 @@ export default function Upload() {
                         type="button"
                         role="menuitem"
                         className="upload-picker-item"
-                        onClick={() => onUploadFolder("queue")}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onUploadFolder("queue");
+                        }}
                       >
                         Upload folder
                       </button>
@@ -2249,14 +2313,14 @@ export default function Upload() {
                       : item.phase === "success"
                         ? item.estimatedRows
                         : Math.max(
-                            0,
-                            Math.min(
-                              item.estimatedRows,
-                              Math.round(
-                                (progressValue / 100) * item.estimatedRows,
-                              ),
+                          0,
+                          Math.min(
+                            item.estimatedRows,
+                            Math.round(
+                              (progressValue / 100) * item.estimatedRows,
                             ),
-                          );
+                          ),
+                        );
                   const stateLabel =
                     item.phase === "success"
                       ? "Uploaded"
@@ -2287,11 +2351,9 @@ export default function Upload() {
                   const queueItemUploadErrorId = `${item.id}-upload-error`;
                   const progressFillWidth =
                     item.phase === "error" ? 100 : progressValue;
-                  const progressFillClassName = `upload-progress-fill ${
-                    item.phase === "processing" ? "processing" : ""
-                  } ${
-                    item.phase === "success" ? "success" : ""
-                  } ${item.phase === "error" ? "error" : ""}`;
+                  const progressFillClassName = `upload-progress-fill ${item.phase === "processing" ? "processing" : ""
+                    } ${item.phase === "success" ? "success" : ""
+                    } ${item.phase === "error" ? "error" : ""}`;
 
                   return (
                     <li
@@ -2331,13 +2393,11 @@ export default function Upload() {
                               canEditQueuedName &&
                               (queueNameIsEmpty || queueNameIsDuplicate)
                             }
-                            aria-describedby={`${queueItemSubtitleId} ${queueItemStateId} ${
-                              queueNameIsEmpty || queueNameIsDuplicate
-                                ? queueItemValidationId
-                                : ""
-                            } ${
-                              item.error ? queueItemUploadErrorId : ""
-                            }`.trim()}
+                            aria-describedby={`${queueItemSubtitleId} ${queueItemStateId} ${queueNameIsEmpty || queueNameIsDuplicate
+                              ? queueItemValidationId
+                              : ""
+                              } ${item.error ? queueItemUploadErrorId : ""
+                              }`.trim()}
                           />
                           <div
                             id={queueItemSubtitleId}
@@ -2360,9 +2420,8 @@ export default function Upload() {
                                   : null
                               }
                               type="text"
-                              className={`upload-queue-description-input ${
-                                canEditQueuedName ? "" : "disabled"
-                              }`}
+                              className={`upload-queue-description-input ${canEditQueuedName ? "" : "disabled"
+                                }`}
                               value={item.description}
                               onChange={(event) => {
                                 onChangeQueuedDescription(
@@ -2400,8 +2459,8 @@ export default function Upload() {
                                 {(userIsAdmin
                                   ? folders
                                   : folders.filter(
-                                      (f) => f.privacy === "public",
-                                    )
+                                    (f) => f.privacy === "public",
+                                  )
                                 ).map((folder) => (
                                   <option
                                     key={folder.folder_id}
@@ -2450,11 +2509,10 @@ export default function Upload() {
                               ? undefined
                               : Math.round(progressValue)
                           }
-                          aria-valuetext={`${stateLabel}. ${
-                            item.phase === "error"
-                              ? item.error || "Upload failed."
-                              : rowsLabel
-                          }`}
+                          aria-valuetext={`${stateLabel}. ${item.phase === "error"
+                            ? item.error || "Upload failed."
+                            : rowsLabel
+                            }`}
                         >
                           <div
                             className={progressFillClassName}
@@ -2699,9 +2757,8 @@ export default function Upload() {
                         </button>
 
                         <div
-                          className={`list-item ${
-                            activeTableId === table.dataset_id ? "selected" : ""
-                          }`}
+                          className={`list-item ${activeTableId === table.dataset_id ? "selected" : ""
+                            }`}
                         >
                           {editingId === table.dataset_id ? (
                             <div className="uploaded-table-main">
@@ -2721,11 +2778,10 @@ export default function Upload() {
                                     void onRename(table.dataset_id);
                                   }
                                 }}
-                                className={`rename-input ${
-                                  renameHintId === table.dataset_id
-                                    ? "invalid"
-                                    : ""
-                                }`}
+                                className={`rename-input ${renameHintId === table.dataset_id
+                                  ? "invalid"
+                                  : ""
+                                  }`}
                                 autoCapitalize="none"
                                 autoCorrect="off"
                                 spellCheck={false}
