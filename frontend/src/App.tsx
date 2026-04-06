@@ -52,6 +52,7 @@ function AppContent() {
   const user = getUser();
   const workspaceKey = `${user?.enterprise_id ?? "none"}-${sessionRev}`;
   const onHomePage = location.pathname === "/";
+  const onSettingsPage = location.pathname === "/settings";
   const showWorkspaceSwitcher = Boolean(onHomePage && user?.enterprise_id);
 
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
@@ -221,9 +222,15 @@ function AppContent() {
   return (
     <div className="app-shell">
       {location.pathname !== "/" && (
-        <Link className="app-brand" to="/" aria-label="Go to home">
+        <Link
+          className={`app-brand${onSettingsPage ? " app-brand--icon-only" : ""}`}
+          to="/"
+          aria-label="Go to home"
+        >
           <img src={logo} alt="" aria-hidden="true" />
-          <span className="app-brand-text">TabulaRAG</span>
+          {!onSettingsPage ? (
+            <span className="app-brand-text">TabulaRAG</span>
+          ) : null}
         </Link>
       )}
 
@@ -233,7 +240,7 @@ function AppContent() {
 
       {isAuthenticated() && user && (
         <div
-          className={`top-bar top-bar--compact${showWorkspaceSwitcher ? " top-bar--with-workspace-switch" : ""}`}
+          className={`top-bar top-bar--compact${showWorkspaceSwitcher ? " top-bar--with-workspace-switch" : ""}${onHomePage ? " top-bar--home" : ""}`}
         >
           <div className="user-menu user-menu--compact">
             {showWorkspaceSwitcher && (

@@ -702,6 +702,13 @@ export default function Upload() {
   }, [isUploadDialogOpen]);
 
   useEffect(() => {
+    document.body.classList.toggle("upload-dialog-open", isUploadDialogOpen);
+    return () => {
+      document.body.classList.remove("upload-dialog-open");
+    };
+  }, [isUploadDialogOpen]);
+
+  useEffect(() => {
     if (!isUploadDialogOpen) {
       return;
     }
@@ -1964,44 +1971,53 @@ export default function Upload() {
           <div className="upload-queue-backdrop" aria-hidden="true" />
         )}
 
-        <div className="page-top-bar" aria-hidden={isUploadDialogOpen}>
-          <button
-            type="button"
-            className={`sort-toggle-button folder-panel-toggle${folderPanelOpen ? " active" : ""}`}
-            onClick={() => setFolderPanelOpen((open) => !open)}
-            aria-label="Toggle folders panel"
-            title="Folders"
-            aria-expanded={folderPanelOpen}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              role="presentation"
-              className="sort-toggle-icon"
-              aria-hidden="true"
+        <div className="upload-home-header" aria-hidden={isUploadDialogOpen}>
+          <div className="upload-home-header__start">
+            <button
+              type="button"
+              className={`sort-toggle-button folder-panel-toggle${folderPanelOpen ? " active" : ""}`}
+              onClick={() => setFolderPanelOpen((open) => !open)}
+              aria-label="Toggle folders panel"
+              title="Folders"
+              aria-expanded={folderPanelOpen}
             >
-              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-            </svg>
-            <span className="sort-toggle-text">Folders</span>
-          </button>
-        </div>
+              <svg
+                viewBox="0 0 24 24"
+                role="presentation"
+                className="sort-toggle-icon"
+                aria-hidden="true"
+              >
+                <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+              </svg>
+              <span className="sort-toggle-text">Folders</span>
+            </button>
+          </div>
 
-        <div className="hero" aria-hidden={isUploadDialogOpen}>
-          <div className="hero-title-row">
-            <img
-              src={logo64}
-              srcSet={`${logo64} 1x, ${logo128} 2x`}
-              width={48}
-              height={48}
-              alt="TabulaRAG"
-              className="hero-logo"
-              loading="eager"
-              fetchPriority="high"
-            />
-            <div className="hero-title">TabulaRAG</div>
+          <div className="upload-home-brand">
+            <div className="upload-home-brand__headline">
+              <img
+                src={logo64}
+                srcSet={`${logo64} 1x, ${logo128} 2x`}
+                width={48}
+                height={48}
+                alt="TabulaRAG"
+                className="hero-logo upload-home-brand__logo"
+                loading="eager"
+                fetchPriority="high"
+              />
+              <div className="upload-home-brand__title" aria-label="TabulaRAG">
+                <span className="upload-home-brand__title-tabula">Tabula</span>
+                <span className="upload-home-brand__title-rag">
+                  <span className="upload-home-brand__title-r">R</span>AG
+                </span>
+              </div>
+            </div>
+            <div className="upload-home-brand__subtitle">
+              Fast-ingesting tabular data RAG with cell-level citations
+            </div>
           </div>
-          <div className="hero-subtitle">
-            Fast-ingesting tabular data RAG with cell-level citations
-          </div>
+
+          <div className="upload-home-header__end" aria-hidden="true" />
         </div>
 
         <div
@@ -2028,6 +2044,13 @@ export default function Upload() {
               tabIndex={0}
               aria-labelledby="upload-drop-title"
               aria-describedby={uploadDropDescriptionId}
+              onClick={(event) => {
+                const target = event.target as HTMLElement | null;
+                if (busy || target?.closest(".upload-picker-wrap")) {
+                  return;
+                }
+                uploadDropFileInputRef.current?.click();
+              }}
               onDragEnter={onUploadDragEnter}
               onDragOver={onUploadDragOver}
               onDragLeave={onUploadDragLeave}
@@ -2079,7 +2102,12 @@ export default function Upload() {
                     }}
                     disabled={busy}
                   >
-                    <img src={uploadLogo} alt="" />
+                    <img
+                      src={uploadLogo}
+                      alt=""
+                      aria-hidden="true"
+                      className="upload-plus-icon"
+                    />
                   </button>
                   {uploadPickerOpen === "empty" && (
                     <div
@@ -2157,7 +2185,12 @@ export default function Upload() {
                     aria-expanded={uploadPickerOpen === "queue"}
                     disabled={busy || isQueueInProgress}
                   >
-                    <img src={uploadLogo} alt="" aria-hidden="true" />
+                    <img
+                      src={uploadLogo}
+                      alt=""
+                      aria-hidden="true"
+                      className="upload-plus-icon"
+                    />
                   </button>
                   {uploadPickerOpen === "queue" && (
                     <div
@@ -2492,21 +2525,27 @@ export default function Upload() {
             </>
           )}
 
-          {err && (
-            <p className="error" role="alert">
-              {err}
-            </p>
-          )}
-          {reloadNotice && (
-            <p className="small status-info" role="status" aria-live="polite">
-              {reloadNotice}
-            </p>
-          )}
-          {status && !err && (
-            <p className="small status-info" role="status" aria-live="polite">
-              {status}
-            </p>
-          )}
+          <div className="upload-panel-status" aria-live="polite">
+            {err ? (
+              <p className="small error upload-panel-status__message" role="alert">
+                {err}
+              </p>
+            ) : reloadNotice ? (
+              <p
+                className="small status-info upload-panel-status__message"
+                role="status"
+              >
+                {reloadNotice}
+              </p>
+            ) : status ? (
+              <p
+                className="small status-info upload-panel-status__message"
+                role="status"
+              >
+                {status}
+              </p>
+            ) : null}
+          </div>
         </div>
 
         <div
