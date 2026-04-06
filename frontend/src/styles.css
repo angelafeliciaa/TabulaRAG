@@ -6596,6 +6596,17 @@ a.login-repo-btn:hover {
   /* matches sort-toggle-button but signals folder */
 }
 
+.folder-panel-toggle__icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+:root[data-theme="dark"] .folder-panel-toggle__icon {
+  filter: brightness(0) invert(1);
+}
+
 .uploaded-table-folder-row {
   display: inline-flex;
   align-items: center;
