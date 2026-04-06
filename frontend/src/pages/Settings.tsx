@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAppUi } from "../appUiContext";
 import McpTokenPanel from "../components/McpTokenPanel";
+import UserGroupsSection from "../components/UserGroupsSection";
 import WorkspaceAdminSection from "../components/WorkspaceAdminSection";
 import {
   disbandEnterprise,
@@ -18,21 +19,27 @@ import {
   type WorkspaceSummary,
 } from "../api";
 
-type SettingsTab = "account" | "workspace" | "appearance" | "mcp";
+type SettingsTab = "account" | "workspace" | "groups" | "appearance" | "mcp";
 
-const TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
+const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; ownerOnly?: boolean }> = [
   { id: "account", label: "Account", description: "Your profile and workspaces" },
   {
     id: "workspace",
     label: "Workspace",
     description: "Active workspace, members, and invites for this organization",
   },
+  {
+    id: "groups",
+    label: "Groups",
+    description: "User groups and their access to protected folders",
+    ownerOnly: true,
+  },
   { id: "appearance", label: "Appearance", description: "Theme and table value display" },
   { id: "mcp", label: "MCP", description: "External tool access" },
 ];
 
 function tabFromSearchParam(tab: string | null): SettingsTab | null {
-  if (tab === "workspace" || tab === "appearance" || tab === "mcp" || tab === "account") {
+  if (tab === "workspace" || tab === "appearance" || tab === "mcp" || tab === "account" || tab === "groups") {
     return tab;
   }
   return null;
@@ -218,6 +225,7 @@ export default function Settings() {
     }
   }
 
+  const TABS = ALL_TABS.filter((t) => !t.ownerOnly || isOwner());
   const tabMeta = TABS.find((t) => t.id === activeTab) ?? TABS[0];
   const workspaceId = user?.enterprise_id;
 
@@ -562,6 +570,14 @@ export default function Settings() {
                     </button>
                   </footer>
                 ) : null}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "groups" && isOwner() && (
+            <section className="settings-pane" aria-label="Groups">
+              <div className="settings-section-body">
+                <UserGroupsSection />
               </div>
             </section>
           )}

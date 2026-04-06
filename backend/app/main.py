@@ -14,14 +14,17 @@ from app.db import SessionLocal, engine
 from app.dataset_state import (
     ensure_dataset_description_column,
     ensure_dataset_enterprise_id_column,
+    ensure_dataset_folder_id_column,
     ensure_dataset_query_context_column,
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
     ensure_enterprise_name_non_unique,
+    ensure_folders_table,
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
+    ensure_user_groups_tables,
     promote_legacy_admin_to_owner_per_enterprise,
     set_dataset_index_ready,
 )
@@ -34,13 +37,15 @@ from app.index_jobs import (
 )
 from app.indexing import index_dataset
 from app.index_worker import IndexWorker
-from app.models import Base, Dataset, DatasetColumn, DatasetRow, EnterpriseMembership, User
+from app.models import Base, Dataset, DatasetColumn, DatasetRow, EnterpriseMembership, Folder, FolderPrivacy, User, UserRole
 from app.qdrant_client import get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.mcp_connection import require_mcp_connection_auth
 from app.routes_tables import router as tables_router
 from app.routes_query import router as query_router
 from app.routes_enterprises import router as enterprises_router
+from app.routes_folders import router as folders_router
+from app.routes_groups import router as groups_router
 from app.normalization import (
     infer_date_formats_for_columns,
     infer_measurement_columns,
@@ -60,7 +65,6 @@ from app.auth import (
     get_active_membership,
     GOOGLE_CLIENT_ID,
     mint_token_for_user,
-    require_admin,
     require_auth,
     exchange_google_code,
 )
@@ -86,6 +90,9 @@ async def lifespan(app: FastAPI):
     ensure_postgres_userrole_owner_enum()
     promote_legacy_admin_to_owner_per_enterprise()
     ensure_mcp_access_tokens_table()
+    ensure_folders_table()
+    ensure_dataset_folder_id_column()
+    ensure_user_groups_tables()
     try:
         from app.embeddings import get_model
         get_model()
@@ -116,6 +123,8 @@ app.add_middleware(
 app.include_router(tables_router)
 app.include_router(query_router)
 app.include_router(enterprises_router)
+app.include_router(folders_router)
+app.include_router(groups_router)
 
 
 @app.get("/health", include_in_schema=False)
@@ -691,13 +700,38 @@ def ingest_table(
     dataset_name: str | None = Form(None),
     dataset_description: str | None = Form(None),
     has_header: Optional[bool] = Form(None),
-    current_user: AuthUser = Depends(require_admin),
+    folder_id: Optional[int] = Form(None),
+    current_user: AuthUser = Depends(require_auth),
 ):
     if current_user.google_id != "api_key" and current_user.enterprise_id is None:
         raise HTTPException(
             status_code=403,
             detail="Join or create a workspace before uploading.",
         )
+
+    # Queriers may only upload into a public folder.
+    resolved_folder_id: Optional[int] = None
+    if folder_id is not None:
+        with SessionLocal() as db:
+            stmt = select(Folder).where(Folder.id == folder_id)
+            if current_user.enterprise_id is not None:
+                stmt = stmt.where(Folder.enterprise_id == current_user.enterprise_id)
+            folder = db.execute(stmt).scalar_one_or_none()
+            if folder is None:
+                raise HTTPException(status_code=404, detail="Folder not found")
+            if current_user.role not in (UserRole.owner, UserRole.admin):
+                if folder.privacy != FolderPrivacy.public:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You can only upload into a public folder.",
+                    )
+            resolved_folder_id = folder.id
+    elif current_user.role not in (UserRole.owner, UserRole.admin):
+        raise HTTPException(
+            status_code=403,
+            detail="You must specify a public folder to upload into.",
+        )
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
     validate_filename(file.filename)
@@ -766,6 +800,7 @@ def ingest_table(
             column_count=len(normalized_headers),
             is_index_ready=False,
             enterprise_id=current_user.enterprise_id,
+            folder_id=resolved_folder_id,
         )
         db.add(dataset)
         db.flush()

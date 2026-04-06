@@ -8,26 +8,28 @@ import {
   type InputHTMLAttributes,
 } from "react";
 import { Link } from "react-router-dom";
+import { focusByIndex, focusByOffset, trapFocus } from "../accessibility";
 import {
-  focusByIndex,
-  focusByOffset,
-  trapFocus,
-} from "../accessibility";
-import {
+  assignDatasetToFolder,
   deleteTable,
   getSlice,
   isAdmin,
+  listFolders,
   listIndexStatus,
   listTables,
   patchTableDescription,
   renameTable,
   uploadTable,
+  type Folder,
   type TableIndexStatus,
   type TableSlice,
   type TableSummary,
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
+import FolderDetailPopup from "../components/FolderDetailPopup";
+import FolderPrivacyBadge from "../components/FolderPrivacyBadge";
+import FolderSidePanel from "../components/FolderSidePanel";
 import { useAppUi } from "../appUiContext";
 import { flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
@@ -61,6 +63,7 @@ type UploadQueueItem = {
   estimatedCols: number | null;
   error: string | null;
   description: string;
+  folderId: number | null;
 };
 
 type FileSystemEntryLike = {
@@ -69,7 +72,10 @@ type FileSystemEntryLike = {
 };
 
 type FileSystemFileEntryLike = FileSystemEntryLike & {
-  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+  file: (
+    successCallback: (file: File) => void,
+    errorCallback?: (error: DOMException) => void,
+  ) => void;
 };
 
 type FileSystemDirectoryReaderLike = {
@@ -133,12 +139,12 @@ function isTableNotFoundError(error: unknown): boolean {
 function isOfflineConnectionError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   return (
-    normalized.includes("failed to fetch")
-    || normalized.includes("networkerror")
-    || normalized.includes("network error")
-    || normalized.includes("load failed")
-    || normalized.includes("network request failed")
-    || normalized.includes("err_network")
+    normalized.includes("failed to fetch") ||
+    normalized.includes("networkerror") ||
+    normalized.includes("network error") ||
+    normalized.includes("load failed") ||
+    normalized.includes("network request failed") ||
+    normalized.includes("err_network")
   );
 }
 
@@ -158,7 +164,9 @@ function formatFileSize(bytes: number): string {
 }
 
 function getFileIdentity(file: File): string {
-  const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  const relativePath =
+    (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+    file.name;
   return `${relativePath}:${file.size}:${file.lastModified}`;
 }
 
@@ -187,23 +195,22 @@ function readAllDirectoryEntries(
   return new Promise<FileSystemEntryLike[]>((resolve, reject) => {
     const allEntries: FileSystemEntryLike[] = [];
     const readBatch = () => {
-      reader.readEntries(
-        (entries) => {
-          if (entries.length === 0) {
-            resolve(allEntries);
-            return;
-          }
-          allEntries.push(...entries);
-          readBatch();
-        },
-        reject,
-      );
+      reader.readEntries((entries) => {
+        if (entries.length === 0) {
+          resolve(allEntries);
+          return;
+        }
+        allEntries.push(...entries);
+        readBatch();
+      }, reject);
     };
     readBatch();
   });
 }
 
-async function collectFilesFromEntry(entry: FileSystemEntryLike): Promise<File[]> {
+async function collectFilesFromEntry(
+  entry: FileSystemEntryLike,
+): Promise<File[]> {
   if (entry.isFile) {
     const file = await fileFromEntry(entry as FileSystemFileEntryLike);
     return [file];
@@ -213,11 +220,15 @@ async function collectFilesFromEntry(entry: FileSystemEntryLike): Promise<File[]
   }
   const dirReader = (entry as FileSystemDirectoryEntryLike).createReader();
   const childEntries = await readAllDirectoryEntries(dirReader);
-  const files = await Promise.all(childEntries.map((child) => collectFilesFromEntry(child)));
+  const files = await Promise.all(
+    childEntries.map((child) => collectFilesFromEntry(child)),
+  );
   return files.flat();
 }
 
-async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+async function collectDroppedFiles(
+  dataTransfer: DataTransfer,
+): Promise<File[]> {
   const itemFiles = await Promise.all(
     Array.from(dataTransfer.items || []).map(async (item) => {
       if (item.kind !== "file") {
@@ -236,7 +247,9 @@ async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> 
   if (flattened.length > 0) {
     return flattened.filter((file) => !isLikelyDirectoryPlaceholder(file));
   }
-  return Array.from(dataTransfer.files || []).filter((file) => !isLikelyDirectoryPlaceholder(file));
+  return Array.from(dataTransfer.files || []).filter(
+    (file) => !isLikelyDirectoryPlaceholder(file),
+  );
 }
 
 function countDelimitedColumns(line: string, delimiter: string): number {
@@ -248,8 +261,8 @@ function countDelimitedColumns(line: string, delimiter: string): number {
   let count = 1;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if (ch === "\"") {
-      if (inQuotes && line[i + 1] === "\"") {
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
         i += 1;
       } else {
         inQuotes = !inQuotes;
@@ -264,13 +277,20 @@ function countDelimitedColumns(line: string, delimiter: string): number {
 }
 
 function stripSupportedFileExtension(name: string): string {
-  return name.trim().replace(/\.(csv|tsv)$/i, "").trim();
+  return name
+    .trim()
+    .replace(/\.(csv|tsv)$/i, "")
+    .trim();
 }
 
 function sanitizeTableNameInput(name: string): string {
   const withoutExtension = stripSupportedFileExtension(name);
-  // eslint-disable-next-line no-control-regex
-  const withoutControlChars = withoutExtension.replace(/[\u0000-\u001f\u007f]/g, "");
+  /* eslint-disable no-control-regex */
+  const withoutControlChars = withoutExtension.replace(
+    /[\u0000-\u001f\u007f]/g,
+    "",
+  );
+  /* eslint-enable no-control-regex */
   const allowedCharsOnly = withoutControlChars.replace(/[^A-Za-z0-9 _-]/g, "");
   const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ").trim();
   return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
@@ -292,7 +312,10 @@ function getNameKey(name: string): string {
   return sanitizeTableNameInput(name).toLocaleLowerCase();
 }
 
-function claimUniqueTableName(baseName: string, occupiedNameKeys: Set<string>): string {
+function claimUniqueTableName(
+  baseName: string,
+  occupiedNameKeys: Set<string>,
+): string {
   const cleanedBaseName = sanitizeTableNameInput(baseName) || "table";
   let candidate = cleanedBaseName;
   let suffix = 2;
@@ -312,14 +335,28 @@ function smoothIndexStatus(
   fallbackTotalRows: number,
 ): TableIndexStatus {
   const totalRows =
-    incoming.total_rows > 0 ? incoming.total_rows : Math.max(0, fallbackTotalRows);
+    incoming.total_rows > 0
+      ? incoming.total_rows
+      : Math.max(0, fallbackTotalRows);
 
-  if (incoming.state !== "indexing" || !previous || previous.state !== "indexing") {
+  if (
+    incoming.state !== "indexing" ||
+    !previous ||
+    previous.state !== "indexing"
+  ) {
     return { ...incoming, total_rows: totalRows };
   }
 
-  const previousProgress = clamp(previous.progress || 0, 0, INDEX_PROGRESS_DRIFT_CAP);
-  const serverProgress = clamp(incoming.progress || 0, 0, INDEX_PROGRESS_DRIFT_CAP);
+  const previousProgress = clamp(
+    previous.progress || 0,
+    0,
+    INDEX_PROGRESS_DRIFT_CAP,
+  );
+  const serverProgress = clamp(
+    incoming.progress || 0,
+    0,
+    INDEX_PROGRESS_DRIFT_CAP,
+  );
 
   if (serverProgress > previousProgress + 0.05) {
     return { ...incoming, total_rows: totalRows };
@@ -327,7 +364,11 @@ function smoothIndexStatus(
 
   const nextProgress = Math.max(
     serverProgress,
-    clamp(previousProgress + INDEX_PROGRESS_DRIFT_STEP, 0, INDEX_PROGRESS_DRIFT_CAP),
+    clamp(
+      previousProgress + INDEX_PROGRESS_DRIFT_STEP,
+      0,
+      INDEX_PROGRESS_DRIFT_CAP,
+    ),
   );
 
   let nextProcessedRows = Math.max(0, incoming.processed_rows || 0);
@@ -364,24 +405,38 @@ export default function Upload() {
   const [previewRowCount, setPreviewRowCount] = useState(0);
   const [previewPageInput, setPreviewPageInput] = useState("1");
   const [previewSearchQuery, setPreviewSearchQuery] = useState("");
-  const [previewSortColumn, setPreviewSortColumn] = useState<string | null>(null);
-  const [previewSortDirection, setPreviewSortDirection] = useState<"asc" | "desc">("asc");
+  const [previewSortColumn, setPreviewSortColumn] = useState<string | null>(
+    null,
+  );
+  const [previewSortDirection, setPreviewSortDirection] = useState<
+    "asc" | "desc"
+  >("asc");
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [deleteConfirmTable, setDeleteConfirmTable] = useState<TableSummary | null>(null);
+  const [deleteConfirmTable, setDeleteConfirmTable] =
+    useState<TableSummary | null>(null);
   const [showScrollHint, setShowScrollHint] = useState(false);
   const [uploadedAtBottom, setUploadedAtBottom] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDescription, setEditingDescription] = useState("");
+  const [editingFolderId, setEditingFolderId] = useState<number | null>(null);
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
-  const [visibleTableCount, setVisibleTableCount] = useState(TABLES_RENDER_BATCH_SIZE);
+  const [visibleTableCount, setVisibleTableCount] = useState(
+    TABLES_RENDER_BATCH_SIZE,
+  );
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [uploadPickerOpen, setUploadPickerOpen] = useState<UploadPickerTarget | null>(null);
+  const [uploadPickerOpen, setUploadPickerOpen] =
+    useState<UploadPickerTarget | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
-  const [deletingTableIds, setDeletingTableIds] = useState<Record<number, boolean>>({});
+  const [deletingTableIds, setDeletingTableIds] = useState<
+    Record<number, boolean>
+  >({});
   const [isDragActive, setIsDragActive] = useState(false);
+  const [folderPanelOpen, setFolderPanelOpen] = useState(false);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
   const [pinnedTableIds, setPinnedTableIds] = useState<number[]>(() => {
     try {
       const raw = window.localStorage.getItem(PINNED_TABLES_STORAGE_KEY);
@@ -393,7 +448,10 @@ export default function Upload() {
         return [];
       }
       return parsed
-        .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+        .filter(
+          (value): value is number =>
+            typeof value === "number" && Number.isFinite(value),
+        )
         .map((value) => Math.trunc(value));
     } catch {
       return [];
@@ -445,6 +503,12 @@ export default function Upload() {
     );
   }, [pinnedTableIds]);
 
+  useEffect(() => {
+    listFolders()
+      .then(setFolders)
+      .catch(() => {});
+  }, []);
+
   async function estimateFileStats(nextFile: File): Promise<{
     rows: number | null;
     cols: number | null;
@@ -472,9 +536,13 @@ export default function Upload() {
         sampledLineCount,
         Math.round(nextFile.size / avgBytesPerLine),
       );
-      const delimiter = nextFile.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+      const delimiter = nextFile.name.toLowerCase().endsWith(".tsv")
+        ? "\t"
+        : ",";
       const headerLine = lines.find((line) => line.trim().length > 0) || "";
-      const estimatedCols = headerLine ? countDelimitedColumns(headerLine, delimiter) : null;
+      const estimatedCols = headerLine
+        ? countDelimitedColumns(headerLine, delimiter)
+        : null;
       // Row estimate assumes a header row when subtracting 1 (actual header detection is server-side).
       return {
         rows: Math.max(0, estimatedTotalLines - 1),
@@ -504,48 +572,51 @@ export default function Upload() {
     }, SUCCESS_TOAST_MS);
   }
 
-  const refreshIndexStatuses = useCallback(async (nextTables: TableSummary[]) => {
-    if (nextTables.length === 0) {
-      setIndexStatusByTable({});
-      return;
-    }
-
-    const datasetIds = nextTables.map((table) => table.dataset_id);
-    const statuses = await listIndexStatus(datasetIds);
-    const nextStatusByTable: Record<number, TableIndexStatus> = {};
-
-    for (const status of statuses) {
-      nextStatusByTable[status.dataset_id] = status;
-    }
-
-    for (const table of nextTables) {
-      if (!nextStatusByTable[table.dataset_id]) {
-        nextStatusByTable[table.dataset_id] = {
-          dataset_id: table.dataset_id,
-          state: "ready",
-          progress: 100,
-          processed_rows: table.row_count,
-          total_rows: table.row_count,
-          message: "Vector index is ready.",
-          started_at: null,
-          updated_at: null,
-          finished_at: null,
-        };
+  const refreshIndexStatuses = useCallback(
+    async (nextTables: TableSummary[]) => {
+      if (nextTables.length === 0) {
+        setIndexStatusByTable({});
+        return;
       }
-    }
 
-    setIndexStatusByTable((previous) => {
-      const merged: Record<number, TableIndexStatus> = {};
+      const datasetIds = nextTables.map((table) => table.dataset_id);
+      const statuses = await listIndexStatus(datasetIds);
+      const nextStatusByTable: Record<number, TableIndexStatus> = {};
+
+      for (const status of statuses) {
+        nextStatusByTable[status.dataset_id] = status;
+      }
+
       for (const table of nextTables) {
-        merged[table.dataset_id] = smoothIndexStatus(
-          previous[table.dataset_id],
-          nextStatusByTable[table.dataset_id],
-          table.row_count,
-        );
+        if (!nextStatusByTable[table.dataset_id]) {
+          nextStatusByTable[table.dataset_id] = {
+            dataset_id: table.dataset_id,
+            state: "ready",
+            progress: 100,
+            processed_rows: table.row_count,
+            total_rows: table.row_count,
+            message: "Vector index is ready.",
+            started_at: null,
+            updated_at: null,
+            finished_at: null,
+          };
+        }
       }
-      return merged;
-    });
-  }, []);
+
+      setIndexStatusByTable((previous) => {
+        const merged: Record<number, TableIndexStatus> = {};
+        for (const table of nextTables) {
+          merged[table.dataset_id] = smoothIndexStatus(
+            previous[table.dataset_id],
+            nextStatusByTable[table.dataset_id],
+            table.row_count,
+          );
+        }
+        return merged;
+      });
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     const nextTables = await listTables({ includePending: true });
@@ -553,7 +624,9 @@ export default function Upload() {
   }, []);
 
   useEffect(() => {
-    const pendingRaw = window.sessionStorage.getItem(PENDING_UPLOAD_SESSION_KEY);
+    const pendingRaw = window.sessionStorage.getItem(
+      PENDING_UPLOAD_SESSION_KEY,
+    );
     if (!pendingRaw) {
       return;
     }
@@ -691,7 +764,10 @@ export default function Upload() {
       (option) => option.value === tableSortMode,
     );
     const rafId = window.requestAnimationFrame(() => {
-      focusByIndex(sortMenuItemRefs.current, activeSortIndex === -1 ? 0 : activeSortIndex);
+      focusByIndex(
+        sortMenuItemRefs.current,
+        activeSortIndex === -1 ? 0 : activeSortIndex,
+      );
     });
 
     return () => {
@@ -705,13 +781,20 @@ export default function Upload() {
     }
 
     const activePickerRef =
-      uploadPickerOpen === "empty" ? uploadPickerEmptyRef : uploadPickerQueueRef;
+      uploadPickerOpen === "empty"
+        ? uploadPickerEmptyRef
+        : uploadPickerQueueRef;
     const activeToggleRef =
-      uploadPickerOpen === "empty" ? uploadPickerEmptyButtonRef : uploadPickerQueueButtonRef;
+      uploadPickerOpen === "empty"
+        ? uploadPickerEmptyButtonRef
+        : uploadPickerQueueButtonRef;
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (activePickerRef.current && !activePickerRef.current.contains(target)) {
+      if (
+        activePickerRef.current &&
+        !activePickerRef.current.contains(target)
+      ) {
         setUploadPickerOpen(null);
       }
     };
@@ -789,7 +872,10 @@ export default function Upload() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !deletingTableIds[deleteConfirmTable.dataset_id]) {
+      if (
+        event.key === "Escape" &&
+        !deletingTableIds[deleteConfirmTable.dataset_id]
+      ) {
         setDeleteConfirmTable(null);
         return;
       }
@@ -843,7 +929,8 @@ export default function Upload() {
     }
 
     const updateHint = () => {
-      const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
+      const atBottom =
+        element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
       const canScroll = element.scrollHeight > element.clientHeight + 2;
       setShowScrollHint(canScroll);
       setUploadedAtBottom(atBottom);
@@ -863,7 +950,10 @@ export default function Upload() {
     async (
       datasetId: number,
       page = 1,
-      sortOverride?: { sortColumn: string | null; sortDirection: "asc" | "desc" },
+      sortOverride?: {
+        sortColumn: string | null;
+        sortDirection: "asc" | "desc";
+      },
     ) => {
       setActiveTableId(datasetId);
       setPreviewPage(page);
@@ -913,7 +1003,10 @@ export default function Upload() {
 
   // Clear preview and selection only when the selected table is no longer in the list.
   useEffect(() => {
-    if (activeTableId !== null && !tables.some((t) => t.dataset_id === activeTableId)) {
+    if (
+      activeTableId !== null &&
+      !tables.some((t) => t.dataset_id === activeTableId)
+    ) {
       setActiveTableId(null);
       setPreview(null);
       setPreviewErr(null);
@@ -925,14 +1018,15 @@ export default function Upload() {
     }
   }, [activeTableId, tables]);
 
-  // Restore selected table from localStorage when returning to the page (e.g. after closing a View Full Table tab).
+  // Restore selected table from localStorage when returning to the page (e.g. after closing a Edit Full Table tab).
   useEffect(() => {
     if (tables.length === 0) return;
     try {
       const raw = window.localStorage.getItem(SELECTED_PREVIEW_TABLE_KEY);
       if (raw === null) return;
       const id = parseInt(raw, 10);
-      if (!Number.isFinite(id) || !tables.some((t) => t.dataset_id === id)) return;
+      if (!Number.isFinite(id) || !tables.some((t) => t.dataset_id === id))
+        return;
       setActiveTableId(id);
     } catch {
       /* ignore */
@@ -940,9 +1034,15 @@ export default function Upload() {
   }, [tables]);
 
   useEffect(() => {
-    if (activeTableId !== null && tables.some((t) => t.dataset_id === activeTableId)) {
+    if (
+      activeTableId !== null &&
+      tables.some((t) => t.dataset_id === activeTableId)
+    ) {
       try {
-        window.localStorage.setItem(SELECTED_PREVIEW_TABLE_KEY, String(activeTableId));
+        window.localStorage.setItem(
+          SELECTED_PREVIEW_TABLE_KEY,
+          String(activeTableId),
+        );
       } catch {
         /* ignore */
       }
@@ -956,7 +1056,8 @@ export default function Upload() {
   }, [activeTableId, tables]);
 
   const previewRows = useMemo(
-    () => (preview?.rows ? flattenRowsByValueMode(preview.rows, valueMode) : []),
+    () =>
+      preview?.rows ? flattenRowsByValueMode(preview.rows, valueMode) : [],
     [preview?.rows, valueMode],
   );
   const normalizedPreviewSearch = previewSearchQuery.trim().toLowerCase();
@@ -970,9 +1071,18 @@ export default function Upload() {
     return () => clearTimeout(t);
   }, [previewSearchQuery, activeTableId]);
 
-  const previewTotalPages = Math.max(1, Math.ceil(previewRowCount / PREVIEW_ROWS_PER_PAGE));
-  const previewSafeCurrentPage = Math.min(Math.max(1, previewPage), previewTotalPages);
-  const previewPageInputWidthCh = Math.max(2, String(previewTotalPages).length + 1);
+  const previewTotalPages = Math.max(
+    1,
+    Math.ceil(previewRowCount / PREVIEW_ROWS_PER_PAGE),
+  );
+  const previewSafeCurrentPage = Math.min(
+    Math.max(1, previewPage),
+    previewTotalPages,
+  );
+  const previewPageInputWidthCh = Math.max(
+    2,
+    String(previewTotalPages).length + 1,
+  );
 
   function commitPreviewPageInput() {
     const parsed = parseInt(previewPageInput, 10);
@@ -990,7 +1100,9 @@ export default function Upload() {
       return;
     }
 
-    const queuedItems = uploadQueue.filter((item) => item.phase === "idle" || item.phase === "error");
+    const queuedItems = uploadQueue.filter(
+      (item) => item.phase === "idle" || item.phase === "error",
+    );
     if (queuedItems.length === 0) {
       // If only successful items remain, let the primary action close the upload queue.
       setUploadQueue([]);
@@ -1009,14 +1121,18 @@ export default function Upload() {
     let firstFailureMessage: string | null = null;
     let lastUploadedDatasetId: number | null = null;
     const occupiedNameKeys = new Set(
-      tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
+      tables.map((table) =>
+        getNameKey(stripSupportedFileExtension(table.name) || "table"),
+      ),
     );
     const preparedItems = queuedItems.map((item) => {
       const preferredName =
-        sanitizeTableNameInput(item.name)
-        || sanitizeTableNameInput(item.file.name)
-        || "table";
-      const normalizedDescription = sanitizeTableDescriptionInput(item.description);
+        sanitizeTableNameInput(item.name) ||
+        sanitizeTableNameInput(item.file.name) ||
+        "table";
+      const normalizedDescription = sanitizeTableDescriptionInput(
+        item.description,
+      );
       return {
         item,
         normalizedName: claimUniqueTableName(preferredName, occupiedNameKeys),
@@ -1024,81 +1140,96 @@ export default function Upload() {
       };
     });
     let completedCount = 0;
-    setStatus(`Uploading ${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`);
+    setStatus(
+      `Uploading ${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
+    );
     window.sessionStorage.setItem(
       PENDING_UPLOAD_SESSION_KEY,
       JSON.stringify({
         file_name:
-          queuedItems.length === 1 ? queuedItems[0].file.name : `${queuedItems.length} files`,
+          queuedItems.length === 1
+            ? queuedItems[0].file.name
+            : `${queuedItems.length} files`,
         started_at: new Date().toISOString(),
       }),
     );
 
     await Promise.allSettled(
-      preparedItems.map(async ({ item, normalizedName, normalizedDescription }) => {
-        setUploadQueue((previous) =>
-          previous.map((current) =>
-            current.id === item.id
-              ? {
-                ...current,
-                name: normalizedName,
-                phase: "uploading",
-                progress: 2,
-                error: null,
-              }
-              : current,
-          ),
-        );
-
-        try {
-          const result = await uploadTable(item.file, normalizedName, normalizedDescription || null, (progress) => {
-            setUploadQueue((previous) =>
-              previous.map((current) =>
-                current.id === item.id
-                  ? {
-                    ...current,
-                    phase: progress.phase,
-                    progress: Math.max(current.progress, progress.percent),
-                  }
-                  : current,
-              ),
-            );
-          });
-
-          successCount += 1;
-          lastUploadedDatasetId = result.dataset_id;
+      preparedItems.map(
+        async ({ item, normalizedName, normalizedDescription }) => {
           setUploadQueue((previous) =>
             previous.map((current) =>
               current.id === item.id
                 ? {
-                  ...current,
-                  phase: "success",
-                  progress: 100,
-                  error: null,
-                }
+                    ...current,
+                    name: normalizedName,
+                    phase: "uploading",
+                    progress: 2,
+                    error: null,
+                  }
                 : current,
             ),
           );
-        } catch (error: unknown) {
-          failureCount += 1;
-          const message = getErrorMessage(error);
-          if (!firstFailureMessage) {
-            firstFailureMessage = message;
+
+          try {
+            const result = await uploadTable(
+              item.file,
+              normalizedName,
+              normalizedDescription || null,
+              (progress) => {
+                setUploadQueue((previous) =>
+                  previous.map((current) =>
+                    current.id === item.id
+                      ? {
+                          ...current,
+                          phase: progress.phase,
+                          progress: Math.max(
+                            current.progress,
+                            progress.percent,
+                          ),
+                        }
+                      : current,
+                  ),
+                );
+              },
+              item.folderId,
+            );
+
+            successCount += 1;
+            lastUploadedDatasetId = result.dataset_id;
+            setUploadQueue((previous) =>
+              previous.map((current) =>
+                current.id === item.id
+                  ? {
+                      ...current,
+                      phase: "success",
+                      progress: 100,
+                      error: null,
+                    }
+                  : current,
+              ),
+            );
+          } catch (error: unknown) {
+            failureCount += 1;
+            const message = getErrorMessage(error);
+            if (!firstFailureMessage) {
+              firstFailureMessage = message;
+            }
+            setUploadQueue((previous) =>
+              previous.map((current) =>
+                current.id === item.id
+                  ? { ...current, phase: "error", progress: 0, error: message }
+                  : current,
+              ),
+            );
+          } finally {
+            completedCount += 1;
+            setStatus(
+              `Completed ${completedCount}/${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
+            );
           }
-          setUploadQueue((previous) =>
-            previous.map((current) =>
-              current.id === item.id
-                ? { ...current, phase: "error", progress: 0, error: message }
-                : current,
-            ),
-          );
-        } finally {
-          completedCount += 1;
-          setStatus(
-            `Completed ${completedCount}/${queuedItems.length} file${queuedItems.length === 1 ? "" : "s"}...`,
-          );
-        }
-      }),
+        },
+      ),
     );
 
     window.sessionStorage.removeItem(PENDING_UPLOAD_SESSION_KEY);
@@ -1106,7 +1237,10 @@ export default function Upload() {
     try {
       await refresh();
       if (lastUploadedDatasetId !== null) {
-        await loadPreview(lastUploadedDatasetId, 1, { sortColumn: null, sortDirection: "asc" });
+        await loadPreview(lastUploadedDatasetId, 1, {
+          sortColumn: null,
+          sortDirection: "asc",
+        });
       }
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
@@ -1147,7 +1281,9 @@ export default function Upload() {
 
     try {
       await deleteTable(datasetId);
-      setTables((previous) => previous.filter((current) => current.dataset_id !== datasetId));
+      setTables((previous) =>
+        previous.filter((current) => current.dataset_id !== datasetId),
+      );
       setPinnedTableIds((previous) =>
         previous.filter((currentId) => currentId !== datasetId),
       );
@@ -1160,7 +1296,9 @@ export default function Upload() {
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
       if (isTableNotFoundError(error)) {
-        setTables((previous) => previous.filter((current) => current.dataset_id !== datasetId));
+        setTables((previous) =>
+          previous.filter((current) => current.dataset_id !== datasetId),
+        );
         setPinnedTableIds((previous) =>
           previous.filter((currentId) => currentId !== datasetId),
         );
@@ -1199,8 +1337,9 @@ export default function Upload() {
     const nextNameKey = getNameKey(nextName);
     const hasDuplicateName = tables.some(
       (table) =>
-        table.dataset_id !== datasetId
-        && getNameKey(stripSupportedFileExtension(table.name) || "table") === nextNameKey,
+        table.dataset_id !== datasetId &&
+        getNameKey(stripSupportedFileExtension(table.name) || "table") ===
+          nextNameKey,
     );
     if (hasDuplicateName) {
       setErr("Name already exists, please choose a different name.");
@@ -1209,16 +1348,23 @@ export default function Upload() {
 
     try {
       await renameTable(datasetId, nextName);
-      const nextDescription = sanitizeTableDescriptionInput(editingDescription).trim();
+      const nextDescription =
+        sanitizeTableDescriptionInput(editingDescription).trim();
       await patchTableDescription(
         datasetId,
         nextDescription.length > 0 ? nextDescription : null,
       );
+      const currentTable = tables.find((t) => t.dataset_id === datasetId);
+      if (currentTable && editingFolderId !== currentTable.folder_id) {
+        await assignDatasetToFolder(datasetId, editingFolderId);
+      }
       setEditingId(null);
       setEditingName("");
       setEditingDescription("");
+      setEditingFolderId(null);
       setRenameHintId(null);
       await refresh();
+      listFolders().then(setFolders).catch(() => {});
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
     }
@@ -1241,10 +1387,16 @@ export default function Upload() {
       return;
     }
 
-    const existingFileKeys = new Set(uploadQueue.map((item) => getFileIdentity(item.file)));
+    const existingFileKeys = new Set(
+      uploadQueue.map((item) => getFileIdentity(item.file)),
+    );
     const occupiedNameKeys = new Set<string>([
-      ...tables.map((table) => getNameKey(stripSupportedFileExtension(table.name) || "table")),
-      ...uploadQueue.map((item) => getNameKey(stripSupportedFileExtension(item.name) || "table")),
+      ...tables.map((table) =>
+        getNameKey(stripSupportedFileExtension(table.name) || "table"),
+      ),
+      ...uploadQueue.map((item) =>
+        getNameKey(stripSupportedFileExtension(item.name) || "table"),
+      ),
     ]);
     const nextItems: UploadQueueItem[] = [];
     const rejectedMessages: string[] = [];
@@ -1278,6 +1430,7 @@ export default function Upload() {
         estimatedCols: null,
         error: null,
         description: "",
+        folderId: null,
       });
     }
 
@@ -1298,7 +1451,11 @@ export default function Upload() {
         setUploadQueue((previous) =>
           previous.map((current) =>
             current.id === item.id
-              ? { ...current, estimatedRows: stats.rows, estimatedCols: stats.cols }
+              ? {
+                  ...current,
+                  estimatedRows: stats.rows,
+                  estimatedCols: stats.cols,
+                }
               : current,
           ),
         );
@@ -1329,7 +1486,10 @@ export default function Upload() {
     setStatus(null);
   }
 
-  function isQueuedNameDuplicate(queueItemId: string, candidateName: string): boolean {
+  function isQueuedNameDuplicate(
+    queueItemId: string,
+    candidateName: string,
+  ): boolean {
     const normalizedCandidate = sanitizeTableNameInput(candidateName);
     if (!normalizedCandidate) {
       return false;
@@ -1337,7 +1497,9 @@ export default function Upload() {
     const candidateKey = getNameKey(normalizedCandidate);
 
     const existsInTables = tables.some(
-      (table) => getNameKey(stripSupportedFileExtension(table.name) || "table") === candidateKey,
+      (table) =>
+        getNameKey(stripSupportedFileExtension(table.name) || "table") ===
+        candidateKey,
     );
     if (existsInTables) {
       return true;
@@ -1365,9 +1527,9 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-            ...item,
-            name: nextName,
-          }
+              ...item,
+              name: nextName,
+            }
           : item,
       ),
     );
@@ -1383,10 +1545,22 @@ export default function Upload() {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-            ...item,
-            description: nextDescription,
-          }
+              ...item,
+              description: nextDescription,
+            }
           : item,
+      ),
+    );
+  }
+
+  function onChangeQueuedFolder(
+    queueItemId: string,
+    nextFolderId: number | null,
+  ) {
+    if (busy) return;
+    setUploadQueue((previous) =>
+      previous.map((item) =>
+        item.id === queueItemId ? { ...item, folderId: nextFolderId } : item,
       ),
     );
   }
@@ -1421,15 +1595,22 @@ export default function Upload() {
     setIsDragActive(false);
     const transferTypes = Array.from(event.dataTransfer.types || []);
     const hasFileTransferType = transferTypes.some((type) =>
-      type.toLowerCase().includes("file")
+      type.toLowerCase().includes("file"),
     );
     const hasDroppedFileItem = Array.from(event.dataTransfer.items || []).some(
       (item) => item.kind === "file",
     );
-    if (event.dataTransfer.files.length > 0 || hasDroppedFileItem || hasFileTransferType) {
+    if (
+      event.dataTransfer.files.length > 0 ||
+      hasDroppedFileItem ||
+      hasFileTransferType
+    ) {
       setShowUploadQueue(true);
     }
-    if (event.dataTransfer.files.length === 0 && (hasDroppedFileItem || hasFileTransferType)) {
+    if (
+      event.dataTransfer.files.length === 0 &&
+      (hasDroppedFileItem || hasFileTransferType)
+    ) {
       setStatus(null);
       setErr("Unsupported file type. Please upload a .csv or .tsv file.");
       return;
@@ -1465,7 +1646,8 @@ export default function Upload() {
   const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
   const activeTableName =
     activeTableId !== null
-      ? tables.find((table) => table.dataset_id === activeTableId)?.name || "Table"
+      ? tables.find((table) => table.dataset_id === activeTableId)?.name ||
+        "Table"
       : null;
   const deleteConfirmBusy = deleteConfirmTable
     ? Boolean(deletingTableIds[deleteConfirmTable.dataset_id])
@@ -1474,7 +1656,11 @@ export default function Upload() {
     if (tables.length > 0 || busy) {
       return false;
     }
-    if (typeof window !== "undefined" && window.navigator && window.navigator.onLine === false) {
+    if (
+      typeof window !== "undefined" &&
+      window.navigator &&
+      window.navigator.onLine === false
+    ) {
       return true;
     }
     return Boolean(err && isOfflineConnectionError(getErrorMessage(err)));
@@ -1490,7 +1676,10 @@ export default function Upload() {
     };
   }, [showOfflineView]);
 
-  const pinnedTableIdSet = useMemo(() => new Set(pinnedTableIds), [pinnedTableIds]);
+  const pinnedTableIdSet = useMemo(
+    () => new Set(pinnedTableIds),
+    [pinnedTableIds],
+  );
   const sortedTables = useMemo(() => {
     const sortByMode = (a: TableSummary, b: TableSummary): number => {
       if (tableSortMode === "alphabet") {
@@ -1544,8 +1733,8 @@ export default function Upload() {
   );
   const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
   const tableSortLabel =
-    TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)?.label
-    || "Most recent";
+    TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)
+      ?.label || "Most recent";
 
   function onTogglePin(datasetId: number) {
     setPinnedTableIds((previous) => {
@@ -1570,21 +1759,24 @@ export default function Upload() {
     if (activeTableId === null) {
       return;
     }
-    const activeIndex = filteredTables.findIndex((table) => table.dataset_id === activeTableId);
+    const activeIndex = filteredTables.findIndex(
+      (table) => table.dataset_id === activeTableId,
+    );
     if (activeIndex === -1 || activeIndex < visibleTableCount) {
       return;
     }
     setVisibleTableCount(
-      Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) * TABLES_RENDER_BATCH_SIZE,
+      Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) *
+        TABLES_RENDER_BATCH_SIZE,
     );
   }, [activeTableId, filteredTables, visibleTableCount]);
 
   function onSortToggleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (
-      event.key === "ArrowDown"
-      || event.key === "ArrowUp"
-      || event.key === "Enter"
-      || event.key === " "
+      event.key === "ArrowDown" ||
+      event.key === "ArrowUp" ||
+      event.key === "Enter" ||
+      event.key === " "
     ) {
       event.preventDefault();
       setSortMenuOpen(true);
@@ -1676,197 +1868,181 @@ export default function Upload() {
 
   return (
     <div className="upload-home-page-scroll">
+      <FolderSidePanel
+        open={folderPanelOpen}
+        onClose={() => {
+          setFolderPanelOpen(false);
+          listFolders()
+            .then(setFolders)
+            .catch(() => {});
+        }}
+        isAdmin={userIsAdmin}
+        onSelectFolder={(folder) => {
+          setSelectedFolder(folder);
+          setFolderPanelOpen(false);
+        }}
+      />
+      <FolderDetailPopup
+        folder={selectedFolder}
+        onClose={() => setSelectedFolder(null)}
+        isAdmin={userIsAdmin}
+        onAssigned={() => {
+          void refresh();
+          listFolders()
+            .then(setFolders)
+            .catch(() => {});
+        }}
+      />
       <div className="page page-stack upload-home-page">
-      {toast && (
-        <div key={toast.id} className="toast success" role="status" aria-live="polite">
-          <span>{toast.message}</span>
-        </div>
-      )}
-
-      {deleteConfirmTable && (
-        <div
-          className="confirm-modal-overlay"
-          onClick={() => {
-            if (!deleteConfirmBusy) {
-              setDeleteConfirmTable(null);
-            }
-          }}
-        >
+        {toast && (
           <div
-            ref={deleteDialogRef}
-            className="confirm-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-confirm-title"
-            aria-describedby="delete-confirm-description"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
+            key={toast.id}
+            className="toast success"
+            role="status"
+            aria-live="polite"
           >
-            <h3 id="delete-confirm-title">Delete table permanently?</h3>
-            <p id="delete-confirm-description" className="small">
-              This will permanently delete{" "}
-              <span className="confirm-modal-table-name">{deleteConfirmTable.name}</span>. This action cannot be undone.
-            </p>
-            <div className="confirm-modal-actions">
-              <button
-                ref={deleteCancelButtonRef}
-                type="button"
-                className="surface-btn"
-                onClick={() => {
-                  setDeleteConfirmTable(null);
-                }}
-                disabled={deleteConfirmBusy}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="confirm-delete-button"
-                onClick={() => {
-                  void onDelete(deleteConfirmTable.dataset_id);
-                }}
-                disabled={deleteConfirmBusy}
-              >
-                {deleteConfirmBusy ? "Deleting..." : "Permanently delete"}
-              </button>
-            </div>
+            <span>{toast.message}</span>
           </div>
-        </div>
-      )}
+        )}
 
-      {userIsAdmin && isUploadQueueVisible && <div className="upload-queue-backdrop" aria-hidden="true" />}
-
-      <div className="hero" aria-hidden={isUploadDialogOpen}>
-        <div className="hero-title-row">
-          <img
-            src={logo64}
-            srcSet={`${logo64} 1x, ${logo128} 2x`}
-            width={48}
-            height={48}
-            alt="TabulaRAG"
-            className="hero-logo"
-            loading="eager"
-            fetchPriority="high"
-          />
-          <div className="hero-title">TabulaRAG</div>
-        </div>
-        <div className="hero-subtitle">
-          Fast-ingesting tabular data RAG with cell-level citations
-        </div>
-      </div>
-
-      {userIsAdmin && <div
-        ref={uploadPanelRef}
-        className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
-        role={isUploadQueueVisible ? "dialog" : undefined}
-        aria-modal={isUploadQueueVisible ? "true" : undefined}
-        aria-labelledby={isUploadQueueVisible ? uploadQueueTitleId : undefined}
-        aria-describedby={isUploadQueueVisible ? uploadQueueDescriptionId : undefined}
-        aria-busy={busy}
-        onDragEnter={onUploadDragEnter}
-        onDragOver={onUploadDragOver}
-        onDragLeave={onUploadDragLeave}
-        onDrop={onUploadDrop}
-      >
-        {!isUploadQueueVisible ? (
+        {deleteConfirmTable && (
           <div
-            className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
-            role="button"
-            tabIndex={0}
-            aria-labelledby="upload-drop-title"
-            aria-describedby={uploadDropDescriptionId}
-            onDragEnter={onUploadDragEnter}
-            onDragOver={onUploadDragOver}
-            onDragLeave={onUploadDragLeave}
-            onDrop={onUploadDrop}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                uploadDropFileInputRef.current?.click();
+            className="confirm-modal-overlay"
+            onClick={() => {
+              if (!deleteConfirmBusy) {
+                setDeleteConfirmTable(null);
               }
             }}
           >
-            <input
-              ref={(element) => {
-                uploadDropFileInputRef.current = element;
+            <div
+              ref={deleteDialogRef}
+              className="confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-confirm-title"
+              aria-describedby="delete-confirm-description"
+              onClick={(event) => {
+                event.stopPropagation();
               }}
-              type="file"
-              multiple
-              accept=".csv,.tsv"
-              onChange={(event) => {
-                onSelectFiles(event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-            <input
-              ref={uploadDropFolderInputRef}
-              {...FOLDER_INPUT_PROPS}
-              type="file"
-              multiple
-              accept=".csv,.tsv"
-              onChange={(event) => {
-                onSelectFiles(event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-            <div className="upload-icon-row">
-              <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
+            >
+              <h3 id="delete-confirm-title">Delete table permanently?</h3>
+              <p id="delete-confirm-description" className="small">
+                This will permanently delete{" "}
+                <span className="confirm-modal-table-name">
+                  {deleteConfirmTable.name}
+                </span>
+                . This action cannot be undone.
+              </p>
+              <div className="confirm-modal-actions">
                 <button
-                  ref={uploadPickerEmptyButtonRef}
+                  ref={deleteCancelButtonRef}
                   type="button"
-                  className={`upload-icon icon-trigger upload-picker-trigger ${uploadPickerOpen === "empty" ? "active" : ""}`}
-                  aria-label="Upload options"
-                  title="Upload options"
-                  aria-haspopup="menu"
-                  aria-expanded={uploadPickerOpen === "empty"}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openUploadPicker("empty");
+                  className="surface-btn"
+                  onClick={() => {
+                    setDeleteConfirmTable(null);
                   }}
-                  disabled={busy}
+                  disabled={deleteConfirmBusy}
                 >
-                  <img src={uploadLogo} alt="" />
+                  Cancel
                 </button>
-                {uploadPickerOpen === "empty" && (
-                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="upload-picker-item"
-                      onClick={() => onUploadFiles("empty")}
-                    >
-                      Upload files
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="upload-picker-item"
-                      onClick={() => onUploadFolder("empty")}
-                    >
-                      Upload folder
-                    </button>
-                  </div>
-                )}
+                <button
+                  type="button"
+                  className="confirm-delete-button"
+                  onClick={() => {
+                    void onDelete(deleteConfirmTable.dataset_id);
+                  }}
+                  disabled={deleteConfirmBusy}
+                >
+                  {deleteConfirmBusy ? "Deleting..." : "Permanently delete"}
+                </button>
               </div>
             </div>
-            <div id="upload-drop-title" className="upload-title">
-              Select or Drag &amp; Drop Your File(s) to Start Uploading
-            </div>
-            <div id={uploadDropDescriptionId} className="upload-subtitle">
-              Supported file formats: .csv, .tsv, and folders.
-            </div>
           </div>
-        ) : (
-          <>
-            <h2 id={uploadQueueTitleId}>Upload CSV/TSV</h2>
-            <p id={uploadQueueDescriptionId} className="sr-only">
-              Review file names, fix any validation errors, then upload or cancel the queue.
-            </p>
-            <div className="row upload-queue-toolbar">
+        )}
+
+        {isUploadQueueVisible && (
+          <div className="upload-queue-backdrop" aria-hidden="true" />
+        )}
+
+        <div className="page-top-bar" aria-hidden={isUploadDialogOpen}>
+          <button
+            type="button"
+            className={`sort-toggle-button folder-panel-toggle${folderPanelOpen ? " active" : ""}`}
+            onClick={() => setFolderPanelOpen((open) => !open)}
+            aria-label="Toggle folders panel"
+            title="Folders"
+            aria-expanded={folderPanelOpen}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              role="presentation"
+              className="sort-toggle-icon"
+              aria-hidden="true"
+            >
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+            </svg>
+            <span className="sort-toggle-text">Folders</span>
+          </button>
+        </div>
+
+        <div className="hero" aria-hidden={isUploadDialogOpen}>
+          <div className="hero-title-row">
+            <img
+              src={logo64}
+              srcSet={`${logo64} 1x, ${logo128} 2x`}
+              width={48}
+              height={48}
+              alt="TabulaRAG"
+              className="hero-logo"
+              loading="eager"
+              fetchPriority="high"
+            />
+            <div className="hero-title">TabulaRAG</div>
+          </div>
+          <div className="hero-subtitle">
+            Fast-ingesting tabular data RAG with cell-level citations
+          </div>
+        </div>
+
+        <div
+          ref={uploadPanelRef}
+          className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
+          role={isUploadQueueVisible ? "dialog" : undefined}
+          aria-modal={isUploadQueueVisible ? "true" : undefined}
+          aria-labelledby={
+            isUploadQueueVisible ? uploadQueueTitleId : undefined
+          }
+          aria-describedby={
+            isUploadQueueVisible ? uploadQueueDescriptionId : undefined
+          }
+          aria-busy={busy}
+          onDragEnter={onUploadDragEnter}
+          onDragOver={onUploadDragOver}
+          onDragLeave={onUploadDragLeave}
+          onDrop={onUploadDrop}
+        >
+          {!isUploadQueueVisible ? (
+            <div
+              className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-labelledby="upload-drop-title"
+              aria-describedby={uploadDropDescriptionId}
+              onDragEnter={onUploadDragEnter}
+              onDragOver={onUploadDragOver}
+              onDragLeave={onUploadDragLeave}
+              onDrop={onUploadDrop}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  uploadDropFileInputRef.current?.click();
+                }
+              }}
+            >
               <input
-                ref={queueFileInputRef}
+                ref={(element) => {
+                  uploadDropFileInputRef.current = element;
+                }}
                 type="file"
                 multiple
                 accept=".csv,.tsv"
@@ -1874,10 +2050,9 @@ export default function Upload() {
                   onSelectFiles(event.target.files);
                   event.currentTarget.value = "";
                 }}
-                className="file-input-hidden"
               />
               <input
-                ref={queueFolderInputRef}
+                ref={uploadDropFolderInputRef}
                 {...FOLDER_INPUT_PROPS}
                 type="file"
                 multiple
@@ -1886,786 +2061,1099 @@ export default function Upload() {
                   onSelectFiles(event.target.files);
                   event.currentTarget.value = "";
                 }}
-                className="file-input-hidden"
               />
-              <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
-                <button
-                  ref={uploadPickerQueueButtonRef}
-                  onClick={() => openUploadPicker("queue")}
-                  type="button"
-                  className={`surface-btn upload-add-more-button upload-icon-only ${uploadPickerOpen === "queue" ? "active" : ""}`}
-                  aria-label="Upload options"
-                  title="Upload options"
-                  aria-haspopup="menu"
-                  aria-expanded={uploadPickerOpen === "queue"}
-                  disabled={busy || isQueueInProgress}
-                >
-                  <img src={uploadLogo} alt="" aria-hidden="true" />
-                </button>
-                {uploadPickerOpen === "queue" && (
-                  <div className="upload-picker-menu" role="menu" aria-label="Upload options">
+              <div className="upload-icon-row">
+                <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
+                  <button
+                    ref={uploadPickerEmptyButtonRef}
+                    type="button"
+                    className={`upload-icon icon-trigger upload-picker-trigger ${uploadPickerOpen === "empty" ? "active" : ""}`}
+                    aria-label="Upload options"
+                    title="Upload options"
+                    aria-haspopup="menu"
+                    aria-expanded={uploadPickerOpen === "empty"}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openUploadPicker("empty");
+                    }}
+                    disabled={busy}
+                  >
+                    <img src={uploadLogo} alt="" />
+                  </button>
+                  {uploadPickerOpen === "empty" && (
+                    <div
+                      className="upload-picker-menu"
+                      role="menu"
+                      aria-label="Upload options"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="upload-picker-item"
+                        onClick={() => onUploadFiles("empty")}
+                      >
+                        Upload files
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="upload-picker-item"
+                        onClick={() => onUploadFolder("empty")}
+                      >
+                        Upload folder
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div id="upload-drop-title" className="upload-title">
+                Select or Drag &amp; Drop Your File(s) to Start Uploading
+              </div>
+              <div id={uploadDropDescriptionId} className="upload-subtitle">
+                Supported file formats: .csv, .tsv, and folders.
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2 id={uploadQueueTitleId}>Upload CSV/TSV</h2>
+              <p id={uploadQueueDescriptionId} className="sr-only">
+                Review file names, fix any validation errors, then upload or
+                cancel the queue.
+              </p>
+              <div className="row upload-queue-toolbar">
+                <input
+                  ref={queueFileInputRef}
+                  type="file"
+                  multiple
+                  accept=".csv,.tsv"
+                  onChange={(event) => {
+                    onSelectFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                  className="file-input-hidden"
+                />
+                <input
+                  ref={queueFolderInputRef}
+                  {...FOLDER_INPUT_PROPS}
+                  type="file"
+                  multiple
+                  accept=".csv,.tsv"
+                  onChange={(event) => {
+                    onSelectFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                  className="file-input-hidden"
+                />
+                <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
+                  <button
+                    ref={uploadPickerQueueButtonRef}
+                    onClick={() => openUploadPicker("queue")}
+                    type="button"
+                    className={`surface-btn upload-add-more-button upload-icon-only ${uploadPickerOpen === "queue" ? "active" : ""}`}
+                    aria-label="Upload options"
+                    title="Upload options"
+                    aria-haspopup="menu"
+                    aria-expanded={uploadPickerOpen === "queue"}
+                    disabled={busy || isQueueInProgress}
+                  >
+                    <img src={uploadLogo} alt="" aria-hidden="true" />
+                  </button>
+                  {uploadPickerOpen === "queue" && (
+                    <div
+                      className="upload-picker-menu"
+                      role="menu"
+                      aria-label="Upload options"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="upload-picker-item"
+                        onClick={() => onUploadFiles("queue")}
+                      >
+                        Upload files
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="upload-picker-item"
+                        onClick={() => onUploadFolder("queue")}
+                      >
+                        Upload folder
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <ul
+                className="upload-queue-list"
+                aria-label="Selected files for upload"
+              >
+                {uploadQueue.map((item, index) => {
+                  const progressValue = Math.max(
+                    0,
+                    Math.min(100, item.progress),
+                  );
+                  const canEditQueuedName =
+                    item.phase === "idle" || item.phase === "error";
+                  const queueNameIsEmpty =
+                    sanitizeTableNameInput(item.name).length === 0;
+                  const queueNameIsDuplicate =
+                    !queueNameIsEmpty &&
+                    isQueuedNameDuplicate(item.id, item.name);
+                  const estimatedRowsText =
+                    item.estimatedRows === null
+                      ? "..."
+                      : item.estimatedRows.toLocaleString();
+                  const estimatedColsText =
+                    item.estimatedCols === null
+                      ? "..."
+                      : item.estimatedCols.toLocaleString();
+                  const processedRows =
+                    item.estimatedRows === null
+                      ? null
+                      : item.phase === "success"
+                        ? item.estimatedRows
+                        : Math.max(
+                            0,
+                            Math.min(
+                              item.estimatedRows,
+                              Math.round(
+                                (progressValue / 100) * item.estimatedRows,
+                              ),
+                            ),
+                          );
+                  const stateLabel =
+                    item.phase === "success"
+                      ? "Uploaded"
+                      : item.phase === "error"
+                        ? "Failed"
+                        : item.phase === "processing"
+                          ? "Processing"
+                          : item.phase === "uploading"
+                            ? "Uploading"
+                            : "In Queue";
+                  const progressLabel =
+                    item.phase === "idle"
+                      ? null
+                      : item.phase === "error"
+                        ? "Failed"
+                        : item.phase === "success"
+                          ? "100%"
+                          : item.phase === "processing"
+                            ? `${progressValue.toFixed(1)}%`
+                            : `${Math.round(progressValue)}%`;
+                  const rowsLabel =
+                    item.estimatedRows === null
+                      ? "Rows: estimating..."
+                      : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
+                  const queueItemSubtitleId = `${item.id}-subtitle`;
+                  const queueItemStateId = `${item.id}-state`;
+                  const queueItemValidationId = `${item.id}-validation`;
+                  const queueItemUploadErrorId = `${item.id}-upload-error`;
+                  const progressFillWidth =
+                    item.phase === "error" ? 100 : progressValue;
+                  const progressFillClassName = `upload-progress-fill ${
+                    item.phase === "processing" ? "processing" : ""
+                  } ${
+                    item.phase === "success" ? "success" : ""
+                  } ${item.phase === "error" ? "error" : ""}`;
+
+                  return (
+                    <li
+                      key={item.id}
+                      className={`upload-queue-item ${item.phase}`}
+                    >
+                      <div className="upload-queue-head compact">
+                        <span
+                          className="upload-queue-file-icon"
+                          aria-hidden="true"
+                        >
+                          <svg viewBox="0 0 24 24" role="presentation">
+                            <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
+                          </svg>
+                        </span>
+                        <div className="upload-queue-file-text">
+                          <input
+                            ref={
+                              index === 0 && canEditQueuedName
+                                ? firstQueuedNameInputRef
+                                : null
+                            }
+                            type="text"
+                            className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
+                            value={item.name}
+                            onChange={(event) => {
+                              onChangeQueuedName(item.id, event.target.value);
+                            }}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            placeholder="Enter table name"
+                            maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                            disabled={busy || !canEditQueuedName}
+                            aria-label={`Table name for ${item.file.name}`}
+                            aria-invalid={
+                              canEditQueuedName &&
+                              (queueNameIsEmpty || queueNameIsDuplicate)
+                            }
+                            aria-describedby={`${queueItemSubtitleId} ${queueItemStateId} ${
+                              queueNameIsEmpty || queueNameIsDuplicate
+                                ? queueItemValidationId
+                                : ""
+                            } ${
+                              item.error ? queueItemUploadErrorId : ""
+                            }`.trim()}
+                          />
+                          <div
+                            id={queueItemSubtitleId}
+                            className="upload-queue-file-subtitle"
+                          >
+                            {item.file.name} - {formatFileSize(item.file.size)}{" "}
+                            ({estimatedRowsText} rows, {estimatedColsText} cols){" "}
+                            <span
+                              id={queueItemStateId}
+                              className={`upload-queue-state ${item.phase}`}
+                            >
+                              {stateLabel}
+                            </span>
+                          </div>
+                          <label className="upload-queue-description">
+                            <input
+                              ref={
+                                index === 0 && canEditQueuedName
+                                  ? firstQueuedDescriptionInputRef
+                                  : null
+                              }
+                              type="text"
+                              className={`upload-queue-description-input ${
+                                canEditQueuedName ? "" : "disabled"
+                              }`}
+                              value={item.description}
+                              onChange={(event) => {
+                                onChangeQueuedDescription(
+                                  item.id,
+                                  event.target.value,
+                                );
+                              }}
+                              placeholder="Add a short summary for better retrieval (optional)"
+                              maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                              disabled={busy || !canEditQueuedName}
+                            />
+                          </label>
+                          {canEditQueuedName && folders.length > 0 && (
+                            <label className="upload-queue-folder-label">
+                              <span className="upload-queue-folder-label-text">
+                                Folder
+                              </span>
+                              <select
+                                className="upload-queue-folder-select"
+                                value={item.folderId ?? ""}
+                                disabled={busy}
+                                aria-label="Assign to folder"
+                                onChange={(e) =>
+                                  onChangeQueuedFolder(
+                                    item.id,
+                                    e.target.value !== ""
+                                      ? Number(e.target.value)
+                                      : null,
+                                  )
+                                }
+                              >
+                                {userIsAdmin && (
+                                  <option value="">No folder</option>
+                                )}
+                                {(userIsAdmin
+                                  ? folders
+                                  : folders.filter(
+                                      (f) => f.privacy === "public",
+                                    )
+                                ).map((folder) => (
+                                  <option
+                                    key={folder.folder_id}
+                                    value={folder.folder_id}
+                                  >
+                                    {folder.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                        </div>
+                        <div className="upload-queue-right">
+                          {progressLabel && (
+                            <span className="upload-progress-percent upload-queue-percent">
+                              {progressLabel}
+                            </span>
+                          )}
+                        </div>
+                        {!isQueueInProgress && (
+                          <button
+                            type="button"
+                            className="upload-queue-remove"
+                            onClick={() => onRemoveQueuedFile(item.id)}
+                            aria-label={`Remove ${item.file.name}`}
+                            title="Remove file"
+                            disabled={busy}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                      {item.phase !== "idle" && (
+                        <div
+                          className="upload-progress-track upload-queue-track compact"
+                          role={
+                            item.phase === "error" ? "status" : "progressbar"
+                          }
+                          aria-label={`${item.file.name} upload progress`}
+                          aria-valuemin={item.phase === "error" ? undefined : 0}
+                          aria-valuemax={
+                            item.phase === "error" ? undefined : 100
+                          }
+                          aria-valuenow={
+                            item.phase === "error"
+                              ? undefined
+                              : Math.round(progressValue)
+                          }
+                          aria-valuetext={`${stateLabel}. ${
+                            item.phase === "error"
+                              ? item.error || "Upload failed."
+                              : rowsLabel
+                          }`}
+                        >
+                          <div
+                            className={progressFillClassName}
+                            style={{
+                              width: `${progressFillWidth}%`,
+                            }}
+                          />
+                        </div>
+                      )}
+                      {item.phase !== "idle" && (
+                        <div className="upload-queue-rows">{rowsLabel}</div>
+                      )}
+                      {queueNameIsEmpty && canEditQueuedName && (
+                        <p
+                          id={queueItemValidationId}
+                          className="small error upload-queue-error"
+                        >
+                          Table name cannot be empty.
+                        </p>
+                      )}
+                      {queueNameIsDuplicate && canEditQueuedName && (
+                        <p
+                          id={queueItemValidationId}
+                          className="small error upload-queue-error"
+                        >
+                          Name already exists, please choose a different name.
+                        </p>
+                      )}
+                      {item.error && (
+                        <p
+                          id={queueItemUploadErrorId}
+                          className="small error upload-queue-error"
+                          role="alert"
+                        >
+                          {item.error}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="upload-queue-footer">
+                <div className="small">
+                  Tip: You can rename each table before clicking 'Upload all
+                  files'.
+                </div>
+                {!isQueueInProgress && (
+                  <div className="upload-queue-footer-actions">
                     <button
                       type="button"
-                      role="menuitem"
-                      className="upload-picker-item"
-                      onClick={() => onUploadFiles("queue")}
+                      className="surface-btn upload-cancel-all-button"
+                      onClick={onCancelAllQueuedFiles}
+                      disabled={busy}
                     >
-                      Upload files
+                      Cancel all
                     </button>
                     <button
+                      onClick={onUpload}
+                      disabled={!hasPendingUploads || busy}
+                      className="primary"
                       type="button"
-                      role="menuitem"
-                      className="upload-picker-item"
-                      onClick={() => onUploadFolder("queue")}
                     >
-                      Upload folder
+                      {busy ? "Uploading..." : "Upload all files"}
                     </button>
                   </div>
                 )}
               </div>
+            </>
+          )}
+
+          {err && (
+            <p className="error" role="alert">
+              {err}
+            </p>
+          )}
+          {reloadNotice && (
+            <p className="small status-info" role="status" aria-live="polite">
+              {reloadNotice}
+            </p>
+          )}
+          {status && !err && (
+            <p className="small status-info" role="status" aria-live="polite">
+              {status}
+            </p>
+          )}
+        </div>
+
+        <div
+          className="panel uploaded-tables-panel"
+          aria-hidden={isUploadDialogOpen}
+        >
+          <div className="row tables-header-row">
+            <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
+            <div className="tables-header-controls">
+              <label
+                className="tables-search-input-wrap"
+                aria-label="Search table name"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  role="presentation"
+                  className="tables-search-icon"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+                    fill="currentColor"
+                  />
+                </svg>
+                <input
+                  type="text"
+                  className="tables-search-input"
+                  value={tableSearchQuery}
+                  onChange={(event) => setTableSearchQuery(event.target.value)}
+                  placeholder="Search"
+                  aria-label="Search table name"
+                />
+              </label>
+              <div className="sort-menu-wrap" ref={sortMenuRef}>
+                <button
+                  ref={sortToggleButtonRef}
+                  type="button"
+                  className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
+                  onClick={() => setSortMenuOpen((current) => !current)}
+                  onKeyDown={onSortToggleKeyDown}
+                  aria-haspopup="menu"
+                  aria-expanded={sortMenuOpen}
+                  aria-controls={sortMenuOpen ? sortMenuId : undefined}
+                  aria-label={`Sort tables. Current order: ${tableSortLabel}`}
+                  title="Sort tables"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    role="presentation"
+                    className="sort-toggle-icon"
+                  >
+                    <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
+                  </svg>
+                  <span className="sort-toggle-text">
+                    Sort: {tableSortLabel}
+                  </span>
+                </button>
+                {sortMenuOpen && (
+                  <div
+                    id={sortMenuId}
+                    className="sort-menu"
+                    role="menu"
+                    aria-label="Sort options"
+                    onKeyDown={onSortMenuKeyDown}
+                  >
+                    {TABLE_SORT_OPTIONS.map((option, index) => (
+                      <button
+                        key={option.value}
+                        ref={(element) => {
+                          sortMenuItemRefs.current[index] = element;
+                        }}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={tableSortMode === option.value}
+                        className={`sort-menu-item ${tableSortMode === option.value ? "active" : ""}`}
+                        onClick={() => {
+                          selectTableSortMode(option.value);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
+          </div>
+          <p className="sr-only" role="status" aria-live="polite">
+            Showing {filteredTables.length} uploaded table
+            {filteredTables.length === 1 ? "" : "s"}
+            {normalizedTableSearchQuery
+              ? ` matching ${tableSearchQuery.trim()}`
+              : ""}
+            . Sorted by {tableSortLabel}.
+          </p>
 
-            <ul className="upload-queue-list" aria-label="Selected files for upload">
-              {uploadQueue.map((item, index) => {
-                const progressValue = Math.max(0, Math.min(100, item.progress));
-                const canEditQueuedName = item.phase === "idle" || item.phase === "error";
-                const queueNameIsEmpty = sanitizeTableNameInput(item.name).length === 0;
-                const queueNameIsDuplicate =
-                  !queueNameIsEmpty && isQueuedNameDuplicate(item.id, item.name);
-                const estimatedRowsText =
-                  item.estimatedRows === null ? "..." : item.estimatedRows.toLocaleString();
-                const estimatedColsText =
-                  item.estimatedCols === null ? "..." : item.estimatedCols.toLocaleString();
-                const processedRows =
-                  item.estimatedRows === null
-                    ? null
-                    : item.phase === "success"
-                      ? item.estimatedRows
-                      : Math.max(
-                        0,
-                        Math.min(
-                          item.estimatedRows,
-                          Math.round((progressValue / 100) * item.estimatedRows),
-                        ),
-                      );
-                const stateLabel =
-                  item.phase === "success"
-                    ? "Uploaded"
-                    : item.phase === "error"
-                      ? "Failed"
-                      : item.phase === "processing"
-                        ? "Processing"
-                        : item.phase === "uploading"
-                          ? "Uploading"
-                          : "In Queue";
-                const progressLabel =
-                  item.phase === "idle"
-                    ? null
-                    : item.phase === "error"
-                      ? "Failed"
-                      : item.phase === "success"
-                        ? "100%"
-                        : item.phase === "processing"
-                          ? `${progressValue.toFixed(1)}%`
-                          : `${Math.round(progressValue)}%`;
-                const rowsLabel =
-                  item.estimatedRows === null
-                    ? "Rows: estimating..."
-                    : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
-                const queueItemSubtitleId = `${item.id}-subtitle`;
-                const queueItemStateId = `${item.id}-state`;
-                const queueItemValidationId = `${item.id}-validation`;
-                const queueItemUploadErrorId = `${item.id}-upload-error`;
-                const progressFillWidth =
-                  item.phase === "error" ? 100 : progressValue;
-                const progressFillClassName = `upload-progress-fill ${item.phase === "processing"
-                  ? "processing"
-                  : ""
-                  } ${item.phase === "success"
-                    ? "success"
-                    : ""
-                  } ${item.phase === "error" ? "error" : ""}`;
+          {tables.length === 0 ? (
+            <div className="tables-empty-state-wrapper">
+              <p className="small">No tables uploaded yet</p>
+            </div>
+          ) : (
+            <div className="tables-scroll" ref={tablesScrollRef}>
+              <ul>
+                {visibleTables.map((table) => {
+                  const indexStatus = indexStatusByTable[table.dataset_id];
+                  const indexState = indexStatus?.state || "ready";
+                  const isPinned = pinnedTableIdSet.has(table.dataset_id);
+                  const indexProgress = Math.max(
+                    0,
+                    Math.min(
+                      100,
+                      Math.round(
+                        typeof indexStatus?.progress === "number"
+                          ? indexStatus.progress
+                          : indexState === "ready"
+                            ? 100
+                            : 0,
+                      ),
+                    ),
+                  );
+                  const indexLabel =
+                    indexState === "queued"
+                      ? "Queued"
+                      : indexState === "indexing"
+                        ? "Indexing"
+                        : indexState === "error"
+                          ? "Index failed"
+                          : "Indexed";
+                  const isIndexing = indexState === "indexing";
 
-                return (
-                  <li key={item.id} className={`upload-queue-item ${item.phase}`}>
-                    <div className="upload-queue-head compact">
-                      <span className="upload-queue-file-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" role="presentation">
-                          <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
-                        </svg>
-                      </span>
-                      <div className="upload-queue-file-text">
-                        <input
-                          ref={index === 0 && canEditQueuedName ? firstQueuedNameInputRef : null}
-                          type="text"
-                          className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
-                          value={item.name}
-                          onChange={(event) => {
-                            onChangeQueuedName(item.id, event.target.value);
-                          }}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          placeholder="Enter table name"
-                          maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                          disabled={busy || !canEditQueuedName}
-                          aria-label={`Table name for ${item.file.name}`}
-                          aria-invalid={
-                            canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate)
-                          }
-                          aria-describedby={
-                            `${queueItemSubtitleId} ${queueItemStateId} ${queueNameIsEmpty || queueNameIsDuplicate
-                                ? queueItemValidationId
-                                : ""
-                              } ${item.error ? queueItemUploadErrorId : ""
-                              }`.trim()
-                          }
-                        />
-                        <div id={queueItemSubtitleId} className="upload-queue-file-subtitle">
-                          {item.file.name} - {formatFileSize(item.file.size)} (
-                          {estimatedRowsText} rows, {estimatedColsText} cols){" "}
-                          <span
-                            id={queueItemStateId}
-                            className={`upload-queue-state ${item.phase}`}
-                          >
-                            {stateLabel}
-                          </span>
-                        </div>
-                        <label className="upload-queue-description">
-                          <input
-                            ref={
-                              index === 0 && canEditQueuedName
-                                ? firstQueuedDescriptionInputRef
-                                : null
-                            }
-                            type="text"
-                            className={`upload-queue-description-input ${
-                              canEditQueuedName ? "" : "disabled"
-                            }`}
-                            value={item.description}
-                            onChange={(event) => {
-                              onChangeQueuedDescription(
-                                item.id,
-                                event.target.value,
-                              );
-                            }}
-                            placeholder="Add a short summary for better retrieval (optional)"
-                            maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
-                            disabled={busy || !canEditQueuedName}
-                          />
-                        </label>
-                      </div>
-                      <div className="upload-queue-right">
-                        {progressLabel && (
-                          <span className="upload-progress-percent upload-queue-percent">
-                            {progressLabel}
-                          </span>
-                        )}
-                      </div>
-                      {!isQueueInProgress && (
+                  return (
+                    <li key={table.dataset_id}>
+                      <div className="list-row">
                         <button
                           type="button"
-                          className="upload-queue-remove"
-                          onClick={() => onRemoveQueuedFile(item.id)}
-                          aria-label={`Remove ${item.file.name}`}
-                          title="Remove file"
-                          disabled={busy}
+                          className={`icon-button ${isPinned ? "pinned" : "pin"}`}
+                          onClick={() => onTogglePin(table.dataset_id)}
+                          aria-label={
+                            isPinned
+                              ? `Unpin ${table.name}`
+                              : `Pin ${table.name}`
+                          }
+                          title={isPinned ? "Unpin table" : "Pin table"}
+                          disabled={
+                            busy || Boolean(deletingTableIds[table.dataset_id])
+                          }
                         >
-                          ×
+                          <svg viewBox="0 0 24 24" role="presentation">
+                            <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
+                          </svg>
                         </button>
-                      )}
-                    </div>
-                    {item.phase !== "idle" && (
-                      <div
-                        className="upload-progress-track upload-queue-track compact"
-                        role={item.phase === "error" ? "status" : "progressbar"}
-                        aria-label={`${item.file.name} upload progress`}
-                        aria-valuemin={item.phase === "error" ? undefined : 0}
-                        aria-valuemax={item.phase === "error" ? undefined : 100}
-                        aria-valuenow={
-                          item.phase === "error" ? undefined : Math.round(progressValue)
-                        }
-                        aria-valuetext={`${stateLabel}. ${item.phase === "error" ? item.error || "Upload failed." : rowsLabel
-                          }`}
-                      >
+
                         <div
-                          className={progressFillClassName}
-                          style={{
-                            width: `${progressFillWidth}%`,
-                          }}
-                        />
-                      </div>
-                    )}
-                    {item.phase !== "idle" && (
-                      <div className="upload-queue-rows">{rowsLabel}</div>
-                    )}
-                    {queueNameIsEmpty && canEditQueuedName && (
-                      <p id={queueItemValidationId} className="small error upload-queue-error">
-                        Table name cannot be empty.
-                      </p>
-                    )}
-                    {queueNameIsDuplicate && canEditQueuedName && (
-                      <p id={queueItemValidationId} className="small error upload-queue-error">
-                        Name already exists, please choose a different name.
-                      </p>
-                    )}
-                    {item.error && (
-                      <p
-                        id={queueItemUploadErrorId}
-                        className="small error upload-queue-error"
-                        role="alert"
-                      >
-                        {item.error}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="upload-queue-footer">
-              <div className="small">
-                Tip: You can rename each table before clicking 'Upload all files'.
-              </div>
-              {!isQueueInProgress && (
-                <div className="upload-queue-footer-actions">
-                  <button
-                    type="button"
-                    className="surface-btn upload-cancel-all-button"
-                    onClick={onCancelAllQueuedFiles}
-                    disabled={busy}
-                  >
-                    Cancel all
-                  </button>
-                  <button
-                    onClick={onUpload}
-                    disabled={!hasPendingUploads || busy}
-                    className="primary"
-                    type="button"
-                  >
-                    {busy ? "Uploading..." : "Upload all files"}
-                  </button>
-                </div>
-              )}
-            </div>
-          </>
-        )}
+                          className={`list-item ${
+                            activeTableId === table.dataset_id ? "selected" : ""
+                          }`}
+                        >
+                          {editingId === table.dataset_id ? (
+                            <div className="uploaded-table-main">
+                              <input
+                                ref={renameInputRef}
+                                value={editingName}
+                                onChange={(event) => {
+                                  setEditingName(
+                                    sanitizeTableNameInput(event.target.value),
+                                  );
+                                  if (renameHintId === table.dataset_id) {
+                                    setRenameHintId(null);
+                                  }
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    void onRename(table.dataset_id);
+                                  }
+                                }}
+                                className={`rename-input ${
+                                  renameHintId === table.dataset_id
+                                    ? "invalid"
+                                    : ""
+                                }`}
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                                placeholder={
+                                  renameHintId === table.dataset_id
+                                    ? "Name cannot be empty."
+                                    : "Enter table name"
+                                }
+                                disabled={busy}
+                                aria-label={`Rename ${table.name}`}
+                                aria-invalid={renameHintId === table.dataset_id}
+                              />
+                              <input
+                                value={editingDescription}
+                                onChange={(event) => {
+                                  setEditingDescription(
+                                    sanitizeTableDescriptionInput(
+                                      event.target.value,
+                                    ),
+                                  );
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    void onRename(table.dataset_id);
+                                  }
+                                }}
+                                className="rename-input uploaded-table-description-input"
+                                maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                                placeholder="Add table description"
+                                disabled={busy}
+                                aria-label={`Edit description for ${table.name}`}
+                              />
+                              {folders.length > 0 && (userIsAdmin || table.folder_privacy === "public") && (
+                                <label className="upload-queue-folder-label">
+                                  <span className="upload-queue-folder-label-text">Folder</span>
+                                  <select
+                                    className="upload-queue-folder-select"
+                                    value={editingFolderId ?? ""}
+                                    disabled={busy}
+                                    aria-label="Assign to folder"
+                                    onChange={(e) =>
+                                      setEditingFolderId(
+                                        e.target.value !== "" ? Number(e.target.value) : null,
+                                      )
+                                    }
+                                  >
+                                    <option value="">No folder</option>
+                                    {(userIsAdmin
+                                      ? folders
+                                      : folders.filter((f) => f.privacy === "public")
+                                    ).map((f) => (
+                                      <option key={f.folder_id} value={f.folder_id}>
+                                        {f.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="uploaded-table-main">
+                              <button
+                                type="button"
+                                className="list-button"
+                                onClick={() => {
+                                  if (activeTableId === table.dataset_id) {
+                                    // Toggle off when clicking the currently selected table.
+                                    setActiveTableId(null);
+                                    setPreview(null);
+                                    setPreviewErr(null);
+                                    setPreviewBusy(false);
+                                    setPreviewPage(1);
+                                    setPreviewRowCount(0);
+                                    setPreviewSearchQuery("");
+                                    setPreviewSortColumn(null);
+                                    setPreviewSortDirection("asc");
+                                    return;
+                                  }
+                                  void loadPreview(table.dataset_id, 1, {
+                                    sortColumn: null,
+                                    sortDirection: "asc",
+                                  });
+                                }}
+                                aria-pressed={
+                                  activeTableId === table.dataset_id
+                                }
+                              >
+                                <span className="uploaded-table-head">
+                                  <span className="uploaded-table-title-line">
+                                    <span className="uploaded-table-name">
+                                      {table.name}
+                                    </span>
+                                    {table.description?.trim() ? (
+                                      <span className="small uploaded-table-description">
+                                        {table.description.trim()}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                  <span className="small uploaded-table-meta">
+                                    ({table.row_count} rows,{" "}
+                                    {table.column_count} cols)
+                                  </span>
+                                  {table.folder_name && table.folder_privacy ? (
+                                    <span className="uploaded-table-folder-row">
+                                      <FolderPrivacyBadge
+                                        privacy={table.folder_privacy}
+                                        className="uploaded-table-folder-badge"
+                                      />
+                                      <span className="uploaded-table-folder-name">
+                                        {table.folder_name}
+                                      </span>
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
 
-        {err && (
-          <p className="error" role="alert">
-            {err}
-          </p>
-        )}
-        {reloadNotice && (
-          <p className="small status-info" role="status" aria-live="polite">
-            {reloadNotice}
-          </p>
-        )}
-        {status && !err && (
-          <p className="small status-info" role="status" aria-live="polite">
-            {status}
-          </p>
-        )}
-      </div>}
+                        <div
+                          className={`index-job ${indexState}`}
+                          title={indexStatus?.message || indexLabel}
+                          role={isIndexing ? "progressbar" : "status"}
+                          aria-label={
+                            isIndexing
+                              ? `${table.name} index status`
+                              : `${table.name}: ${indexLabel}`
+                          }
+                          aria-valuemin={isIndexing ? 0 : undefined}
+                          aria-valuemax={isIndexing ? 100 : undefined}
+                          aria-valuenow={isIndexing ? indexProgress : undefined}
+                          aria-valuetext={
+                            isIndexing
+                              ? `${indexLabel}. ${indexProgress}% complete.`
+                              : undefined
+                          }
+                        >
+                          <div className="index-job-ready">{indexLabel}</div>
+                          {isIndexing && (
+                            <div className="index-job-track" aria-hidden="true">
+                              <div
+                                className="index-job-fill indexing"
+                                style={{
+                                  width: `${Math.max(4, indexProgress)}%`,
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
 
-      <div className="panel uploaded-tables-panel" aria-hidden={isUploadDialogOpen}>
-        <div className="row tables-header-row">
-          <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
-          <div className="tables-header-controls">
-            <label className="tables-search-input-wrap" aria-label="Search table name">
-              <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
-                <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
-              </svg>
-              <input
-                type="text"
-                className="tables-search-input"
-                value={tableSearchQuery}
-                onChange={(event) => setTableSearchQuery(event.target.value)}
-                placeholder="Search"
-                aria-label="Search table name"
-              />
-            </label>
-            <div className="sort-menu-wrap" ref={sortMenuRef}>
-              <button
-                ref={sortToggleButtonRef}
-                type="button"
-                className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
-                onClick={() => setSortMenuOpen((current) => !current)}
-                onKeyDown={onSortToggleKeyDown}
-                aria-haspopup="menu"
-                aria-expanded={sortMenuOpen}
-                aria-controls={sortMenuOpen ? sortMenuId : undefined}
-                aria-label={`Sort tables. Current order: ${tableSortLabel}`}
-                title="Sort tables"
-              >
-                <svg viewBox="0 0 24 24" role="presentation" className="sort-toggle-icon">
-                  <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
-                </svg>
-                <span className="sort-toggle-text">Sort: {tableSortLabel}</span>
-              </button>
-              {sortMenuOpen && (
-                <div
-                  id={sortMenuId}
-                  className="sort-menu"
-                  role="menu"
-                  aria-label="Sort options"
-                  onKeyDown={onSortMenuKeyDown}
-                >
-                  {TABLE_SORT_OPTIONS.map((option, index) => (
-                    <button
-                      key={option.value}
-                      ref={(element) => {
-                        sortMenuItemRefs.current[index] = element;
-                      }}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={tableSortMode === option.value}
-                      className={`sort-menu-item ${tableSortMode === option.value ? "active" : ""}`}
-                      onClick={() => {
-                        selectTableSortMode(option.value);
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        <p className="sr-only" role="status" aria-live="polite">
-          Showing {filteredTables.length} uploaded table
-          {filteredTables.length === 1 ? "" : "s"}
-          {normalizedTableSearchQuery ? ` matching ${tableSearchQuery.trim()}` : ""}. Sorted by{" "}
-          {tableSortLabel}.
-        </p>
-
-        {tables.length === 0 ? (
-          <div className="tables-empty-state-wrapper">
-            <p className="small">No tables uploaded yet</p>
-          </div>
-        ) : (
-          <div className="tables-scroll" ref={tablesScrollRef}>
-            <ul>
-              {visibleTables.map((table) => {
-              const indexStatus = indexStatusByTable[table.dataset_id];
-              const indexState = indexStatus?.state || "ready";
-              const isPinned = pinnedTableIdSet.has(table.dataset_id);
-              const indexProgress = Math.max(
-                0,
-                Math.min(
-                  100,
-                  Math.round(
-                    typeof indexStatus?.progress === "number"
-                      ? indexStatus.progress
-                      : indexState === "ready"
-                        ? 100
-                        : 0,
-                  ),
-                ),
-              );
-              const indexLabel =
-                indexState === "queued"
-                  ? "Queued"
-                  : indexState === "indexing"
-                    ? "Indexing"
-                    : indexState === "error"
-                      ? "Index failed"
-                      : "Indexed";
-              const isIndexing = indexState === "indexing";
-
-              return (
-                <li key={table.dataset_id}>
-                  <div className="list-row">
-                    <button
-                      type="button"
-                      className={`icon-button ${isPinned ? "pinned" : "pin"}`}
-                      onClick={() => onTogglePin(table.dataset_id)}
-                      aria-label={isPinned ? `Unpin ${table.name}` : `Pin ${table.name}`}
-                      title={isPinned ? "Unpin table" : "Pin table"}
-                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
-                    >
-                      <svg viewBox="0 0 24 24" role="presentation">
-                        <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
-                      </svg>
-                    </button>
-
-                    <div
-                      className={`list-item ${activeTableId === table.dataset_id ? "selected" : ""
-                        }`}
-                    >
-                      {editingId === table.dataset_id ? (
-                        <div className="uploaded-table-main">
-                          <input
-                            ref={renameInputRef}
-                            value={editingName}
-                            onChange={(event) => {
-                              setEditingName(sanitizeTableNameInput(event.target.value));
-                              if (renameHintId === table.dataset_id) {
+                        {(userIsAdmin || table.folder_privacy === "public") && (
+                          <button
+                            type="button"
+                            className={`icon-button ${editingId === table.dataset_id ? "success" : "edit"}`}
+                            onClick={() => {
+                              if (editingId === table.dataset_id) {
+                                void onRename(table.dataset_id);
+                              } else {
+                                setEditingId(table.dataset_id);
+                                setEditingName(table.name);
+                                setEditingDescription(
+                                  sanitizeTableDescriptionInput(
+                                    table.description || "",
+                                  ),
+                                );
+                                setEditingFolderId(table.folder_id);
                                 setRenameHintId(null);
                               }
                             }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                void onRename(table.dataset_id);
-                              }
-                            }}
-                            className={`rename-input ${renameHintId === table.dataset_id ? "invalid" : ""
-                              }`}
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                            placeholder={
-                              renameHintId === table.dataset_id
-                                ? "Name cannot be empty."
-                                : "Enter table name"
+                            aria-label={
+                              editingId === table.dataset_id
+                                ? "Save table updates"
+                                : `Edit ${table.name}`
                             }
-                            disabled={busy}
-                            aria-label={`Rename ${table.name}`}
-                            aria-invalid={renameHintId === table.dataset_id}
-                          />
-                          <input
-                            value={editingDescription}
-                            onChange={(event) => {
-                              setEditingDescription(
-                                sanitizeTableDescriptionInput(event.target.value),
-                              );
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                void onRename(table.dataset_id);
-                              }
-                            }}
-                            className="rename-input uploaded-table-description-input"
-                            maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
-                            placeholder="Add table description"
-                            disabled={busy}
-                            aria-label={`Edit description for ${table.name}`}
-                          />
-                        </div>
-                      ) : (
-                        <div className="uploaded-table-main">
+                            title={
+                              editingId === table.dataset_id ? "Save" : "Edit"
+                            }
+                            disabled={
+                              busy ||
+                              Boolean(deletingTableIds[table.dataset_id])
+                            }
+                          >
+                            {editingId === table.dataset_id ? (
+                              <svg viewBox="0 0 24 24" role="presentation">
+                                <path d="M9.2 16.6 4.8 12.2a1 1 0 1 1 1.4-1.4l3 3 8-8a1 1 0 0 1 1.4 1.4l-8.8 8.8a1 1 0 0 1-1.4 0z" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" role="presentation">
+                                <path d="M15.2 4.2a2 2 0 0 1 2.8 0l1.8 1.8a2 2 0 0 1 0 2.8l-9.8 9.8a1 1 0 0 1-.5.27l-4.5 1a1 1 0 0 1-1.2-1.2l1-4.5a1 1 0 0 1 .27-.5l9.8-9.8zM6.7 15.3l-.6 2.5 2.5-.6 8.6-8.6-1.9-1.9-8.6 8.6z" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
+
+                        {(userIsAdmin || table.folder_privacy === "public") && (
                           <button
                             type="button"
-                            className="list-button"
+                            className="icon-button danger"
                             onClick={() => {
-                              if (activeTableId === table.dataset_id) {
-                                // Toggle off when clicking the currently selected table.
-                                setActiveTableId(null);
-                                setPreview(null);
-                                setPreviewErr(null);
-                                setPreviewBusy(false);
-                                setPreviewPage(1);
-                                setPreviewRowCount(0);
-                                setPreviewSearchQuery("");
-                                setPreviewSortColumn(null);
-                                setPreviewSortDirection("asc");
-                                return;
-                              }
-                              void loadPreview(table.dataset_id, 1, {
-                                sortColumn: null,
-                                sortDirection: "asc",
-                              });
+                              setDeleteConfirmTable(table);
                             }}
-                            aria-pressed={activeTableId === table.dataset_id}
+                            aria-label={`Delete ${table.name}`}
+                            title="Delete table"
+                            disabled={
+                              busy ||
+                              Boolean(deletingTableIds[table.dataset_id])
+                            }
                           >
-                            <span className="uploaded-table-head">
-                              <span className="uploaded-table-title-line">
-                                <span className="uploaded-table-name">{table.name}</span>
-                                {table.description?.trim() ? (
-                                  <span className="small uploaded-table-description">
-                                    {table.description.trim()}
-                                  </span>
-                                ) : null}
-                              </span>
-                              <span className="small uploaded-table-meta">
-                                ({table.row_count} rows, {table.column_count} cols)
-                              </span>
-                            </span>
+                            <svg viewBox="0 0 24 24" role="presentation">
+                              <path d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 0 0 0 2h1v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9zm1 2h4v0H10zm-1 4a1 1 0 0 1 2 0v8a1 1 0 1 1-2 0V9zm6-1a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1z" />
+                            </svg>
                           </button>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              {hasMoreFilteredTables && (
+                <div className="tables-load-more-wrap">
+                  <button
+                    type="button"
+                    className="tables-load-more-btn"
+                    onClick={() =>
+                      setVisibleTableCount(
+                        (current) => current + TABLES_RENDER_BATCH_SIZE,
+                      )
+                    }
+                  >
+                    Load more tables
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
-                    <div
-                      className={`index-job ${indexState}`}
-                      title={indexStatus?.message || indexLabel}
-                      role={isIndexing ? "progressbar" : "status"}
-                      aria-label={
-                        isIndexing ? `${table.name} index status` : `${table.name}: ${indexLabel}`
-                      }
-                      aria-valuemin={isIndexing ? 0 : undefined}
-                      aria-valuemax={isIndexing ? 100 : undefined}
-                      aria-valuenow={isIndexing ? indexProgress : undefined}
-                      aria-valuetext={
-                        isIndexing ? `${indexLabel}. ${indexProgress}% complete.` : undefined
-                      }
-                    >
-                      <div className="index-job-ready">{indexLabel}</div>
-                      {isIndexing && (
-                        <div className="index-job-track" aria-hidden="true">
-                          <div
-                            className="index-job-fill indexing"
-                            style={{ width: `${Math.max(4, indexProgress)}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {userIsAdmin && (
-                    <button
-                      type="button"
-                      className={`icon-button ${editingId === table.dataset_id ? "success" : "edit"}`}
-                      onClick={() => {
-                        if (editingId === table.dataset_id) {
-                          void onRename(table.dataset_id);
-                        } else {
-                          setEditingId(table.dataset_id);
-                          setEditingName(table.name);
-                          setEditingDescription(
-                            sanitizeTableDescriptionInput(table.description || ""),
-                          );
-                          setRenameHintId(null);
-                        }
-                      }}
-                      aria-label={editingId === table.dataset_id ? "Save table updates" : `Edit ${table.name}`}
-                      title={editingId === table.dataset_id ? "Save" : "Edit"}
-                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
-                    >
-                      {editingId === table.dataset_id ? (
-                        <svg viewBox="0 0 24 24" role="presentation">
-                          <path d="M9.2 16.6 4.8 12.2a1 1 0 1 1 1.4-1.4l3 3 8-8a1 1 0 0 1 1.4 1.4l-8.8 8.8a1 1 0 0 1-1.4 0z" />
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" role="presentation">
-                          <path d="M15.2 4.2a2 2 0 0 1 2.8 0l1.8 1.8a2 2 0 0 1 0 2.8l-9.8 9.8a1 1 0 0 1-.5.27l-4.5 1a1 1 0 0 1-1.2-1.2l1-4.5a1 1 0 0 1 .27-.5l9.8-9.8zM6.7 15.3l-.6 2.5 2.5-.6 8.6-8.6-1.9-1.9-8.6 8.6z" />
-                        </svg>
-                      )}
-                    </button>
-                    )}
-
-                    {userIsAdmin && (
-                    <button
-                      type="button"
-                      className="icon-button danger"
-                      onClick={() => {
-                        setDeleteConfirmTable(table);
-                      }}
-                      aria-label={`Delete ${table.name}`}
-                      title="Delete table"
-                      disabled={busy || Boolean(deletingTableIds[table.dataset_id])}
-                    >
-                      <svg viewBox="0 0 24 24" role="presentation">
-                        <path d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 0 0 0 2h1v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9zm1 2h4v0H10zm-1 4a1 1 0 0 1 2 0v8a1 1 0 1 1-2 0V9zm6-1a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1z" />
-                      </svg>
-                    </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-            </ul>
-            {hasMoreFilteredTables && (
-              <div className="tables-load-more-wrap">
-                <button
-                  type="button"
-                  className="tables-load-more-btn"
-                  onClick={() =>
-                    setVisibleTableCount((current) => current + TABLES_RENDER_BATCH_SIZE)
-                  }
-                >
-                  Load more tables
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {showScrollHint && (
-          <button
-            type="button"
-            className="scroll-indicator uploaded-scroll-indicator"
-            onClick={scrollUploadedTablesToBottom}
-            aria-label={uploadedAtBottom ? "Scroll uploaded tables to top" : "Scroll uploaded tables to bottom"}
-            title={uploadedAtBottom ? "Scroll to top" : "Scroll to bottom"}
-          >
-            {uploadedAtBottom ? "▲" : "▼"}
-          </button>
-        )}
-
-      </div>
-
-      {activeTableId !== null && (
-        <div className="panel upload-preview" aria-hidden={isUploadDialogOpen}>
-        <div className="preview-header">
-          <div className="preview-header-left">
-            <h3 style={{ marginBottom: 0 }}>Table Preview</h3>
-            {activeTableName && (
-              <div className="preview-table-name" aria-live="polite">
-                <span className="preview-table-name-value">{activeTableName}</span>
-              </div>
-            )}
-          </div>
-          <div className="preview-header-right">
-            {preview && (
-              <label className="tables-search-input-wrap" aria-label="Search in preview">
-                <svg viewBox="0 0 24 24" role="presentation" className="tables-search-icon" aria-hidden="true">
-                  <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor" />
-                </svg>
-                <input
-                  type="text"
-                  className="tables-search-input preview-search-input"
-                  value={previewSearchQuery}
-                  onChange={(e) => setPreviewSearchQuery(e.target.value)}
-                  placeholder="Search"
-                  aria-label="Search in preview"
-                />
-              </label>
-            )}
-            {activeTableId !== null && (
-              <Link
-                className="sort-toggle-button preview-open-link"
-                to={`/tables/${activeTableId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="View Full Table (opens in new tab)"
-                title="View Full Table (new tab)"
-              >
-                <img src={openIcon} alt="" className="preview-open-link-icon" aria-hidden="true" />
-                <span className="sort-toggle-text">View Full Table</span>
-              </Link>
-            )}
-          </div>
+          {showScrollHint && (
+            <button
+              type="button"
+              className="scroll-indicator uploaded-scroll-indicator"
+              onClick={scrollUploadedTablesToBottom}
+              aria-label={
+                uploadedAtBottom
+                  ? "Scroll uploaded tables to top"
+                  : "Scroll uploaded tables to bottom"
+              }
+              title={uploadedAtBottom ? "Scroll to top" : "Scroll to bottom"}
+            >
+              {uploadedAtBottom ? "▲" : "▼"}
+            </button>
+          )}
         </div>
 
-        {previewBusy && (
-          <p className="small" role="status" aria-live="polite">
-            Loading preview...
-          </p>
-        )}
-        {previewErr && (
-          <p className="error" role="alert">
-            {previewErr}
-          </p>
-        )}
-
-        {preview && (
-          <div className="table-area" ref={previewAreaRef}>
-            <DataTable
-              columns={preview.columns}
-              rows={previewRows}
-              rowOffset={preview.offset}
-              rowIndices={preview.row_indices}
-              sortable
-              sortMode="server"
-              serverSortColumn={previewSortColumn}
-              serverSortDirection={previewSortDirection}
-              onSortChange={(column, direction) => {
-                if (activeTableId !== null) {
-                  void loadPreview(activeTableId, 1, {
-                    sortColumn: column,
-                    sortDirection: direction,
-                  });
-                }
-              }}
-              caption={`Preview of ${activeTableName || "the selected table"}. Showing ${valueMode} values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
-            />
-          </div>
-        )}
-
-        {preview && previewRowCount > 0 && (
-          <div className="table-view-pagination" aria-label="Table preview pagination">
-            <div className="table-view-pagination-controls">
-              <button
-                type="button"
-                className="table-view-page-btn"
-                disabled={previewSafeCurrentPage <= 1 || previewBusy}
-                onClick={() => activeTableId !== null && void loadPreview(activeTableId, 1)}
-                aria-label="First page"
-                title="First page"
-              >
-                {"<<"}
-              </button>
-              <button
-                type="button"
-                className="table-view-page-btn"
-                disabled={previewSafeCurrentPage <= 1 || previewBusy}
-                onClick={() =>
-                  activeTableId !== null &&
-                  previewSafeCurrentPage > 1 &&
-                  void loadPreview(activeTableId, previewSafeCurrentPage - 1)
-                }
-                aria-label="Previous page"
-                title="Previous page"
-              >
-                {"<"}
-              </button>
-              <span className="table-view-page-count">
-                Page{" "}
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  className="table-view-page-input"
-                  style={{ width: `${previewPageInputWidthCh}ch` }}
-                  value={previewPageInput}
-                  onChange={(e) => {
-                    const digitsOnly = e.target.value.replace(/[^\d]/g, "");
-                    setPreviewPageInput(digitsOnly);
-                  }}
-                  onBlur={commitPreviewPageInput}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitPreviewPageInput();
-                    else if (e.key === "Escape") setPreviewPageInput(String(previewSafeCurrentPage));
-                  }}
-                  disabled={previewBusy}
-                  aria-label="Current page number"
-                  title="Enter page number"
-                />{" "}
-                of {previewTotalPages}
-              </span>
-              <button
-                type="button"
-                className="table-view-page-btn"
-                disabled={previewSafeCurrentPage >= previewTotalPages || previewBusy}
-                onClick={() =>
-                  activeTableId !== null &&
-                  previewSafeCurrentPage < previewTotalPages &&
-                  void loadPreview(activeTableId, previewSafeCurrentPage + 1)
-                }
-                aria-label="Next page"
-                title="Next page"
-              >
-                {">"}
-              </button>
-              <button
-                type="button"
-                className="table-view-page-btn"
-                disabled={previewSafeCurrentPage >= previewTotalPages || previewBusy}
-                onClick={() =>
-                  activeTableId !== null && void loadPreview(activeTableId, previewTotalPages)
-                }
-                aria-label="Last page"
-                title="Last page"
-              >
-                {">>"}
-              </button>
+        {activeTableId !== null && (
+          <div
+            className="panel upload-preview"
+            aria-hidden={isUploadDialogOpen}
+          >
+            <div className="preview-header">
+              <div className="preview-header-left">
+                <h3 style={{ marginBottom: 0 }}>Table Preview</h3>
+                {activeTableName && (
+                  <div className="preview-table-name" aria-live="polite">
+                    <span className="preview-table-name-value">
+                      {activeTableName}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="preview-header-right">
+                {preview && (
+                  <label
+                    className="tables-search-input-wrap"
+                    aria-label="Search in preview"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      role="presentation"
+                      className="tables-search-icon"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                    <input
+                      type="text"
+                      className="tables-search-input preview-search-input"
+                      value={previewSearchQuery}
+                      onChange={(e) => setPreviewSearchQuery(e.target.value)}
+                      placeholder="Search"
+                      aria-label="Search in preview"
+                    />
+                  </label>
+                )}
+                {activeTableId !== null && (
+                  <Link
+                    className="sort-toggle-button preview-open-link"
+                    to={`/tables/${activeTableId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Edit Full Table (opens in new tab)"
+                    title="Edit Full Table (new tab)"
+                  >
+                    <img
+                      src={openIcon}
+                      alt=""
+                      className="preview-open-link-icon"
+                      aria-hidden="true"
+                    />
+                    <span className="sort-toggle-text">Edit Full Table</span>
+                  </Link>
+                )}
+              </div>
             </div>
-            <span className="table-view-pagination-meta">
-              Showing rows{" "}
-              {(previewSafeCurrentPage - 1) * PREVIEW_ROWS_PER_PAGE + 1}–
-              {Math.min(previewSafeCurrentPage * PREVIEW_ROWS_PER_PAGE, previewRowCount)} of{" "}
-              {previewRowCount}
-            </span>
-          </div>
-        )}
 
-        {/*
+            {previewBusy && (
+              <p className="small" role="status" aria-live="polite">
+                Loading preview...
+              </p>
+            )}
+            {previewErr && (
+              <p className="error" role="alert">
+                {previewErr}
+              </p>
+            )}
+
+            {preview && (
+              <div className="table-area" ref={previewAreaRef}>
+                <DataTable
+                  columns={preview.columns}
+                  rows={previewRows}
+                  rowOffset={preview.offset}
+                  rowIndices={preview.row_indices}
+                  sortable
+                  sortMode="server"
+                  serverSortColumn={previewSortColumn}
+                  serverSortDirection={previewSortDirection}
+                  onSortChange={(column, direction) => {
+                    if (activeTableId !== null) {
+                      void loadPreview(activeTableId, 1, {
+                        sortColumn: column,
+                        sortDirection: direction,
+                      });
+                    }
+                  }}
+                  caption={`Preview of ${activeTableName || "the selected table"}. Showing ${valueMode} values.${hasPreviewSearch ? ` ${previewRowCount.toLocaleString()} matches.` : ""}`}
+                />
+              </div>
+            )}
+
+            {preview && previewRowCount > 0 && (
+              <div
+                className="table-view-pagination"
+                aria-label="Table preview pagination"
+              >
+                <div className="table-view-pagination-controls">
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    disabled={previewSafeCurrentPage <= 1 || previewBusy}
+                    onClick={() =>
+                      activeTableId !== null &&
+                      void loadPreview(activeTableId, 1)
+                    }
+                    aria-label="First page"
+                    title="First page"
+                  >
+                    {"<<"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    disabled={previewSafeCurrentPage <= 1 || previewBusy}
+                    onClick={() =>
+                      activeTableId !== null &&
+                      previewSafeCurrentPage > 1 &&
+                      void loadPreview(
+                        activeTableId,
+                        previewSafeCurrentPage - 1,
+                      )
+                    }
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    {"<"}
+                  </button>
+                  <span className="table-view-page-count">
+                    Page{" "}
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className="table-view-page-input"
+                      style={{ width: `${previewPageInputWidthCh}ch` }}
+                      value={previewPageInput}
+                      onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/[^\d]/g, "");
+                        setPreviewPageInput(digitsOnly);
+                      }}
+                      onBlur={commitPreviewPageInput}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitPreviewPageInput();
+                        else if (e.key === "Escape")
+                          setPreviewPageInput(String(previewSafeCurrentPage));
+                      }}
+                      disabled={previewBusy}
+                      aria-label="Current page number"
+                      title="Enter page number"
+                    />{" "}
+                    of {previewTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    disabled={
+                      previewSafeCurrentPage >= previewTotalPages || previewBusy
+                    }
+                    onClick={() =>
+                      activeTableId !== null &&
+                      previewSafeCurrentPage < previewTotalPages &&
+                      void loadPreview(
+                        activeTableId,
+                        previewSafeCurrentPage + 1,
+                      )
+                    }
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    {">"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    disabled={
+                      previewSafeCurrentPage >= previewTotalPages || previewBusy
+                    }
+                    onClick={() =>
+                      activeTableId !== null &&
+                      void loadPreview(activeTableId, previewTotalPages)
+                    }
+                    aria-label="Last page"
+                    title="Last page"
+                  >
+                    {">>"}
+                  </button>
+                </div>
+                <span className="table-view-pagination-meta">
+                  Showing rows{" "}
+                  {(previewSafeCurrentPage - 1) * PREVIEW_ROWS_PER_PAGE + 1}–
+                  {Math.min(
+                    previewSafeCurrentPage * PREVIEW_ROWS_PER_PAGE,
+                    previewRowCount,
+                  )}{" "}
+                  of {previewRowCount}
+                </span>
+              </div>
+            )}
+
+            {/*
           When no table is selected, the preview panel is hidden (activeTableId === null),
           so we don't need a "select a table" hint here.
         */}
-        </div>
-      )}
+          </div>
+        )}
       </div>
     </div>
   );

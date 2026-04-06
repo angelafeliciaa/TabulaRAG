@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, select, text, update
 
 import app.db as app_db
-from app.models import Dataset, Enterprise, EnterpriseMembership, McpAccessToken, UserRole
+from app.models import Dataset, Enterprise, EnterpriseMembership, Folder, FolderGroupAccess, McpAccessToken, UserGroup, UserGroupMembership, UserRole
 
 
 def ensure_dataset_columns_normalized_columns() -> None:
@@ -218,6 +218,57 @@ def ensure_mcp_access_tokens_table() -> None:
     McpAccessToken.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
+def ensure_folders_table() -> None:
+    """Create the folders table (and folderprivacy enum on PostgreSQL) for existing DB volumes."""
+    inspector = inspect(app_db.engine)
+    if "folders" in inspector.get_table_names():
+        return
+
+    dialect = app_db.engine.dialect.name
+    if dialect == "postgresql":
+        # Create the native enum type before the table references it.
+        try:
+            with app_db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "DO $$ BEGIN "
+                        "CREATE TYPE folderprivacy AS ENUM ('public', 'protected', 'private'); "
+                        "EXCEPTION WHEN duplicate_object THEN NULL; "
+                        "END $$"
+                    )
+                )
+        except Exception:
+            pass
+
+    Folder.__table__.create(bind=app_db.engine, checkfirst=True)
+
+
+def ensure_dataset_folder_id_column() -> None:
+    """Add datasets.folder_id for folder-based access control (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "datasets" not in inspector.get_table_names():
+        return
+    if "folders" not in inspector.get_table_names():
+        return
+
+    column_names = {c["name"] for c in inspector.get_columns("datasets")}
+    if "folder_id" in column_names:
+        return
+
+    dialect = app_db.engine.dialect.name
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(
+                text(
+                    "ALTER TABLE datasets "
+                    "ADD COLUMN folder_id INTEGER NULL "
+                    "REFERENCES folders(id) ON DELETE SET NULL"
+                )
+            )
+        else:
+            conn.execute(text("ALTER TABLE datasets ADD COLUMN folder_id INTEGER NULL"))
+
+
 def ensure_querier_role_and_migrate_member() -> None:
     """Ensure 'querier' exists on PostgreSQL enum; rewrite any 'member' rows to 'querier'."""
     inspector = inspect(app_db.engine)
@@ -366,6 +417,13 @@ def promote_legacy_admin_to_owner_per_enterprise() -> None:
                 first_admin.role = UserRole.owner
                 db.add(first_admin)
         db.commit()
+
+
+def ensure_user_groups_tables() -> None:
+    """Create user_groups, user_group_memberships, and folder_group_accesses tables for existing DB volumes."""
+    UserGroup.__table__.create(bind=app_db.engine, checkfirst=True)
+    UserGroupMembership.__table__.create(bind=app_db.engine, checkfirst=True)
+    FolderGroupAccess.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:

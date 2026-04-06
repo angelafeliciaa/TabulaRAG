@@ -5,12 +5,13 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import SessionLocal, engine
 from app.index_jobs import clear_index_job, get_index_jobs
 from app.indexing import upsert_dataset_row_index
-from app.models import Dataset, DatasetColumn, DatasetRow
+from app.models import Dataset, DatasetColumn, DatasetRow, Folder, FolderGroupAccess, FolderPrivacy, UserGroupMembership, UserRole
 from app.qdrant_client import delete_collection, get_collection_point_count
 from app.normalization import (
     flatten_row_data_to_original,
@@ -461,18 +462,68 @@ def _list_tables_payload(
     sample_rows: int,
     limit: Optional[int],
     enterprise_id: Optional[int] = None,
+    role: Optional[UserRole] = None,
+    user_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    is_admin = role in (UserRole.owner, UserRole.admin)
     with SessionLocal() as db:
-        query = select(Dataset).order_by(Dataset.id.desc())
+        query = (
+            select(Dataset)
+            .options(joinedload(Dataset.folder))
+            .order_by(Dataset.id.desc())
+        )
         if not include_pending:
             query = query.where(Dataset.is_index_ready.is_(True))
         if enterprise_id is not None:
             query = query.where(Dataset.enterprise_id == enterprise_id)
+        if not is_admin:
+            # Compute protected folder IDs that have group restrictions
+            # this querier cannot satisfy.
+            blocked_folder_ids: List[int] = []
+            if user_id is not None and enterprise_id is not None:
+                protected_fids = db.execute(
+                    select(Folder.id).where(
+                        Folder.enterprise_id == enterprise_id,
+                        Folder.privacy == FolderPrivacy.protected,
+                    )
+                ).scalars().all()
+                for fid in protected_fids:
+                    restriction_count = db.execute(
+                        select(func.count(FolderGroupAccess.id))
+                        .where(FolderGroupAccess.folder_id == fid)
+                    ).scalar_one()
+                    if restriction_count > 0:
+                        user_ok = db.execute(
+                            select(FolderGroupAccess.id)
+                            .join(UserGroupMembership, UserGroupMembership.group_id == FolderGroupAccess.group_id)
+                            .where(
+                                FolderGroupAccess.folder_id == fid,
+                                UserGroupMembership.user_id == user_id,
+                            )
+                            .limit(1)
+                        ).scalar_one_or_none()
+                        if user_ok is None:
+                            blocked_folder_ids.append(fid)
+
+            # Exclude private folders and any blocked protected folders.
+            if blocked_folder_ids:
+                query = query.outerjoin(Folder, Dataset.folder_id == Folder.id).where(
+                    (Dataset.folder_id.is_(None)) | (
+                        (Folder.privacy != FolderPrivacy.private) &
+                        Dataset.folder_id.not_in(blocked_folder_ids)
+                    )
+                )
+            else:
+                # Unassigned datasets are always visible.
+                query = query.outerjoin(Folder, Dataset.folder_id == Folder.id).where(
+                    (Dataset.folder_id.is_(None)) | (Folder.privacy != FolderPrivacy.private)
+                )
         if limit is not None:
             query = query.limit(limit)
-        datasets = db.execute(query).scalars().all()
+        datasets = db.execute(query).scalars().unique().all()
         items = []
         for d in datasets:
+            folder = d.folder
             item = {
                 "dataset_id": d.id,
                 "name": d.name,
@@ -481,6 +532,9 @@ def _list_tables_payload(
                 "row_count": d.row_count,
                 "column_count": d.column_count,
                 "created_at": d.created_at.isoformat(),
+                "folder_id": folder.id if folder else None,
+                "folder_name": folder.name if folder else None,
+                "folder_privacy": folder.privacy if folder else None,
             }
             stored = _coerce_query_context(d.query_context, sample_rows)
             item["query_context"] = stored or _build_query_context_from_db(
@@ -493,7 +547,11 @@ def _list_tables_payload(
 
 
 def _get_dataset_or_404(db, dataset_id: int, enterprise_id: Optional[int]) -> Dataset:
-    stmt = select(Dataset).where(Dataset.id == dataset_id)
+    stmt = (
+        select(Dataset)
+        .options(joinedload(Dataset.folder))
+        .where(Dataset.id == dataset_id)
+    )
     if enterprise_id is not None:
         stmt = stmt.where(Dataset.enterprise_id == enterprise_id)
     dataset = db.execute(stmt).scalar_one_or_none()
@@ -508,6 +566,21 @@ def _delete_collection_safe(dataset_id: int) -> None:
     except Exception:
         # Collection cleanup is best-effort and should not block API delete.
         pass
+
+
+def _effective_privacy(dataset: Dataset) -> FolderPrivacy:
+    """Unassigned datasets default to protected."""
+    if dataset.folder_id is not None and dataset.folder is not None:
+        return dataset.folder.privacy
+    return FolderPrivacy.protected
+
+
+def _assert_dataset_write(auth: AuthUser, dataset: Dataset) -> None:
+    """Allow owners/admins always. Queriers may write only to datasets in a public folder."""
+    if auth.role in (UserRole.owner, UserRole.admin):
+        return
+    if _effective_privacy(dataset) != FolderPrivacy.public:
+        raise HTTPException(status_code=403, detail="Write access denied")
 
 
 @router.get(
@@ -540,6 +613,8 @@ def list_tables(
         sample_rows=3,
         limit=limit,
         enterprise_id=_scoped_enterprise_id(current_user),
+        role=current_user.role,
+        user_id=current_user.id,
     )
 
 
@@ -917,9 +992,10 @@ def list_index_status(
 
 
 @router.delete("/tables/{dataset_id}", include_in_schema=False)
-def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_user: AuthUser = Depends(require_admin)):
+def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_user: AuthUser = Depends(require_auth)):
     with SessionLocal() as db:
-        _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
+        dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
+        _assert_dataset_write(current_user, dataset)
         # Use direct SQL deletes to avoid expensive ORM cascade object loading.
         db.execute(delete(DatasetRow).where(DatasetRow.dataset_id == dataset_id))
         db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id == dataset_id))
@@ -931,9 +1007,10 @@ def delete_table(dataset_id: int, background_tasks: BackgroundTasks, current_use
 
 
 @router.patch("/tables/{dataset_id}", include_in_schema=False)
-def rename_table(dataset_id: int, body: RenameRequest, current_user: AuthUser = Depends(require_admin)):
+def rename_table(dataset_id: int, body: RenameRequest, current_user: AuthUser = Depends(require_auth)):
     with SessionLocal() as db:
         dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
+        _assert_dataset_write(current_user, dataset)
         normalized_name = normalize_dataset_name_or_raise(body.name)
         target_key = dataset_name_collision_key(normalized_name)
         eid = _scoped_enterprise_id(current_user)
@@ -968,7 +1045,7 @@ def patch_table_row_cell(
     dataset_id: int,
     row_index: int,
     body: RowCellUpdateRequest,
-    current_user: AuthUser = Depends(require_admin),
+    current_user: AuthUser = Depends(require_auth),
 ):
     if row_index < 0:
         raise HTTPException(status_code=400, detail="row_index must be non-negative")
@@ -981,6 +1058,7 @@ def patch_table_row_cell(
 
     with SessionLocal() as db:
         dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
+        _assert_dataset_write(current_user, dataset)
 
         columns = (
             db.execute(
@@ -1132,10 +1210,11 @@ def patch_table_column_name(dataset_id: int, body: ColumnRenameRequest, current_
 
 
 @router.patch("/tables/{dataset_id}/description", include_in_schema=False)
-def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest, current_user: AuthUser = Depends(require_admin)):
+def patch_table_description(dataset_id: int, body: DescriptionUpdateRequest, current_user: AuthUser = Depends(require_auth)):
     normalized_description = _normalize_dataset_description(body.description)
     with SessionLocal() as db:
         dataset = _get_dataset_or_404(db, dataset_id, _scoped_enterprise_id(current_user))
+        _assert_dataset_write(current_user, dataset)
         dataset.description = normalized_description
         db.commit()
         return {
