@@ -4980,21 +4980,197 @@ input:focus-visible,
 
 /* ── Login page ─────────────────────────────────────────────────────────────── */
 
+@keyframes loginPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes loginFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes loginIntroLogoIn {
+  from {
+    opacity: 0;
+    transform: scale(0.74) rotate(-10deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes loginIntroLogoOut {
+  from {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.68) translateY(-22px);
+  }
+}
+
+@keyframes loginIntroFadeOut {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 .login-page {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100dvh;
-  background: var(--bg);
+  background:
+    radial-gradient(
+      circle at top left,
+      color-mix(in srgb, var(--surface-blur-bg-strong) 90%, transparent) 0%,
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at bottom right,
+      color-mix(in srgb, var(--surface-blur-bg) 84%, transparent) 0%,
+      transparent 46%
+    ),
+    linear-gradient(180deg, var(--bg) 0%, color-mix(in srgb, var(--bg) 88%, var(--bg-elev)) 100%);
+}
+
+.login-page::before,
+.login-page::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(72px);
+  opacity: 0.48;
+}
+
+.login-page::before {
+  top: 5%;
+  left: -10%;
+  width: min(28rem, 46vw);
+  height: min(28rem, 46vw);
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--brand-text) 24%, transparent) 0%,
+      color-mix(in srgb, var(--surface-blur-bg-strong) 34%, transparent) 42%,
+      transparent 74%
+    );
+}
+
+.login-page::after {
+  right: -8%;
+  bottom: 6%;
+  width: min(24rem, 40vw);
+  height: min(24rem, 40vw);
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--surface-blur-bg) 82%, transparent) 0%,
+      color-mix(in srgb, var(--brand-text) 12%, transparent) 52%,
+      transparent 78%
+    );
+}
+
+:root[data-theme="dark"] .login-page::before,
+:root[data-theme="dark"] .login-page::after {
+  opacity: 0.62;
 }
 
 /* Pre-login: one large panel — overview left, sign-in right */
 .login-page--split {
   padding: clamp(1rem, 3vw, 2rem);
   box-sizing: border-box;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.login-intro-splash {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+  backdrop-filter: blur(18px) saturate(118%);
+  -webkit-backdrop-filter: blur(18px) saturate(118%);
+}
+
+.login-intro-logo {
+  width: clamp(92px, 11vw, 124px);
+  height: clamp(92px, 11vw, 124px);
+  border-radius: 28px;
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.32) inset;
+  animation: loginIntroLogoIn 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.login-page--split[data-intro-phase="active"] .login-split-panel,
+.login-page--split[data-intro-phase="active"] .login-split-overview-brand,
+.login-page--split[data-intro-phase="active"] .login-split-overview-tagline,
+.login-page--split[data-intro-phase="active"] .login-split-overview-list li,
+.login-page--split[data-intro-phase="active"] a.login-repo-btn,
+.login-page--split[data-intro-phase="active"] .login-auth-card {
+  animation: none;
+  opacity: 0;
+}
+
+.login-page--split[data-intro-phase="active"] .login-split-panel {
+  transform: translateY(28px) scale(0.985);
+}
+
+.login-page--split[data-intro-phase="active"] .login-split-overview-brand,
+.login-page--split[data-intro-phase="active"] .login-split-overview-tagline,
+.login-page--split[data-intro-phase="active"] .login-auth-card,
+.login-page--split[data-intro-phase="active"] a.login-repo-btn {
+  transform: translateY(22px);
+}
+
+.login-page--split[data-intro-phase="active"] .login-split-overview-list li {
+  transform: translateY(18px);
+}
+
+.login-page--split[data-intro-phase="exiting"] .login-intro-splash {
+  animation: loginIntroFadeOut 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.login-page--split[data-intro-phase="exiting"] .login-intro-logo {
+  animation: loginIntroLogoOut 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .login-split-panel {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
   width: 100%;
@@ -5003,45 +5179,87 @@ input:focus-visible,
   border-radius: 24px;
   overflow: hidden;
   border: 1px solid var(--surface-blur-border);
-  background: var(--surface-blur-bg-strong);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.06);
+  background: color-mix(in srgb, var(--surface-blur-bg-strong) 82%, transparent);
+  box-shadow: 0 26px 60px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(26px) saturate(140%);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  animation: loginPanelIn 720ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 :root:not([data-theme="dark"]) .login-split-panel {
   border-color: var(--border);
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.06);
+  box-shadow:
+    0 20px 40px rgba(15, 23, 42, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.55) inset;
 }
 
 :root[data-theme="dark"] .login-split-panel {
-  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 28px 64px rgba(0, 0, 0, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.login-split-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(140deg, rgba(255, 255, 255, 0.28), transparent 28%),
+    linear-gradient(320deg, rgba(255, 255, 255, 0.08), transparent 42%);
+  opacity: 0.7;
+}
+
+:root[data-theme="dark"] .login-split-panel::before {
+  background:
+    linear-gradient(140deg, rgba(255, 255, 255, 0.08), transparent 28%),
+    linear-gradient(320deg, rgba(255, 255, 255, 0.04), transparent 42%);
+  opacity: 1;
 }
 
 .login-split-overview {
   padding: clamp(2rem, 5vw, 3.25rem);
   display: flex;
   flex-direction: column;
+  align-items: center;
   justify-content: center;
   gap: 1.25rem;
   border-right: 1px solid var(--surface-blur-border);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--brand-text) 12%, transparent) 0%,
-    transparent 55%
-  );
+  text-align: center;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--brand-text) 12%, transparent) 0%,
+      transparent 55%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-blur-bg-strong) 68%, transparent) 0%,
+      color-mix(in srgb, var(--surface-blur-bg) 42%, transparent) 100%
+    );
 }
 
 :root[data-theme="dark"] .login-split-overview {
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--brand-text) 10%, transparent) 0%,
-    transparent 58%
-  );
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--brand-text) 10%, transparent) 0%,
+      transparent 58%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-blur-bg-strong) 74%, transparent) 0%,
+      color-mix(in srgb, var(--surface-blur-bg) 44%, transparent) 100%
+    );
 }
 
 .login-split-overview-brand {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 1rem;
+  opacity: 0;
+  animation: loginFadeUp 620ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
 }
 
 .login-split-overview-logo {
@@ -5073,6 +5291,8 @@ input:focus-visible,
   line-height: 1.45;
   color: var(--text-muted);
   max-width: 36ch;
+  opacity: 0;
+  animation: loginFadeUp 620ms cubic-bezier(0.16, 1, 0.3, 1) 220ms both;
 }
 
 .login-split-overview-list {
@@ -5083,6 +5303,7 @@ input:focus-visible,
   flex-direction: column;
   gap: 0.9rem;
   max-width: 42ch;
+  align-self: center;
 }
 
 .login-split-overview-list li {
@@ -5093,6 +5314,28 @@ input:focus-visible,
   line-height: 1.5;
   color: var(--text);
   opacity: 0.92;
+  text-align: left;
+  animation: loginFadeUp 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.login-split-overview-list li:nth-child(1) {
+  animation-delay: 300ms;
+}
+
+.login-split-overview-list li:nth-child(2) {
+  animation-delay: 380ms;
+}
+
+.login-split-overview-list li:nth-child(3) {
+  animation-delay: 460ms;
+}
+
+.login-split-overview-list li:nth-child(4) {
+  animation-delay: 540ms;
+}
+
+.login-split-overview-list li:nth-child(5) {
+  animation-delay: 620ms;
 }
 
 .login-split-overview-list li::before {
@@ -5111,23 +5354,29 @@ a.login-repo-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  align-self: flex-start;
+  align-self: center;
   margin-top: 0.35rem;
   padding: 0.55rem 1rem;
   font-size: 0.875rem;
   font-weight: 600;
   text-decoration: none;
   border-radius: 10px;
-  background: var(--surface-blur-bg);
+  background: color-mix(in srgb, var(--surface-blur-bg) 74%, transparent);
   color: var(--text);
   border: 1px solid var(--surface-blur-border);
   box-shadow: none;
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
   transition:
+    transform 0.2s ease,
     border-color 0.15s,
     background 0.15s;
+  opacity: 0;
+  animation: loginFadeUp 620ms cubic-bezier(0.16, 1, 0.3, 1) 700ms both;
 }
 
 a.login-repo-btn:hover {
+  transform: translateY(-1px);
   border-color: var(--border-soft);
   background: var(--surface-blur-bg-strong);
   color: var(--text);
@@ -5143,11 +5392,17 @@ a.login-repo-btn:hover {
   align-items: center;
   justify-content: center;
   padding: clamp(1.5rem, 4vw, 2.5rem);
-  background: var(--bg-elev);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-blur-bg-strong) 56%, transparent) 0%,
+      color-mix(in srgb, var(--bg-elev) 84%, transparent) 100%
+    );
   min-width: 0;
 }
 
 .login-auth-card {
+  position: relative;
   width: 100%;
   max-width: 380px;
   display: flex;
@@ -5155,6 +5410,23 @@ a.login-repo-btn:hover {
   align-items: center;
   text-align: center;
   gap: 0.65rem;
+  padding: 1.6rem 1.4rem;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--surface-blur-border) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-blur-bg) 78%, transparent);
+  box-shadow:
+    0 18px 40px rgba(15, 23, 42, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.22) inset;
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  opacity: 0;
+  animation: loginFadeUp 700ms cubic-bezier(0.16, 1, 0.3, 1) 240ms both;
+}
+
+:root[data-theme="dark"] .login-auth-card {
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.26),
+    0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
 .login-auth-title {
@@ -5189,9 +5461,14 @@ a.login-repo-btn:hover {
   color: var(--text);
   border: 1px solid var(--border);
   box-sizing: border-box;
+  transition:
+    transform 0.2s ease,
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .login-btn.login-btn-google:hover:not(:disabled) {
+  transform: translateY(-1px);
   background: var(--surface-blur-bg);
   border-color: var(--border-soft);
   filter: none;
@@ -5206,10 +5483,14 @@ a.login-repo-btn:hover {
 }
 
 @media (max-width: 840px) {
+  .login-page--split {
+    align-items: stretch;
+  }
+
   .login-split-panel {
     grid-template-columns: 1fr;
     min-height: auto;
-    max-width: 480px;
+    max-width: 560px;
   }
 
   .login-split-overview {
@@ -5240,6 +5521,167 @@ a.login-repo-btn:hover {
 
   .login-split-auth {
     padding: clamp(2rem, 5vw, 2.75rem) clamp(1.25rem, 4vw, 2rem);
+  }
+}
+
+@media (max-width: 560px) {
+  .login-page--split {
+    padding:
+      max(0.5rem, env(safe-area-inset-top))
+      max(0.5rem, env(safe-area-inset-right))
+      max(0.5rem, env(safe-area-inset-bottom))
+      max(0.5rem, env(safe-area-inset-left));
+  }
+
+  .login-intro-logo {
+    width: 88px;
+    height: 88px;
+    border-radius: 24px;
+  }
+
+  .login-split-panel {
+    border-radius: 18px;
+    min-height: auto;
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .login-split-overview {
+    gap: 0.85rem;
+    padding: 1.2rem 1rem;
+  }
+
+  .login-split-overview-brand {
+    gap: 0.625rem;
+  }
+
+  .login-split-overview-logo {
+    width: 56px;
+    height: 56px;
+  }
+
+  .login-split-overview-title {
+    font-size: clamp(1.45rem, 6.4vw, 1.82rem);
+  }
+
+  .login-split-overview-tagline {
+    font-size: 0.9rem;
+    line-height: 1.42;
+  }
+
+  .login-split-overview-list {
+    gap: 0.6rem;
+  }
+
+  .login-split-overview-list li {
+    padding-left: 1.15rem;
+    font-size: 0.84rem;
+    line-height: 1.4;
+  }
+
+  a.login-repo-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.82rem;
+  }
+
+  .login-split-auth {
+    padding: 1rem 1rem 1.15rem;
+  }
+
+  .login-auth-card {
+    max-width: none;
+    padding: 1rem 0.9rem;
+    gap: 0.5rem;
+  }
+
+  .login-auth-title {
+    font-size: 1.2rem;
+  }
+
+  .login-auth-subtitle {
+    margin-bottom: 0.15rem;
+    font-size: 0.88rem;
+  }
+
+  .login-btn.login-btn-google.login-btn-google--large {
+    min-height: 44px;
+    padding: 0.72rem 0.9rem;
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 390px) and (max-height: 720px) {
+  .login-split-overview {
+    gap: 0.72rem;
+    padding: 1rem 0.92rem;
+  }
+
+  .login-split-overview-logo {
+    width: 50px;
+    height: 50px;
+  }
+
+  .login-split-overview-title {
+    font-size: 1.38rem;
+  }
+
+  .login-split-overview-tagline {
+    font-size: 0.85rem;
+  }
+
+  .login-split-overview-list {
+    gap: 0.5rem;
+  }
+
+  .login-split-overview-list li {
+    font-size: 0.8rem;
+    line-height: 1.34;
+  }
+
+  a.login-repo-btn {
+    margin-top: 0.2rem;
+  }
+
+  .login-split-auth {
+    padding: 0.9rem 0.92rem 1rem;
+  }
+
+  .login-auth-card {
+    padding: 0.92rem 0.8rem;
+  }
+
+  .login-auth-title {
+    font-size: 1.12rem;
+  }
+
+  .login-auth-subtitle {
+    font-size: 0.84rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-intro-splash {
+    display: none;
+  }
+
+  .login-split-panel,
+  .login-split-overview-brand,
+  .login-split-overview-tagline,
+  .login-split-overview-list li,
+  a.login-repo-btn,
+  .login-auth-card {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  a.login-repo-btn,
+  .login-btn.login-btn-google {
+    transition: none;
   }
 }
 
