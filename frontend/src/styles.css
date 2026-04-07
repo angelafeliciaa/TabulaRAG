@@ -482,7 +482,7 @@ h3 {
 
 .app-brand {
   position: absolute;
-  top: 15px;
+  top: calc(20px + env(safe-area-inset-top, 0px));
   left: 24px;
   display: inline-flex;
   align-items: center;
@@ -515,15 +515,13 @@ h3 {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--brand-wordmark);
+  display: inline-flex;
+  align-items: baseline;
+  /* Dual-tone wordmark: .upload-home-brand__title-* (same as home hero) */
 }
 
 .app-brand:hover {
   opacity: 0.9;
-}
-
-.app-brand:hover .app-brand-text {
-  color: var(--brand-wordmark);
 }
 
 .status-dot {
@@ -1415,7 +1413,7 @@ label.upload-queue-folder-label.edit-file-field {
 
 .top-bar {
   position: absolute;
-  top: 20px;
+  top: calc(20px + env(safe-area-inset-top, 0px));
   right: 24px;
   display: flex;
   align-items: center;
@@ -1438,7 +1436,7 @@ label.upload-queue-folder-label.edit-file-field {
 
 .table-shell-top-row {
   position: absolute;
-  top: 15px;
+  top: calc(20px + env(safe-area-inset-top, 0px));
   left: 24px;
   right: 24px;
   z-index: 101;
@@ -1451,6 +1449,14 @@ label.upload-queue-folder-label.edit-file-field {
 .table-shell-top-row-spacer {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.table-shell-top-row .app-brand:not(.app-brand--icon-only) {
+  flex-shrink: 0;
+}
+
+.table-shell-top-row .app-brand-text--table-shell {
+  font-size: 18px;
 }
 
 /* Room for Teams-style workspace pill + avatar + (optional) settings */
@@ -4919,7 +4925,7 @@ a.sort-toggle-button.preview-open-link {
 
 .page-stack.full-table-page .table-view-back-row {
   position: absolute;
-  top: 50px;
+  top: calc(48px + env(safe-area-inset-top, 0px));
   left: 24px;
   z-index: 2;
 }
@@ -4979,10 +4985,27 @@ a.sort-toggle-button.preview-open-link {
   color: #fff;
 }
 
+/* Match edit-file modal `.confirm-save-button` (name / description save on home) */
+.page-stack.full-table-page .table-view-format-button.table-view-save-edits-btn {
+  min-width: 96px;
+  padding: 9px 14px;
+  height: auto;
+  min-height: 38px;
+  border-radius: 10px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .table-view-format-button.table-view-revert-edits-btn {
   background: var(--surface-blur-bg);
   border-color: var(--border-soft);
   color: var(--danger);
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding-inline: 18px;
+  min-width: max-content;
 }
 
 .table-view-format-button.table-view-revert-edits-btn:hover,
@@ -5001,6 +5024,47 @@ a.sort-toggle-button.preview-open-link {
   justify-content: center;
   gap: 6px;
   margin-top: 16px;
+}
+
+/* Full table `/tables/:id`: pagination overlays bottom of grid so the table fills viewport height */
+.page-stack.full-table-page .table-area-outer--full-table {
+  position: relative;
+}
+
+.page-stack.full-table-page .table-view-pagination--overlay {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  margin-top: 0;
+  width: auto;
+  max-width: calc(100% - 24px);
+  z-index: 25;
+  pointer-events: none;
+}
+
+.page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-controls {
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  background: var(--surface-blur-bg-strong);
+  border-color: var(--surface-blur-border);
+}
+
+:root[data-theme="dark"] .page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-controls {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+
+.page-stack.full-table-page .full-table-area--has-pagination .table-scroll {
+  padding-bottom: 78px;
+}
+
+.page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-meta {
+  pointer-events: none;
+  text-align: center;
+  max-width: min(100%, 420px);
+  text-shadow:
+    0 0 10px var(--bg),
+    0 1px 0 var(--bg-elev);
 }
 
 .table-view-pagination-meta {
@@ -5194,14 +5258,70 @@ a.sort-toggle-button.preview-open-link {
 }
 
 .full-table-page {
-  padding-top: 56px;
+  padding-top: calc(64px + env(safe-area-inset-top, 0px));
 }
 
-/* Physical `/tables/:id` view: full viewport width and fill remaining height */
+.page-stack.full-table-page.full-table-page-dataset-wide > .table-view-header-card--dataset {
+  padding: 10px 14px;
+  border-radius: 16px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-main {
+  gap: 4px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-title {
+  font-size: 17px;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-status {
+  min-height: 0;
+  font-size: 12px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-row {
+  align-items: center;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-pagination:not(.table-view-pagination--overlay) {
+  margin-top: 8px;
+  gap: 4px;
+}
+
+/* Match home preview pagination sizing (avoid compact controls on full-table overlay) */
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-pagination--overlay {
+  gap: 6px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-pagination--overlay
+  .table-view-pagination-controls {
+  padding: 6px 8px;
+  gap: 8px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-pagination--overlay
+  .table-view-page-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-pagination--overlay
+  .table-view-page-input {
+  height: 28px;
+}
+
+/* Physical `/tables/:id` view: full viewport width, fill height, tighter top chrome for more grid area */
 .page-stack.full-table-page.full-table-page-dataset-wide {
   max-width: none;
   width: 100%;
   box-sizing: border-box;
+  padding-top: calc(48px + env(safe-area-inset-top, 0px));
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
   flex: 1 1 auto;
@@ -6032,7 +6152,7 @@ input:focus-visible,
   }
 
   .top-bar {
-    top: 8px;
+    top: calc(10px + env(safe-area-inset-top, 0px));
     right: 12px;
     gap: 8px;
   }
@@ -6042,7 +6162,7 @@ input:focus-visible,
   }
 
   .table-shell-top-row {
-    top: 5px;
+    top: calc(10px + env(safe-area-inset-top, 0px));
     left: 12px;
     right: 12px;
     gap: 8px;
@@ -6086,7 +6206,7 @@ input:focus-visible,
   }
 
   .app-brand {
-    top: 5px;
+    top: calc(10px + env(safe-area-inset-top, 0px));
     left: 12px;
     gap: 3px;
   }
@@ -6163,7 +6283,7 @@ input:focus-visible,
   }
 
   .page-stack.full-table-page.full-table-page-dataset-wide {
-    padding-top: 124px;
+    padding-top: calc(110px + env(safe-area-inset-top, 0px));
   }
 
   .table-view-edit-mode-banner {
@@ -6229,6 +6349,18 @@ input:focus-visible,
     height: 34px;
     padding: 0 10px;
     font-size: 11px;
+  }
+
+  .page-stack.full-table-page .table-view-format-button.table-view-save-edits-btn {
+    min-width: 96px;
+    padding: 9px 14px;
+    height: auto;
+    min-height: 34px;
+    font-size: 12px;
+  }
+
+  .table-view-format-button.table-view-revert-edits-btn {
+    padding-inline: 14px;
   }
 
   .table-view-pagination-controls {
@@ -6529,12 +6661,14 @@ input:focus-visible,
 
 .login-split-overview-title {
   margin: 0;
+  display: inline-flex;
+  align-items: baseline;
   font-family: "Sora", ui-sans-serif, system-ui, sans-serif;
   font-size: clamp(1.75rem, 4.5vw, 2.25rem);
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--brand-wordmark);
   line-height: 1.15;
+  /* Dual-tone wordmark: same spans/colors as .upload-home-brand__title on home */
 }
 
 .login-split-overview-tagline {

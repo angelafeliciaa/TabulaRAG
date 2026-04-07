@@ -2261,15 +2261,15 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const emptyTablesListMessage = useMemo(() => {
     if (normalizedTableSearchQuery) {
       if (selectedFolderName) {
-        return `No matching tables in ${selectedFolderName}`;
+        return `No matching files in ${selectedFolderName}`;
       }
       const q = tableSearchQuery.trim();
-      return q ? `No tables match "${q}"` : "No matching tables";
+      return q ? `No files match "${q}"` : "No matching files";
     }
     if (selectedFolderName) {
-      return `No tables in ${selectedFolderName}`;
+      return `No files in ${selectedFolderName}`;
     }
-    return "No tables uploaded yet";
+    return "No files uploaded yet";
   }, [
     normalizedTableSearchQuery,
     selectedFolderName,
@@ -3374,7 +3374,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
               </div>
 
               <p className="sr-only" role="status" aria-live="polite">
-                Showing {filteredTables.length} uploaded table
+                Showing {filteredTables.length} uploaded file
                 {filteredTables.length === 1 ? "" : "s"}
                 {normalizedTableSearchQuery
                   ? ` matching ${tableSearchQuery.trim()}`

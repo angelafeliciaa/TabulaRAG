@@ -64,8 +64,15 @@ export default function Login() {
               alt=""
               className="login-split-overview-logo"
             />
-            <h1 id="login-overview-heading" className="login-split-overview-title">
-              TabulaRAG
+            <h1
+              id="login-overview-heading"
+              className="login-split-overview-title"
+              aria-label="TabulaRAG"
+            >
+              <span className="upload-home-brand__title-tabula">Tabula</span>
+              <span className="upload-home-brand__title-rag">
+                <span className="upload-home-brand__title-r">R</span>AG
+              </span>
             </h1>
           </div>
           <p className="login-split-overview-tagline">

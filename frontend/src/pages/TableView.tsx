@@ -455,16 +455,35 @@ export default function TableView() {
   const prevPageForHighlightSyncRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isPlainDatasetView && canEdit) {
+    const showEditBanner =
+      isPlainDatasetView
+      && canEdit
+      && Number.isFinite(numericDatasetId)
+      && numericDatasetId > 0
+      && !serverError
+      && !tableNotFound
+      && !err
+      && !highlightErr;
+
+    if (showEditBanner) {
       setHeaderNotice({
         label: "Edit Mode",
-        text: "Double tap cell values to start editing",
+        text: "Click on cell values to start editing",
       });
       return () => setHeaderNotice(null);
     }
     setHeaderNotice(null);
     return undefined;
-  }, [canEdit, isPlainDatasetView, setHeaderNotice]);
+  }, [
+    canEdit,
+    isPlainDatasetView,
+    setHeaderNotice,
+    numericDatasetId,
+    serverError,
+    tableNotFound,
+    err,
+    highlightErr,
+  ]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -921,6 +940,11 @@ export default function TableView() {
 
   const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginationRowStart = (safeCurrentPage - 1) * ROWS_PER_PAGE + 1;
+  const paginationRowEnd = Math.min(
+    safeCurrentPage * ROWS_PER_PAGE,
+    effectiveRowCount,
+  );
   const hasQueryContext = returnPath !== "/";
   const effectiveHighlightRow = isMultiHighlightMode ? activeMultiHighlightedRow : highlightedRow;
   const highlightedRows = isMultiHighlightMode
@@ -1409,7 +1433,10 @@ export default function TableView() {
           </Link>
         </div>
       )}
-      <div className="card" style={{ marginBottom: 8 }}>
+      <div
+        className={`card${isPlainDatasetView ? " table-view-header-card--dataset" : ""}`}
+        style={{ marginBottom: isPlainDatasetView ? 6 : 8 }}
+      >
         <div className="row table-view-header-row" style={{ justifyContent: "space-between" }}>
           <div className="table-view-header-main">
             <div className="table-view-title">{headerTitle}</div>
@@ -1450,7 +1477,7 @@ export default function TableView() {
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
-            {effectiveDescription && (
+            {effectiveDescription && !isPlainDatasetView && (
               <div className="table-view-description-text" title={effectiveDescription}>
                 {effectiveDescription}
               </div>
@@ -1529,8 +1556,13 @@ export default function TableView() {
               </button>
             </div>
           )}
-          <div className="table-area-outer">
-            <div className="table-area full-table-area" ref={tableAreaRef}>
+          <div className="table-area-outer table-area-outer--full-table">
+            <div
+              className={`table-area full-table-area${
+                effectiveRowCount > 0 && totalPages > 1 ? " full-table-area--has-pagination" : ""
+              }`}
+              ref={tableAreaRef}
+            >
             <DataTable
               columns={data.columns}
               columnLabels={
@@ -1602,91 +1634,96 @@ export default function TableView() {
               pendingHeaderColumns={isPlainDatasetView ? pendingHeaderColumnsSet : undefined}
             />
             </div>
-          </div>
-        </div>
-      )}
-      {data && effectiveRowCount > 0 && totalPages > 1 && (
-        <div className="table-view-pagination" aria-label="Full table pagination">
-          <div className="table-view-pagination-controls">
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(1);
-              }}
-              disabled={loading || safeCurrentPage <= 1}
-              aria-label="First page"
-              title="First page"
-            >
-              {"<<"}
-            </button>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(Math.max(1, safeCurrentPage - 1));
-              }}
-              disabled={loading || safeCurrentPage <= 1}
-              aria-label="Previous page"
-              title="Previous page"
-            >
-              {"<"}
-            </button>
-            <span className="table-view-page-count">
-              Page{" "}
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                className="table-view-page-input"
-                style={{ width: `${pageInputWidthCh}ch` }}
-                value={pageInput}
-                onChange={(event) => {
-                  const digitsOnly = event.target.value.replace(/[^\d]/g, "");
-                  setPageInput(digitsOnly);
-                }}
-                onBlur={commitPageInput}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    commitPageInput();
-                  } else if (event.key === "Escape") {
-                    setPageInput(String(safeCurrentPage));
-                  }
-                }}
-                disabled={loading}
-                aria-label="Current page number"
-                title="Enter page number"
-              />{" "}
-              of {totalPages}
-            </span>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(Math.min(totalPages, safeCurrentPage + 1));
-              }}
-              disabled={loading || safeCurrentPage >= totalPages}
-              aria-label="Next page"
-              title="Next page"
-            >
-              {">"}
-            </button>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(totalPages);
-              }}
-              disabled={loading || safeCurrentPage >= totalPages}
-              aria-label="Last page"
-              title="Last page"
-            >
-              {">>"}
-            </button>
+            {effectiveRowCount > 0 && (
+              <div className="table-view-pagination table-view-pagination--overlay" aria-label="Full table pagination">
+                <div className="table-view-pagination-controls">
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(1);
+                    }}
+                    disabled={loading || safeCurrentPage <= 1}
+                    aria-label="First page"
+                    title="First page"
+                  >
+                    {"<<"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(Math.max(1, safeCurrentPage - 1));
+                    }}
+                    disabled={loading || safeCurrentPage <= 1}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    {"<"}
+                  </button>
+                  <span className="table-view-page-count">
+                    Page{" "}
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className="table-view-page-input"
+                      style={{ width: `${pageInputWidthCh}ch` }}
+                      value={pageInput}
+                      onChange={(event) => {
+                        const digitsOnly = event.target.value.replace(/[^\d]/g, "");
+                        setPageInput(digitsOnly);
+                      }}
+                      onBlur={commitPageInput}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitPageInput();
+                        } else if (event.key === "Escape") {
+                          setPageInput(String(safeCurrentPage));
+                        }
+                      }}
+                      disabled={loading}
+                      aria-label="Current page number"
+                      title="Enter page number"
+                    />{" "}
+                    of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(Math.min(totalPages, safeCurrentPage + 1));
+                    }}
+                    disabled={loading || safeCurrentPage >= totalPages}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    {">"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(totalPages);
+                    }}
+                    disabled={loading || safeCurrentPage >= totalPages}
+                    aria-label="Last page"
+                    title="Last page"
+                  >
+                    {">>"}
+                  </button>
+                </div>
+                <span className="table-view-pagination-meta">
+                  Showing rows {paginationRowStart.toLocaleString()}–
+                  {paginationRowEnd.toLocaleString()} of{" "}
+                  {effectiveRowCount.toLocaleString()}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -421,7 +421,12 @@ function AppContent() {
         >
           <img src={logo} alt="" aria-hidden="true" />
           {!useIconOnlyBrand ? (
-            <span className="app-brand-text">TabulaRAG</span>
+            <span className="app-brand-text">
+              <span className="upload-home-brand__title-tabula">Tabula</span>
+              <span className="upload-home-brand__title-rag">
+                <span className="upload-home-brand__title-r">R</span>AG
+              </span>
+            </span>
           ) : null}
         </Link>
       )}
@@ -440,8 +445,14 @@ function AppContent() {
 
       {isAuthenticated() && user && showInlineTableHeader && (
         <div className="table-shell-top-row">
-          <Link className="app-brand app-brand--icon-only app-brand--inline" to="/" aria-label="Go to home">
+          <Link className="app-brand app-brand--inline" to="/" aria-label="Go to home">
             <img src={logo} alt="" aria-hidden="true" />
+            <span className="app-brand-text app-brand-text--table-shell">
+              <span className="upload-home-brand__title-tabula">Tabula</span>
+              <span className="upload-home-brand__title-rag">
+                <span className="upload-home-brand__title-r">R</span>AG
+              </span>
+            </span>
           </Link>
           {headerNotice ? (
             <div className="table-view-edit-mode-banner app-shell-edit-mode-banner" role="note" aria-label="Edit mode hint">
