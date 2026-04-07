@@ -160,38 +160,42 @@ const FOLDER_INPUT_PROPS: FolderInputProps = {
   directory: "",
 };
 
-const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
-  { value: "recent", label: "Most recent" },
-  { value: "rows", label: "Most rows" },
-  { value: "alphabet", label: "Alphabetical" },
+const TABLE_SORT_MODES: readonly TableSortMode[] = [
+  "recent",
+  "alphabet",
+  "rows",
 ];
+
+function tableCreatedTimeMs(table: TableSummary): number {
+  return Number.isFinite(Date.parse(table.created_at))
+    ? Date.parse(table.created_at)
+    : table.dataset_id;
+}
 
 function compareTablesBySortMode(
   a: TableSummary,
   b: TableSummary,
   sortMode: TableSortMode,
+  direction: "asc" | "desc",
 ): number {
+  let cmp = 0;
   if (sortMode === "alphabet") {
-    const byName = a.name.localeCompare(b.name, undefined, {
+    cmp = a.name.localeCompare(b.name, undefined, {
       sensitivity: "base",
       numeric: true,
     });
-    if (byName !== 0) {
-      return byName;
-    }
   } else if (sortMode === "rows") {
-    const byRows = b.row_count - a.row_count;
-    if (byRows !== 0) {
-      return byRows;
-    }
+    cmp = a.row_count - b.row_count;
+  } else {
+    cmp = tableCreatedTimeMs(a) - tableCreatedTimeMs(b);
   }
 
-  const aTime = Number.isFinite(Date.parse(a.created_at))
-    ? Date.parse(a.created_at)
-    : a.dataset_id;
-  const bTime = Number.isFinite(Date.parse(b.created_at))
-    ? Date.parse(b.created_at)
-    : b.dataset_id;
+  if (cmp !== 0) {
+    return direction === "asc" ? cmp : -cmp;
+  }
+
+  const aTime = tableCreatedTimeMs(a);
+  const bTime = tableCreatedTimeMs(b);
   return bTime - aTime;
 }
 
@@ -199,6 +203,7 @@ function sortTablesForDisplay(
   tables: TableSummary[],
   pinnedIds: Set<number>,
   sortMode: TableSortMode,
+  direction: "asc" | "desc",
 ): TableSummary[] {
   const next = [...tables];
   next.sort((a, b) => {
@@ -207,9 +212,26 @@ function sortTablesForDisplay(
     if (aPinned !== bPinned) {
       return aPinned ? -1 : 1;
     }
-    return compareTablesBySortMode(a, b, sortMode);
+    return compareTablesBySortMode(a, b, sortMode, direction);
   });
   return next;
+}
+
+function defaultTableSortDirection(mode: TableSortMode): "asc" | "desc" {
+  return mode === "alphabet" ? "asc" : "desc";
+}
+
+function formatTableSortDirectionHint(
+  mode: TableSortMode,
+  direction: "asc" | "desc",
+): string {
+  if (mode === "recent") {
+    return direction === "desc" ? "Newest" : "Oldest";
+  }
+  if (mode === "rows") {
+    return direction === "desc" ? "Most rows" : "Fewest rows";
+  }
+  return direction === "asc" ? "A to Z" : "Z to A";
 }
 
 function filterTablesForDisplay(
@@ -431,7 +453,7 @@ function sanitizeTableNameInput(name: string): string {
   );
   /* eslint-enable no-control-regex */
   const allowedCharsOnly = withoutControlChars.replace(/[^A-Za-z0-9 _-]/g, "");
-  const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ").trim();
+  const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ");
   return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
 }
 
@@ -448,14 +470,14 @@ function sanitizeTableDescriptionInput(description: string): string {
 }
 
 function getNameKey(name: string): string {
-  return sanitizeTableNameInput(name).toLocaleLowerCase();
+  return sanitizeTableNameInput(name).trim().toLocaleLowerCase();
 }
 
 function claimUniqueTableName(
   baseName: string,
   occupiedNameKeys: Set<string>,
 ): string {
-  const cleanedBaseName = sanitizeTableNameInput(baseName) || "table";
+  const cleanedBaseName = sanitizeTableNameInput(baseName).trim() || "table";
   let candidate = cleanedBaseName;
   let suffix = 2;
 
@@ -581,6 +603,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
+  const [tableSortDirection, setTableSortDirection] = useState<"asc" | "desc">(
+    () => defaultTableSortDirection("recent"),
+  );
   const [visibleTableCount, setVisibleTableCount] = useState(
     TABLES_RENDER_BATCH_SIZE,
   );
@@ -1019,8 +1044,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    const activeSortIndex = TABLE_SORT_OPTIONS.findIndex(
-      (option) => option.value === tableSortMode,
+    const activeSortIndex = TABLE_SORT_MODES.findIndex(
+      (mode) => mode === tableSortMode,
     );
     const rafId = window.requestAnimationFrame(() => {
       focusByIndex(
@@ -1490,6 +1515,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         nextTables,
         nextPinnedSet,
         tableSortMode,
+        tableSortDirection,
       );
       const nextFilteredTables = filterTablesForDisplay(
         nextSortedTables,
@@ -1497,7 +1523,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       );
       return nextFilteredTables[0] ?? nextSortedTables[0] ?? null;
     },
-    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode],
+    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode, tableSortDirection],
   );
 
   const previewTopDisplayedTable = useCallback(
@@ -1560,8 +1586,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
     );
     const preparedItems = queuedItems.map((item) => {
       const preferredName =
-        sanitizeTableNameInput(item.name) ||
-        sanitizeTableNameInput(item.file.name) ||
+        sanitizeTableNameInput(item.name).trim() ||
+        sanitizeTableNameInput(item.file.name).trim() ||
         "table";
       const normalizedDescription = sanitizeTableDescriptionInput(
         item.description,
@@ -1839,7 +1865,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    const nextName = sanitizeTableNameInput(editingName);
+    const nextName = sanitizeTableNameInput(editingName).trim();
     if (!nextName) {
       setRenameHintId(datasetId);
       setEditingName("");
@@ -1935,7 +1961,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       }
       existingFileKeys.add(fileKey);
 
-      const withoutExt = sanitizeTableNameInput(nextFile.name) || "table";
+      const withoutExt = sanitizeTableNameInput(nextFile.name).trim() || "table";
       const uniqueName = claimUniqueTableName(withoutExt, occupiedNameKeys);
       nextItems.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -2008,7 +2034,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
     candidateName: string,
   ): boolean {
     const normalizedCandidate = sanitizeTableNameInput(candidateName);
-    if (!normalizedCandidate) {
+    if (!normalizedCandidate.trim()) {
       return false;
     }
     const candidateKey = getNameKey(normalizedCandidate);
@@ -2027,7 +2053,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         return false;
       }
       const normalizedItemName = sanitizeTableNameInput(item.name);
-      if (!normalizedItemName) {
+      if (!normalizedItemName.trim()) {
         return false;
       }
       return getNameKey(normalizedItemName) === candidateKey;
@@ -2223,8 +2249,13 @@ export default function Upload({ homeControls = null }: UploadProps) {
     selectedFolder !== null &&
     selectedFolder.privacy !== "public";
   const sortedTables = useMemo(() => {
-    return sortTablesForDisplay(tables, pinnedTableIdSet, tableSortMode);
-  }, [tables, pinnedTableIdSet, tableSortMode]);
+    return sortTablesForDisplay(
+      tables,
+      pinnedTableIdSet,
+      tableSortMode,
+      tableSortDirection,
+    );
+  }, [tables, pinnedTableIdSet, tableSortMode, tableSortDirection]);
   const folderScopedTables = useMemo(() => {
     if (selectedFolderId === null) return sortedTables;
     return sortedTables.filter((table) => table.folder_id === selectedFolderId);
@@ -2254,9 +2285,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
     selectedFolderName,
     tableSearchQuery,
   ]);
-  const tableSortLabel =
-    TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)
-      ?.label || "Most recent";
+  const tableSortHint = formatTableSortDirectionHint(
+    tableSortMode,
+    tableSortDirection,
+  );
 
   function onTogglePin(datasetId: number) {
     setPinnedTableIds((previous) => {
@@ -2267,15 +2299,20 @@ export default function Upload({ homeControls = null }: UploadProps) {
     });
   }
 
-  function selectTableSortMode(nextMode: TableSortMode) {
-    setTableSortMode(nextMode);
-    setSortMenuOpen(false);
-    sortToggleButtonRef.current?.focus();
+  function handleTableSortOptionClick(nextMode: TableSortMode) {
+    if (nextMode === tableSortMode) {
+      setTableSortDirection((previous) =>
+        previous === "asc" ? "desc" : "asc",
+      );
+    } else {
+      setTableSortMode(nextMode);
+      setTableSortDirection(defaultTableSortDirection(nextMode));
+    }
   }
 
   useEffect(() => {
     setVisibleTableCount(TABLES_RENDER_BATCH_SIZE);
-  }, [normalizedTableSearchQuery, tableSortMode]);
+  }, [normalizedTableSearchQuery, tableSortMode, tableSortDirection]);
 
   function applyTableSelectionFromEvent(
     event: React.MouseEvent,
@@ -2358,7 +2395,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
     if (event.key === "End") {
       event.preventDefault();
-      focusByIndex(sortMenuItemRefs.current, TABLE_SORT_OPTIONS.length - 1);
+      focusByIndex(sortMenuItemRefs.current, TABLE_SORT_MODES.length - 1);
       return;
     }
 
@@ -2533,17 +2570,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         )}
 
         {editingId !== null && (
-          <div
-            className="confirm-modal-overlay"
-            onClick={() => {
-              if (busy) return;
-              setEditingId(null);
-              setEditingName("");
-              setEditingDescription("");
-              setEditingFolderId(null);
-              setRenameHintId(null);
-            }}
-          >
+          <div className="confirm-modal-overlay">
             <div
               ref={editDialogRef}
               className="confirm-modal"
@@ -2820,7 +2847,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   const canEditQueuedName =
                     item.phase === "idle" || item.phase === "error";
                   const queueNameIsEmpty =
-                    sanitizeTableNameInput(item.name).length === 0;
+                    sanitizeTableNameInput(item.name).trim().length === 0;
                   const queueNameIsDuplicate =
                     !queueNameIsEmpty &&
                     isQueuedNameDuplicate(item.id, item.name);
@@ -3189,24 +3216,24 @@ export default function Upload({ homeControls = null }: UploadProps) {
                     <button
                       ref={sortToggleButtonRef}
                       type="button"
-                      className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
+                      className={`sort-toggle-button tables-header-sort-toggle${sortMenuOpen ? " active" : ""}`}
                       onClick={() => setSortMenuOpen((current) => !current)}
                       onKeyDown={onSortToggleKeyDown}
                       aria-haspopup="menu"
                       aria-expanded={sortMenuOpen}
                       aria-controls={sortMenuOpen ? sortMenuId : undefined}
-                      aria-label={`Sort tables. Current order: ${tableSortLabel}`}
-                      title="Sort tables"
+                      title={`Sort by: ${tableSortHint}`}
                     >
                       <svg
                         viewBox="0 0 24 24"
-                        role="presentation"
+                        aria-hidden="true"
+                        focusable="false"
                         className="sort-toggle-icon"
                       >
                         <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
                       </svg>
                       <span className="sort-toggle-text">
-                        Sort: {tableSortLabel}
+                        Sort by: {tableSortHint}
                       </span>
                     </button>
                     {sortMenuOpen && (
@@ -3217,23 +3244,40 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         aria-label="Sort options"
                         onKeyDown={onSortMenuKeyDown}
                       >
-                        {TABLE_SORT_OPTIONS.map((option, index) => (
-                          <button
-                            key={option.value}
-                            ref={(element) => {
-                              sortMenuItemRefs.current[index] = element;
-                            }}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={tableSortMode === option.value}
-                            className={`sort-menu-item ${tableSortMode === option.value ? "active" : ""}`}
-                            onClick={() => {
-                              selectTableSortMode(option.value);
-                            }}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
+                        {TABLE_SORT_MODES.map((mode, index) => {
+                          const isActive = tableSortMode === mode;
+                          const inactiveHint = formatTableSortDirectionHint(
+                            mode,
+                            defaultTableSortDirection(mode),
+                          );
+                          return (
+                            <button
+                              key={mode}
+                              ref={(element) => {
+                                sortMenuItemRefs.current[index] = element;
+                              }}
+                              type="button"
+                              role="menuitem"
+                              aria-current={isActive ? "true" : undefined}
+                              className={`sort-menu-item ${isActive ? "active" : ""}`}
+                              onClick={() => {
+                                handleTableSortOptionClick(mode);
+                              }}
+                              aria-label={
+                                isActive
+                                  ? `${formatTableSortDirectionHint(mode, tableSortDirection)}. Click again to reverse order.`
+                                  : `${inactiveHint}. Click to sort.`
+                              }
+                            >
+                              {isActive
+                                ? formatTableSortDirectionHint(
+                                    mode,
+                                    tableSortDirection,
+                                  )
+                                : inactiveHint}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -3309,7 +3353,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 {normalizedTableSearchQuery
                   ? ` matching ${tableSearchQuery.trim()}`
                   : ""}
-                . Sorted by {tableSortLabel}.
+                . Sorted by {tableSortHint}.
               </p>
 
               <div className="uploaded-tables-panel__tables-main">

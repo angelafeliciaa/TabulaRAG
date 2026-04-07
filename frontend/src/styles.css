@@ -1148,7 +1148,7 @@ h3 {
   font-size: 14px;
   font-weight: 500;
   line-height: 1.35;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: none;
 }
 
 .upload-queue-description-input:disabled {
@@ -1168,16 +1168,17 @@ h3 {
   gap: 8px;
 }
 
-/* Remove from queue: compact ghost icon, danger on hover (matches app icon-button) */
+/* Remove from queue: red icon; hover = small round fill, no border */
 .upload-queue-remove.icon-button {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  border-radius: 8px;
-  border-color: transparent;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  border-radius: 999px;
+  border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--danger);
   flex-shrink: 0;
+  box-shadow: none;
 }
 
 .upload-queue-remove.icon-button svg {
@@ -1188,19 +1189,22 @@ h3 {
 .upload-queue-remove.icon-button:hover:not(:disabled),
 .upload-queue-remove.icon-button:focus-visible:not(:disabled) {
   color: var(--danger);
-  border-color: rgba(180, 35, 24, 0.35);
-  background: rgba(180, 35, 24, 0.08);
+  border: none;
+  background: rgba(198, 40, 40, 0.14);
+  box-shadow: none;
 }
 
 .upload-queue-remove.icon-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  color: var(--text-muted);
 }
 
 :root[data-theme="dark"] .upload-queue-remove.icon-button:hover:not(:disabled),
 :root[data-theme="dark"] .upload-queue-remove.icon-button:focus-visible:not(:disabled) {
-  border-color: rgba(198, 40, 40, 0.55);
-  background: rgba(180, 35, 24, 0.2);
+  border: none;
+  background: rgba(198, 40, 40, 0.22);
+  color: var(--danger-strong);
 }
 
 .upload-queue-state {
@@ -3621,6 +3625,29 @@ ul {
   white-space: nowrap;
 }
 
+/* Uploaded tables list: compact fixed width; label left-aligned after icon */
+.sort-toggle-button.tables-header-sort-toggle {
+  width: 188px;
+  min-width: 188px;
+  max-width: 188px;
+  box-sizing: border-box;
+  justify-content: flex-start;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.sort-toggle-button.tables-header-sort-toggle .sort-toggle-icon {
+  flex-shrink: 0;
+}
+
+.sort-toggle-button.tables-header-sort-toggle .sort-toggle-text {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sort-toggle-icon {
   width: 14px;
   height: 14px;
@@ -4506,9 +4533,9 @@ textarea.rename-input.edit-file-description {
 }
 
 :root[data-theme="dark"] .preview-selected-pill.is-active {
-  /* Active tab: lighter than inactive. */
-  background: var(--bg-elev-2);
-  border-color: color-mix(in srgb, var(--border-soft) 55%, var(--border));
+  /* Active tab: clearly lighter than inactive strip. */
+  background: color-mix(in srgb, var(--surface-blur-bg-strong) 88%, #ffffff 12%);
+  border-color: color-mix(in srgb, var(--border-soft) 50%, var(--border) 50%);
   border-bottom-color: transparent;
   color: var(--text);
 }
@@ -7205,9 +7232,9 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active {
-  background: transparent;
+  background: color-mix(in srgb, var(--surface-blur-bg-strong) 88%, #ffffff 12%);
   color: var(--text);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.88);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, #ffffff 30%);
 }
 
 :root[data-theme="dark"] .onboarding-tab:hover:not(.onboarding-tab--active) {
@@ -7216,9 +7243,9 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--surface-blur-bg-strong) 82%, #ffffff 18%);
   color: var(--text);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.95);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 65%, #ffffff 35%);
 }
 
 .onboarding-tab-panel {
