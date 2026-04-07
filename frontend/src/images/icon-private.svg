@@ -1,9 +1,16 @@
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-  <rect x="10" y="28" width="44" height="36" rx="8" fill="#EF5350"/>
-  <rect x="10" y="28" width="44" height="14" rx="8" fill="#E53935"/>
-  <path d="M22 28 L22 16 Q32 4 42 16 L42 28" fill="none" stroke="#E53935" stroke-width="6" stroke-linecap="round"/>
-  <path d="M22 28 L22 16 Q32 4 42 16 L42 28" fill="none" stroke="#EF5350" stroke-width="4" stroke-linecap="round"/>
-  <circle cx="32" cy="44" r="6" fill="#E53935"/>
-  <rect x="29" y="44" width="6" height="8" rx="2" fill="#E53935"/>
-  <ellipse cx="20" cy="33" rx="6" ry="3" fill="rgba(255,255,255,0.25)" transform="rotate(-15,20,33)"/>
+  <!-- lock body (no big square background) -->
+  <rect x="18" y="28" width="28" height="28" rx="6" fill="#EF5350"/>
+  <rect x="18" y="28" width="28" height="10" rx="6" fill="#E53935"/>
+
+  <!-- shackle -->
+  <path d="M24 28 V19 Q24 11 32 11 Q40 11 40 19 V28" fill="none" stroke="#E53935" stroke-width="6" stroke-linecap="round"/>
+  <path d="M24 28 V19 Q24 11 32 11 Q40 11 40 19 V28" fill="none" stroke="#EF5350" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- keyhole -->
+  <circle cx="32" cy="42" r="5" fill="#C62828"/>
+  <rect x="30.5" y="42" width="3" height="7" rx="1.5" fill="#C62828"/>
+
+  <!-- subtle shine -->
+  <ellipse cx="22" cy="34" rx="5.5" ry="2.6" fill="rgba(255,255,255,0.22)" transform="rotate(-15,22,34)"/>
 </svg>

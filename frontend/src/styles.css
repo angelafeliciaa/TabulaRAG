@@ -136,10 +136,60 @@ body {
   overflow: hidden;
 }
 
+/* Global thin scrollbars (Firefox + Chromium/Edge). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 55%, transparent)
+    transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 65%, transparent);
+}
+
 #root {
   width: 100%;
   min-height: 100dvh;
   height: 100dvh;
+}
+
+/* Temporary floating theme toggle (testing only). */
+.theme-float-toggle {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 50000;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg-strong);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.theme-float-toggle:hover,
+.theme-float-toggle:focus-visible {
+  background: var(--surface-blur-bg);
+  border-color: var(--border-soft);
 }
 
 a {
@@ -176,21 +226,39 @@ h3 {
   background-size: 24px 24px;
 }
 
+/* Off-screen until focused — avoid translateY() which can leave a 1px strip at the top. */
 .skip-link {
   position: absolute;
-  left: 16px;
-  top: 16px;
+  left: 0;
+  top: 0;
   z-index: 200;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--text);
-  color: var(--bg-elev);
-  transform: translateY(-140%);
-  transition: transform 0.16s ease;
+  padding: 0;
+  margin: -1px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  transition: none;
 }
 
-.skip-link:focus {
-  transform: translateY(0);
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: 16px;
+  top: 16px;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  overflow: visible;
+  clip-path: none;
+  background: var(--text);
+  color: var(--bg-elev);
+  white-space: normal;
 }
 
 .sr-only {
@@ -556,8 +624,11 @@ h3 {
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(980px, calc(100vw - 36px));
-  height: auto;
-  max-height: min(78vh, 760px);
+  box-sizing: border-box;
+  /* Fixed shell: same height empty vs queue; inner areas scroll/flex. */
+  height: min(92vh, 940px);
+  min-height: min(92vh, 940px);
+  max-height: min(92vh, 940px);
 }
 
 .upload-modal__topbar {
@@ -566,6 +637,7 @@ h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 6px 4px 0;
+  flex-shrink: 0;
 }
 
 .upload-modal__title {
@@ -584,8 +656,8 @@ h3 {
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(980px, calc(100vw - 36px));
-  height: auto;
-  max-height: min(78vh, 760px);
+  height: min(86vh, 860px);
+  max-height: none;
   background: var(--surface-blur-bg-strong);
   border: 1px solid var(--surface-blur-border);
   border-radius: 24px;
@@ -687,6 +759,11 @@ h3 {
 
 .upload-plus-icon {
   display: block;
+  width: 40px;
+  height: 40px;
+  max-width: min(40px, 14vw);
+  max-height: min(40px, 14vw);
+  object-fit: contain;
 }
 
 .upload-drop {
@@ -740,6 +817,16 @@ h3 {
 
 .upload-panel:not(.has-queue) .upload-drop {
   min-height: 150px;
+}
+
+/* Modal: drop zone fills fixed panel below top bar */
+.upload-panel.upload-modal:not(.has-queue) {
+  min-height: 0;
+}
+
+.upload-panel.upload-modal:not(.has-queue) .upload-drop {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .upload-icon {
@@ -907,7 +994,7 @@ h3 {
 
 .upload-queue-list {
   margin: 0;
-  padding: 0;
+  padding: 0 12px;
   list-style: none;
   display: flex;
   flex-direction: column;
@@ -919,13 +1006,29 @@ h3 {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 4px;
+}
+
+.upload-panel.upload-modal.has-queue {
+  min-height: 0;
+}
+
+.upload-panel.upload-modal.has-queue .upload-queue-toolbar {
+  flex-shrink: 0;
+}
+
+.upload-panel.upload-modal.has-queue .upload-queue-footer {
+  flex-shrink: 0;
+}
+
+.upload-panel.upload-modal .upload-panel-status:not(:empty) {
+  flex-shrink: 0;
 }
 
 .upload-panel.in-modal .upload-queue-list,
 .upload-modal .upload-queue-list {
-  flex: 0 1 auto;
-  max-height: min(42vh, 420px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .upload-queue-item {
@@ -1237,6 +1340,55 @@ h3 {
 .confirm-delete-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.confirm-save-button {
+  border: 1px solid var(--success);
+  background: var(--success);
+  color: #fff;
+  border-radius: 10px;
+  padding: 9px 14px;
+  min-width: 96px;
+}
+
+.confirm-save-button:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--success-strong);
+  background: var(--success-strong);
+}
+
+.confirm-save-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Edit-file modal: label on top (left-aligned), field below full width. */
+label.upload-queue-folder-label.edit-file-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.edit-file-field .upload-queue-folder-label-text {
+  align-self: flex-start;
+  margin-bottom: 0;
+}
+
+.edit-file-field--spaced {
+  margin-top: 20px;
+}
+
+.edit-file-description {
+  resize: none;
+  min-height: 0;
+  margin-top: 0;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-y: auto;
 }
 
 @keyframes toastDrop {
@@ -1609,6 +1761,12 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   border-color: var(--border);
 }
 
+/* Panel file rows: thin 1px border; selection adds an outline ring (outline does not shift layout). */
+.panel .list-item {
+  box-sizing: border-box;
+  border-width: 1px;
+}
+
 :root:not([data-theme="dark"]) .panel .list-item,
 :root:not([data-theme="dark"]) .panel .list-item:hover {
   border-color: var(--border);
@@ -1617,13 +1775,15 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
 :root:not([data-theme="dark"]) .panel .list-item.selected {
   background: var(--surface-blur-bg);
   border-color: var(--brand-text);
-  border-width: 2.5px;
+  outline: 2px solid var(--brand-text);
+  outline-offset: -2px;
 }
 
 :root[data-theme="dark"] .panel .list-item.selected {
   background: var(--surface-blur-bg);
   border-color: var(--brand-text);
-  border-width: 2.5px;
+  outline: 2px solid var(--brand-text);
+  outline-offset: -2px;
 }
 
 /* Settings: fixed-size panel, centered vertically + horizontally in main */
@@ -1931,7 +2091,7 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
 }
 
 .settings-my-workspaces-list-scroll-outer::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .settings-my-workspaces-list-scroll-outer::-webkit-scrollbar-track {
@@ -2755,7 +2915,7 @@ button.surface-btn.settings-workspace-admin-remove:focus-visible {
 }
 
 .upload-home-page-scroll::-webkit-scrollbar {
-  width: 10px;
+  width: 6px;
 }
 
 .upload-home-page-scroll::-webkit-scrollbar-track {
@@ -2765,7 +2925,7 @@ button.surface-btn.settings-workspace-admin-remove:focus-visible {
 .upload-home-page-scroll::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.28);
   border-radius: 10px;
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   background-clip: padding-box;
 }
 
@@ -3059,6 +3219,19 @@ ul {
   font-weight: 600;
 }
 
+.tables-empty-state-wrapper--folder-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-top: 0;
+  padding-bottom: 0;
+  /* Slightly above vertical center — reads better under the tables header */
+  transform: translateY(-0.75rem);
+}
+
 .uploaded-tables-panel {
   display: flex;
   flex-direction: column;
@@ -3119,8 +3292,60 @@ ul {
 .uploaded-tables-panel__folders {
   flex: 0 0 var(--folders-pane-width, 280px);
   width: var(--folders-pane-width, 280px);
-  min-width: 220px;
+  min-width: 160px;
   min-height: 0;
+}
+
+.uploaded-tables-panel__folders--collapsed {
+  flex: 0 0 var(--folders-pane-width, 56px);
+  width: var(--folders-pane-width, 56px);
+  min-width: var(--folders-pane-width, 56px);
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel--embedded .folder-panel__title {
+  display: none;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel--embedded .folder-panel__header {
+  /* Padding matches expanded; height comes from .folder-panel--embedded .folder-panel__header min-height. */
+  padding: 0.75rem 0.75rem 0.6rem;
+  justify-content: flex-end;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__item-actions {
+  display: none;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__folder-label {
+  display: none;
+}
+
+/* Icon + count pill stacked in the narrow rail (label hidden) */
+.uploaded-tables-panel__folders--collapsed .folder-panel__folder-name {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  overflow: visible;
+  text-align: center;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__item-main {
+  justify-content: center;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__new-btn,
+.uploaded-tables-panel__folders--collapsed .folder-panel__create-form {
+  display: none;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__item {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__drag-handle {
+  display: none;
 }
 
 .uploaded-tables-panel__folders-resizer {
@@ -3149,6 +3374,17 @@ ul {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding-left: 12px;
+  /* No padding-right: scrollport (.tables-scroll) stays full width so the
+     scrollbar sits on the panel edge; inset is on inner content instead. */
+  padding-right: 0;
+}
+
+.uploaded-tables-panel__tables-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .uploaded-tables-panel__tables .tables-scroll {
@@ -3157,6 +3393,27 @@ ul {
   max-height: none;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Scrollbar at the right edge; horizontal inset is on ul / load-more below */
+  padding: 6px 0 2px;
+}
+
+.uploaded-tables-panel__tables .tables-header-row {
+  padding-right: 12px;
+}
+
+/* Match prior 12px column padding + 10px empty-state horizontal padding on the right */
+.uploaded-tables-panel__tables .tables-empty-state-wrapper {
+  padding-right: 22px;
+}
+
+.uploaded-tables-panel__tables .tables-scroll ul {
+  padding-right: 12px;
+  box-sizing: border-box;
+}
+
+.uploaded-tables-panel__tables .tables-load-more-wrap {
+  padding-right: 12px;
+  box-sizing: border-box;
 }
 
 .tables-load-more-wrap {
@@ -3182,7 +3439,7 @@ ul {
 
 .tables-header-row {
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
 .tables-header-controls {
@@ -3234,6 +3491,15 @@ ul {
   display: inline-flex;
   align-items: center;
   width: min(var(--search-bar-max-width), 100%);
+}
+
+/* Keep Uploaded Tables search width aligned with preview search behavior:
+   same max width, but allow shrinking when header space is tight. */
+.tables-header-controls .tables-search-input-wrap {
+  flex: 0 1 var(--search-bar-max-width);
+  width: auto;
+  max-width: min(var(--search-bar-max-width), 100%);
+  min-width: 0;
 }
 
 /* Shared with .table-view-search — same look as home (tables list + preview search). */
@@ -3420,6 +3686,38 @@ ul {
   position: relative;
 }
 
+/* Scroll indicator button used on `/tables/:id` full-table view. */
+.scroll-indicator {
+  position: absolute;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.scroll-indicator:hover,
+.scroll-indicator:focus-visible {
+  background: var(--bg-elev);
+  border-color: var(--border-soft);
+}
+
+.scroll-indicator:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .full-table-scroll-indicator {
   bottom: 8px;
 }
@@ -3485,6 +3783,10 @@ ul {
   color: var(--danger);
   opacity: 1;
   font-weight: 600;
+}
+
+textarea.rename-input.edit-file-description {
+  min-height: unset;
 }
 
 .list-button {
@@ -3614,12 +3916,12 @@ ul {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 4px;
+  bottom: 2px;
   pointer-events: none;
 }
 
 .list-row-index-track {
-  height: 4px;
+  height: 3px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--border) 40%, transparent);
   overflow: hidden;
@@ -4021,13 +4323,15 @@ ul {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   height: auto;
 }
 
 .upload-preview .table-area {
   flex: 0 0 auto;
   overflow: hidden;
+  /* Visually attach the tab strip to the table card border. */
+  margin-top: -1px;
 }
 
 .upload-preview .table-area .card.table-card {
@@ -4035,6 +4339,9 @@ ul {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top: 0;
 }
 
 .upload-preview .table-scroll {
@@ -4046,7 +4353,7 @@ ul {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-height: 38px;
 }
 
@@ -4054,9 +4361,11 @@ ul {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 38px;
+  overflow: hidden;
 }
 
 .preview-header-left h3 {
@@ -4071,6 +4380,8 @@ ul {
   flex-wrap: nowrap;
   justify-content: flex-end;
   min-width: 0;
+  flex: 0 0 auto;
+  flex-shrink: 0;
 }
 
 .preview-header-right .tables-search-input-wrap {
@@ -4114,6 +4425,180 @@ ul {
   white-space: nowrap;
 }
 
+.preview-selected-pill {
+  height: 30px;
+  border-radius: 10px 10px 0 0;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-elev-2) 78%, var(--border) 22%);
+  color: color-mix(in srgb, var(--text) 92%, var(--text-muted) 8%);
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  /* Browser-like: tabs shrink as more are added. */
+  flex: 0 0 var(--preview-tab-width, 180px);
+}
+
+.preview-selected-pill:hover {
+  background: color-mix(in srgb, var(--bg-elev-2) 80%, var(--border) 20%);
+  border-color: var(--border);
+  border-bottom-color: color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.preview-selected-pill.is-active {
+  background: var(--bg-elev);
+  border-color: color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom-color: transparent; /* tab connects to content */
+  box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.02);
+  color: var(--text);
+}
+
+/* Dark mode: inactive tabs darker than active (swap contrast). */
+:root[data-theme="dark"] .preview-selected-pill {
+  /* Inactive tabs: darker. */
+  background: color-mix(in srgb, var(--bg) 78%, var(--bg-elev) 22%);
+  border-color: color-mix(in srgb, var(--border) 85%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted) 12%);
+}
+
+:root[data-theme="dark"] .preview-selected-pill:hover {
+  background: color-mix(in srgb, var(--bg) 64%, var(--bg-elev) 36%);
+  border-color: color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+:root[data-theme="dark"] .preview-selected-pill.is-active {
+  /* Active tab: lighter than inactive. */
+  background: var(--bg-elev-2);
+  border-color: color-mix(in srgb, var(--border-soft) 55%, var(--border));
+  border-bottom-color: transparent;
+  color: var(--text);
+}
+
+.preview-selected-pills-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.preview-selected-pills-scroll {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+  max-width: 100%;
+  height: 32px;
+  /* Grow into free space so clientWidth matches the strip viewport (not just tab content width).
+     Otherwise tab width math stays circular after shrink and tabs never widen again. */
+  flex: 1 1 0;
+  min-width: 0;
+  /* Prevent layout shift when tabs overflow (Windows scrollbars can take space). */
+  scrollbar-gutter: stable;
+  padding-bottom: 1px; /* cover active tab's bottom border removal */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.preview-selected-pills-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.preview-selected-pill__btn {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.preview-selected-pill__x {
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: 0 0 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-selected-pill__x:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--border) 24%, transparent);
+}
+
+.preview-selected-pills-next {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-selected-pills-prev {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-selected-pills-nav-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.preview-selected-pills-prev:hover {
+  color: var(--text);
+  background: var(--surface-blur-bg-strong);
+  border-color: var(--border-soft);
+}
+
+.preview-selected-pills-next:hover {
+  color: var(--text);
+  background: var(--surface-blur-bg-strong);
+  border-color: var(--border-soft);
+}
+
 :root[data-theme="dark"] .preview-table-name {
   border-color: var(--border);
   background: var(--bg-elev-2);
@@ -4123,7 +4608,7 @@ ul {
   color: var(--text);
 }
 
-/* Edit Full Table link: same design as .sort-toggle-button */
+/* Full Preview link: same design as .sort-toggle-button */
 a.sort-toggle-button.preview-open-link {
   flex-shrink: 0;
   text-decoration: none;
@@ -4509,6 +4994,7 @@ a.sort-toggle-button.preview-open-link {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  margin-top: 16px;
 }
 
 .table-view-pagination-meta {
@@ -4702,7 +5188,7 @@ a.sort-toggle-button.preview-open-link {
 }
 
 .full-table-page {
-  padding-top: 72px;
+  padding-top: 56px;
 }
 
 /* Physical `/tables/:id` view: full viewport width and fill remaining height */
@@ -5387,6 +5873,13 @@ input:focus-visible,
   .upload-panel.in-modal {
     width: calc(100vw - 20px);
     height: min(84vh, 680px);
+  }
+
+  .upload-modal.upload-panel {
+    width: calc(100vw - 20px);
+    height: min(90vh, 720px);
+    min-height: min(90vh, 720px);
+    max-height: min(90vh, 720px);
   }
 
   .upload-queue-footer {
@@ -6515,9 +7008,9 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active {
-  background: var(--text);
-  color: var(--bg);
-  box-shadow: none;
+  background: transparent;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.88);
 }
 
 :root[data-theme="dark"] .onboarding-tab:hover:not(.onboarding-tab--active) {
@@ -6526,9 +7019,9 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active:hover {
-  background: var(--text);
-  color: var(--bg);
-  filter: brightness(1.07);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.95);
 }
 
 .onboarding-tab-panel {
@@ -7410,28 +7903,46 @@ a.login-repo-btn:hover {
   transform: none;
   transition: none;
   z-index: auto;
-  border-right: 1px solid var(--border);
+  border-right: none;
   border-radius: 14px;
   box-shadow: none;
   overflow: hidden;
+  background: var(--bg-elev);
 }
 
 .folder-panel--embedded .folder-panel__header {
   padding: 0.75rem 0.75rem 0.6rem;
   position: sticky;
   top: 0;
-  background: var(--bg-elev);
+  /* Match panel body: same fill as .folder-panel--embedded (sticky needs opaque bg) */
+  background: inherit;
   z-index: 1;
+  /* Same height expanded (title + reorder) vs collapsed (collapse only) so folder rows don’t jump */
+  min-height: 52px;
+  box-sizing: border-box;
+}
+
+/* Light mode: slightly more contrast vs the file list */
+:root:not([data-theme="dark"]) .folder-panel--embedded {
+  background: var(--surface-blur-bg);
+  border-right: 1px solid var(--surface-blur-border);
+}
+
+:root:not([data-theme="dark"]) .folder-panel--embedded .folder-panel__header {
+  border-bottom-color: var(--surface-blur-border);
+}
+
+:root:not([data-theme="dark"]) .folder-panel--embedded .folder-panel__item {
+  border-bottom-color: color-mix(in srgb, var(--surface-blur-border) 82%, transparent);
 }
 
 /* Dark mode: reduce contrast for embedded folder pane */
 :root[data-theme="dark"] .folder-panel--embedded {
   background: var(--surface-blur-bg);
-  border-right-color: var(--surface-blur-border);
+  border-right-color: transparent;
 }
 
 :root[data-theme="dark"] .folder-panel--embedded .folder-panel__header {
-  background: var(--surface-blur-bg);
   border-bottom-color: var(--surface-blur-border);
 }
 
@@ -7444,8 +7955,51 @@ a.login-repo-btn:hover {
   opacity: 0.92;
 }
 
+/* Upload home: folder column is inside `.panel` — match panel surface + square corners so a
+   darker rounded inset (“bevel”) doesn’t reappear; light mode uses a clearer edge vs tables. */
+:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded {
+  background: var(--surface-blur-bg-strong);
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded .folder-panel__header {
+  border-bottom-color: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded .folder-panel__item {
+  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+:root[data-theme="dark"] .uploaded-tables-panel__folders .folder-panel--embedded {
+  background: var(--surface-blur-bg-strong);
+  border-right: 1px solid color-mix(in srgb, var(--surface-blur-border) 55%, transparent);
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .folder-panel__collapse {
   margin-left: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+}
+
+.folder-panel__collapse svg {
+  width: 18px;
+  height: 18px;
+}
+
+.folder-panel__collapse:hover,
+.folder-panel__collapse:focus-visible,
+.folder-panel__collapse:active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
 }
 
 .folder-panel__header {
@@ -7464,8 +8018,56 @@ a.login-repo-btn:hover {
   margin: 0;
 }
 
+.folder-panel__header-start {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.folder-panel__header-menu {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.folder-panel__header-menu-trigger {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.folder-panel__header-menu-trigger:hover,
+.folder-panel__header-menu-trigger:focus-visible {
+  color: var(--text);
+  background: transparent;
+}
+
+.folder-panel__header-menu-trigger--active {
+  color: var(--text);
+}
+
+.folder-panel__header-menu-trigger svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
 .folder-panel__close {
   margin-left: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.folder-panel__close:hover,
+.folder-panel__close:focus-visible,
+.folder-panel__close:active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
 }
 
 .folder-panel__error {
@@ -7499,8 +8101,15 @@ a.login-repo-btn:hover {
   align-items: center;
   gap: 0.5rem;
   padding: 0.35rem 0.75rem 0.35rem 1rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
 }
+
+/* Embedded pane: row height matches expanded (label + actions) when collapsed (icon-only, actions hidden). */
+.folder-panel--embedded .folder-panel__item {
+  min-height: 2.75rem;
+  box-sizing: border-box;
+}
+
 .folder-panel__item:last-child {
   border-bottom: none;
 }
@@ -7508,26 +8117,55 @@ a.login-repo-btn:hover {
 .folder-panel__item-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.folder-panel__drag-handle {
+  flex-shrink: 0;
+  cursor: grab;
+  padding: 2px;
+  line-height: 0;
+  color: var(--text-muted);
+  border-radius: 4px;
+  touch-action: none;
+}
+
+.folder-panel__drag-handle:active {
+  cursor: grabbing;
+}
+
+.folder-panel__item--dragging {
+  opacity: 0.65;
 }
 
 .folder-panel__folder-name {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.4em;
   background: none;
   border: none;
-  padding: 0.25rem 0;
+  padding: 0.35rem 0;
   cursor: pointer;
   color: var(--text);
   font-size: 0.875rem;
   font-weight: 500;
   font-family: inherit;
   text-align: left;
+  width: 100%;
   max-width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.folder-panel__folder-label {
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: 4px;
 }
 .folder-panel__folder-name:hover {
   color: var(--info);
@@ -7535,6 +8173,13 @@ a.login-repo-btn:hover {
 .folder-panel__folder-name[aria-current="true"] {
   color: var(--info);
 }
+
+/* Light mode: no tinted hover background. */
+.folder-panel__item:hover {
+  background: transparent;
+}
+
+/* Selected folder: no "blue block" background, just blue icon/text. */
 .folder-panel__folder-name:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -7584,20 +8229,47 @@ a.login-repo-btn:hover {
   opacity: 1;
 }
 
-/* Folder row kebab menu (keep privacy badge inline) */
+/* Folder row kebab: hidden until hover/focus; stay visible while menu is open. */
 .folder-action-menu {
   position: relative;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.folder-panel__item:hover .folder-action-menu,
-.folder-action-menu:focus-within {
-  opacity: 1;
 }
 
 .folder-action-menu__trigger {
-  opacity: 0.85;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.folder-panel__item:hover .folder-action-menu__trigger,
+.folder-action-menu:focus-within .folder-action-menu__trigger,
+.folder-action-menu__trigger[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch / no fine pointer: no row hover — keep ⋮ available */
+@media (hover: none), (pointer: coarse) {
+  .folder-action-menu__trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Reorder mode on (was header ⋮ “active”); keep row ⋮ visible and emphasized */
+.folder-action-menu__trigger--reorder-active {
+  color: var(--text);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.folder-action-menu__trigger:hover,
+.folder-action-menu__trigger:focus {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .folder-action-menu__dropdown {
@@ -7675,9 +8347,25 @@ a.login-repo-btn:hover {
   gap: 0.5rem;
 }
 
+.folder-panel__create-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .folder-panel__create-input {
   width: 100%;
   font-size: 0.875rem;
+  padding-right: 46px; /* space for privacy icon */
+}
+
+.folder-panel__create-privacy {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
 }
 
 .folder-panel__create-row {
@@ -7871,23 +8559,13 @@ a.login-repo-btn:hover {
   display: inline-block;
 }
 
-/* colours */
-.privacy-badge--success {
-  background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success) 35%, transparent);
-  color: var(--success-text);
-}
-
-.privacy-badge--warning {
-  background: var(--warning-soft);
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-  color: var(--warning-strong);
-}
-
+/* colours (icon-only: no background chip) */
+.privacy-badge--success,
+.privacy-badge--warning,
 .privacy-badge--muted {
-  background: var(--tag);
-  border-color: var(--border);
-  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
 }
 
 /* select (admin editable) variant */

@@ -48,7 +48,7 @@ function workspaceRoleLabel(role: WorkspaceSummary["role"]): string {
 
 function AppContent() {
   const location = useLocation();
-  const { sessionRev, bumpSession, headerNotice } = useAppUi();
+  const { sessionRev, bumpSession, headerNotice, theme, setTheme } = useAppUi();
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
 
   const user = getUser();
@@ -533,6 +533,17 @@ function AppContent() {
           />
         </Routes>
       </main>
+
+      {/* Temporary theme toggle for quick UI testing. */}
+      <button
+        type="button"
+        className="theme-float-toggle"
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      >
+        {theme === "dark" ? "Light" : "Dark"}
+      </button>
     </div>
   );
 }

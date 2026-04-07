@@ -974,6 +974,17 @@ export async function deleteFolder(folderId: number): Promise<void> {
   }
 }
 
+export async function reorderFolders(folderIds: number[]): Promise<void> {
+  const res = await authFetch(`${API_BASE}/folders/reorder`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ folder_ids: folderIds }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+}
+
 export interface FolderDatasets {
   folder_id: number;
   name: string;

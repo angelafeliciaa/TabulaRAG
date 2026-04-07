@@ -8,6 +8,7 @@ import {
   listFolderGroups,
   listFolders,
   listGroups,
+  reorderFolders,
   revokeGroupFolderAccess,
   updateFolder,
   type Folder,
@@ -30,10 +31,27 @@ type Props = {
   /** Optional collapse/expand toggle (used by embedded pane header). */
   onTogglePane?: () => void;
   togglePaneLabel?: string;
+  /** Trigger a refetch when this value changes (e.g., after upload/delete). */
+  refreshKey?: number;
 };
 
 type EditState = { folderId: number; name: string };
 type GroupsState = { grants: FolderGroupGrant[]; loading: boolean; error: string | null };
+
+function moveFolderInList(
+  list: Folder[],
+  draggedId: number,
+  targetId: number,
+): Folder[] {
+  if (draggedId === targetId) return list;
+  const from = list.findIndex((f) => f.folder_id === draggedId);
+  const to = list.findIndex((f) => f.folder_id === targetId);
+  if (from < 0 || to < 0) return list;
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
 
 export default function FolderSidePanel({
   open,
@@ -44,6 +62,7 @@ export default function FolderSidePanel({
   selectedFolderId = null,
   onTogglePane,
   togglePaneLabel = "Collapse folders pane",
+  refreshKey = 0,
 }: Props) {
   const isEmbedded = variant === "embedded";
   const isOverlay = !isEmbedded;
@@ -60,6 +79,7 @@ export default function FolderSidePanel({
 
   // delete
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteConfirmFolder, setDeleteConfirmFolder] = useState<Folder | null>(null);
 
   // per-folder action menu
   const [folderActionMenuOpenId, setFolderActionMenuOpenId] = useState<number | null>(null);
@@ -76,6 +96,7 @@ export default function FolderSidePanel({
   const [newPrivacy, setNewPrivacy] = useState<FolderPrivacy>("protected");
   const [createBusy, setCreateBusy] = useState(false);
   const createInputRef = useRef<HTMLInputElement>(null);
+  const createFormRef = useRef<HTMLFormElement | null>(null);
 
   // group restriction picker (admin, protected folders only)
   const [allGroups, setAllGroups] = useState<UserGroup[]>([]);
@@ -85,8 +106,11 @@ export default function FolderSidePanel({
   const [addGroupBusy, setAddGroupBusy] = useState(false);
   const [addGroupError, setAddGroupError] = useState<string | null>(null);
   const [revokingGroupId, setRevokingGroupId] = useState<number | null>(null);
+  const [draggingFolderId, setDraggingFolderId] = useState<number | null>(null);
+  /** When true, drag handles appear and rows can be reordered (any member; not admin-only). */
+  const [folderReorderMode, setFolderReorderMode] = useState(false);
 
-  // load folders (and groups for admin) whenever panel opens
+  // load folders (and groups for admin) whenever panel opens / refreshes
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
@@ -109,7 +133,57 @@ export default function FolderSidePanel({
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load folders"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [isOpen, isAdmin]);
+  }, [isOpen, isAdmin, refreshKey]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setFolderReorderMode(false);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (folders.length <= 1) {
+      setFolderReorderMode(false);
+    }
+  }, [folders.length]);
+
+  /** Click outside the folder panel (or its portaled menus) ends reorder mode. */
+  useEffect(() => {
+    if (!folderReorderMode) return;
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".folder-panel")) return;
+      if (target.closest("[data-folder-panel-popover]")) return;
+      if (target.closest(".privacy-badge-menu") || target.closest(".privacy-badge-wrap")) {
+        return;
+      }
+      setFolderReorderMode(false);
+    }
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, [folderReorderMode]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (folderReorderMode) {
+        setFolderReorderMode(false);
+        return;
+      }
+      if (folderActionMenuOpenId !== null) {
+        setFolderActionMenuOpenId(null);
+        setFolderActionMenuPos(null);
+        return;
+      }
+      if (isOverlay && isOpen) onClose();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [folderReorderMode, folderActionMenuOpenId, isOverlay, isOpen, onClose]);
 
   // focus rename input when editing starts
   useEffect(() => {
@@ -121,15 +195,29 @@ export default function FolderSidePanel({
     if (showCreate) createInputRef.current?.focus();
   }, [showCreate]);
 
-  // close on Escape
+  // click-away should cancel create (unless busy)
   useEffect(() => {
-    if (!isOverlay || !isOpen) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+    if (!showCreate) return;
+
+    function cancelCreate() {
+      setShowCreate(false);
+      setNewName("");
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isOverlay, isOpen, onClose]);
+
+    function onPointerDown(event: PointerEvent) {
+      if (createBusy) return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (createFormRef.current?.contains(target)) return;
+      // Privacy dropdown is rendered in a portal; interacting with it should not cancel create.
+      if (target.closest(".privacy-badge-menu")) return;
+      if (target.closest(".privacy-badge-wrap")) return;
+      cancelCreate();
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [createBusy, showCreate]);
 
   useEffect(() => {
     if (folderActionMenuOpenId === null) return;
@@ -143,15 +231,9 @@ export default function FolderSidePanel({
       setFolderActionMenuOpenId(null);
     }
 
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setFolderActionMenuOpenId(null);
-    }
-
     window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
     };
   }, [folderActionMenuOpenId]);
 
@@ -190,7 +272,6 @@ export default function FolderSidePanel({
   }
 
   async function handleDelete(folder: Folder) {
-    if (!window.confirm(`Delete folder "${folder.name}"? Datasets inside will become unassigned.`)) return;
     setDeletingId(folder.folder_id);
     setError(null);
     try {
@@ -310,6 +391,56 @@ export default function FolderSidePanel({
 
   return (
     <>
+      {deleteConfirmFolder && (
+        <div
+          className="confirm-modal-overlay"
+          onClick={() => {
+            if (deletingId !== null) return;
+            setDeleteConfirmFolder(null);
+          }}
+        >
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="folder-delete-confirm-title"
+            aria-describedby="folder-delete-confirm-description"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="folder-delete-confirm-title">Delete folder permanently?</h3>
+            <p id="folder-delete-confirm-description" className="small">
+              This will permanently delete{" "}
+              <span className="confirm-modal-table-name">
+                {deleteConfirmFolder.name}
+              </span>
+              . Files inside will be moved to{" "}
+              <span className="confirm-modal-table-name">Unassigned</span>.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="surface-btn"
+                onClick={() => setDeleteConfirmFolder(null)}
+                disabled={deletingId !== null}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="confirm-delete-button"
+                onClick={() => {
+                  const folder = deleteConfirmFolder;
+                  setDeleteConfirmFolder(null);
+                  void handleDelete(folder);
+                }}
+                disabled={deletingId !== null}
+              >
+                {deletingId === deleteConfirmFolder.folder_id ? "Deleting..." : "Permanently delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* backdrop (overlay only) */}
       {isOverlay && (
         <div
@@ -330,7 +461,9 @@ export default function FolderSidePanel({
         role="complementary"
       >
         <div className="folder-panel__header">
-          <h2 className="folder-panel__title">Folders</h2>
+          <div className="folder-panel__header-start">
+            <h2 className="folder-panel__title">Folders</h2>
+          </div>
           {isEmbedded && onTogglePane && (
             <button
               type="button"
@@ -340,7 +473,7 @@ export default function FolderSidePanel({
               onClick={onTogglePane}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                {/* Sidebar/panel icon */}
+                {/* Sidebar / panel icon */}
                 <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm6 0H6v14h4V5zm2 0v14h6V5h-6z" />
               </svg>
             </button>
@@ -377,10 +510,63 @@ export default function FolderSidePanel({
                 const groupsState = folderGroupsMap.get(folder.folder_id);
                 const grantedGroupIds = new Set(groupsState?.grants.map((g) => g.group_id) ?? []);
                 const addableGroups = allGroups.filter((g) => !grantedGroupIds.has(g.group_id));
+                const reorderingActive = folderReorderMode && !isEditing;
 
                 return (
-                  <li key={folder.folder_id} className="folder-panel__item">
+                  <li
+                    key={folder.folder_id}
+                    className={`folder-panel__item${draggingFolderId === folder.folder_id ? " folder-panel__item--dragging" : ""}`}
+                    onDragOver={
+                      reorderingActive
+                        ? (e) => {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "move";
+                          }
+                        : undefined
+                    }
+                    onDrop={
+                      reorderingActive
+                        ? (e) => {
+                            e.preventDefault();
+                            const raw = e.dataTransfer.getData("text/plain");
+                            const draggedId = parseInt(raw, 10);
+                            if (!Number.isFinite(draggedId)) return;
+                            setFolders((prev) => {
+                              const next = moveFolderInList(prev, draggedId, folder.folder_id);
+                              void reorderFolders(next.map((f) => f.folder_id)).catch(() => {
+                                void listFolders().then(setFolders);
+                              });
+                              return next;
+                            });
+                            setDraggingFolderId(null);
+                          }
+                        : undefined
+                    }
+                  >
                     <div className="folder-panel__item-main">
+                      {reorderingActive && (
+                        <div
+                          className="folder-panel__drag-handle"
+                          draggable
+                          onDragStart={(e) => {
+                            setDraggingFolderId(folder.folder_id);
+                            e.dataTransfer.setData("text/plain", String(folder.folder_id));
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragEnd={() => setDraggingFolderId(null)}
+                          aria-label={`Drag to reorder ${folder.name}`}
+                          title="Drag to reorder"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" width={14} height={14}>
+                            <circle cx="9" cy="7" r="1.5" fill="currentColor" />
+                            <circle cx="15" cy="7" r="1.5" fill="currentColor" />
+                            <circle cx="9" cy="12" r="1.5" fill="currentColor" />
+                            <circle cx="15" cy="12" r="1.5" fill="currentColor" />
+                            <circle cx="9" cy="17" r="1.5" fill="currentColor" />
+                            <circle cx="15" cy="17" r="1.5" fill="currentColor" />
+                          </svg>
+                        </div>
+                      )}
                       {isEditing ? (
                         <input
                           ref={renameInputRef}
@@ -406,21 +592,21 @@ export default function FolderSidePanel({
                           <svg className="folder-panel__folder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                             <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
                           </svg>
-                          <span>{folder.name}</span>
+                          <span className="folder-panel__folder-label">{folder.name}</span>
                           <span className="folder-panel__dataset-count">{folder.dataset_count}</span>
                         </button>
                       )}
                     </div>
 
                     <div className="folder-panel__item-actions">
-                      {isAdmin && !isEditing && (
+                      {!isEditing && (isAdmin || folders.length > 1) && (
                         <div
                           className="folder-action-menu"
                           data-folder-action-menu-root={folder.folder_id}
                         >
                           <button
                             type="button"
-                            className="icon-button folder-action-menu__trigger"
+                            className={`icon-button folder-action-menu__trigger${folderReorderMode && folders.length > 1 ? " folder-action-menu__trigger--reorder-active" : ""}`}
                             aria-label={`Folder actions for "${folder.name}"`}
                             aria-haspopup="menu"
                             aria-expanded={folderActionMenuOpenId === folder.folder_id}
@@ -456,6 +642,7 @@ export default function FolderSidePanel({
                               <div
                                 className="folder-action-menu__dropdown"
                                 role="menu"
+                                data-folder-panel-popover
                                 data-folder-action-menu-root={folder.folder_id}
                                 style={{
                                   position: "fixed",
@@ -463,7 +650,22 @@ export default function FolderSidePanel({
                                   right: folderActionMenuPos.right,
                                 }}
                               >
-                                {isOwner() && folder.privacy === "protected" && (
+                                {folders.length > 1 && (
+                                  <button
+                                    type="button"
+                                    className="folder-action-menu__item"
+                                    role="menuitem"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      setFolderReorderMode((v) => !v);
+                                      setFolderActionMenuOpenId(null);
+                                      setFolderActionMenuPos(null);
+                                    }}
+                                  >
+                                    {folderReorderMode ? "Done reordering" : "Reorder folders"}
+                                  </button>
+                                )}
+                                {isAdmin && isOwner() && folder.privacy === "protected" && (
                                   <button
                                     type="button"
                                     className="folder-action-menu__item"
@@ -478,32 +680,36 @@ export default function FolderSidePanel({
                                     {isGroupsExpanded ? "Hide group restrictions" : "Group restrictions"}
                                   </button>
                                 )}
-                                <button
-                                  type="button"
-                                  className="folder-action-menu__item"
-                                  role="menuitem"
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    setFolderActionMenuOpenId(null);
-                                    setFolderActionMenuPos(null);
-                                    startRename(folder);
-                                  }}
-                                >
-                                  Rename
-                                </button>
-                                <button
-                                  type="button"
-                                  className="folder-action-menu__item folder-action-menu__item--danger"
-                                  role="menuitem"
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    setFolderActionMenuOpenId(null);
-                                    setFolderActionMenuPos(null);
-                                    void handleDelete(folder);
-                                  }}
-                                >
-                                  Delete
-                                </button>
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    className="folder-action-menu__item"
+                                    role="menuitem"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      setFolderActionMenuOpenId(null);
+                                      setFolderActionMenuPos(null);
+                                      startRename(folder);
+                                    }}
+                                  >
+                                    Rename
+                                  </button>
+                                )}
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    className="folder-action-menu__item folder-action-menu__item--danger"
+                                    role="menuitem"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      setFolderActionMenuOpenId(null);
+                                      setFolderActionMenuPos(null);
+                                      setDeleteConfirmFolder(folder);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
                               </div>,
                               document.body,
                             )}
@@ -596,37 +802,42 @@ export default function FolderSidePanel({
           {/* create folder form */}
           {isAdmin && (
             showCreate ? (
-              <form className="folder-panel__create-form" onSubmit={(e) => void handleCreate(e)}>
-                <input
-                  ref={createInputRef}
-                  className="input folder-panel__create-input"
-                  placeholder="Folder name"
-                  value={newName}
-                  disabled={createBusy}
-                  aria-label="New folder name"
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Escape") { setShowCreate(false); setNewName(""); } }}
-                />
-                <div className="folder-panel__create-row">
-                  <FolderPrivacyBadge
-                    privacy={newPrivacy}
-                    onChange={setNewPrivacy}
+              <form
+                ref={createFormRef}
+                className="folder-panel__create-form"
+                onSubmit={(e) => void handleCreate(e)}
+              >
+                <div className="folder-panel__create-input-wrap">
+                  <input
+                    ref={createInputRef}
+                    className="input folder-panel__create-input"
+                    placeholder="Folder name"
+                    value={newName}
                     disabled={createBusy}
+                    aria-label="New folder name"
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setShowCreate(false);
+                        setNewName("");
+                      }
+                    }}
                   />
+                  <div className="folder-panel__create-privacy">
+                    <FolderPrivacyBadge
+                      privacy={newPrivacy}
+                      onChange={setNewPrivacy}
+                      disabled={createBusy}
+                    />
+                  </div>
+                </div>
+                <div className="folder-panel__create-row">
                   <button
                     type="submit"
                     className="login-btn folder-panel__create-submit"
                     disabled={createBusy || !newName.trim()}
                   >
                     {createBusy ? "Creating…" : "Create"}
-                  </button>
-                  <button
-                    type="button"
-                    className="surface-btn"
-                    disabled={createBusy}
-                    onClick={() => { setShowCreate(false); setNewName(""); }}
-                  >
-                    Cancel
                   </button>
                 </div>
               </form>

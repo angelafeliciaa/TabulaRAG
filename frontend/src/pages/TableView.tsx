@@ -429,8 +429,6 @@ export default function TableView() {
   const [dateMenu, setDateMenu] = useState<DateMenuState>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
-  const [showScrollHint, setShowScrollHint] = useState(false);
-  const [tableAtBottom, setTableAtBottom] = useState(false);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [sliceEpoch, setSliceEpoch] = useState(0);
@@ -1145,31 +1143,9 @@ export default function TableView() {
   }, [dateMenu, dateViewMode]);
 
   useEffect(() => {
-    const container = tableAreaRef.current;
-    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
-    if (!element) {
-      setShowScrollHint(false);
-      setTableAtBottom(false);
-      return;
-    }
-
-    const updateHint = () => {
-      const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
-      const canScroll = element.scrollHeight > element.clientHeight + 2;
-      setShowScrollHint(canScroll);
-      setTableAtBottom(atBottom);
-    };
-
-    const rafId = window.requestAnimationFrame(updateHint);
-    element.addEventListener("scroll", updateHint);
-    window.addEventListener("resize", updateHint);
-
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      element.removeEventListener("scroll", updateHint);
-      window.removeEventListener("resize", updateHint);
-    };
-  }, [displayRows.length, data?.columns.length, data?.offset, loading, err, dateViewMode]);
+    // Removed scroll-indicator UI; keep full-table view clean.
+    return;
+  }, []);
 
   useEffect(() => {
     const container = tableAreaRef.current;
@@ -1230,19 +1206,6 @@ export default function TableView() {
       container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
     }, 0);
   }, [data, effectiveHighlightRow, displayRows.length, dateViewMode]);
-
-  function scrollTableToEdge() {
-    const container = tableAreaRef.current;
-    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
-    if (!element) {
-      return;
-    }
-    if (tableAtBottom) {
-      element.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }
 
   function commitPageInput() {
     const trimmed = pageInput.trim();
@@ -1446,7 +1409,7 @@ export default function TableView() {
           </Link>
         </div>
       )}
-      <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card" style={{ marginBottom: 8 }}>
         <div className="row table-view-header-row" style={{ justifyContent: "space-between" }}>
           <div className="table-view-header-main">
             <div className="table-view-title">{headerTitle}</div>
@@ -1638,17 +1601,6 @@ export default function TableView() {
               pendingCellEditValues={isPlainDatasetView ? pendingCellEditValues : undefined}
               pendingHeaderColumns={isPlainDatasetView ? pendingHeaderColumnsSet : undefined}
             />
-            {showScrollHint && (
-              <button
-                type="button"
-                className="scroll-indicator full-table-scroll-indicator"
-                onClick={scrollTableToEdge}
-                aria-label={tableAtBottom ? "Scroll table to top" : "Scroll table to bottom"}
-                title={tableAtBottom ? "Scroll to top" : "Scroll to bottom"}
-              >
-                {tableAtBottom ? "▲" : "▼"}
-              </button>
-            )}
             </div>
           </div>
         </div>
