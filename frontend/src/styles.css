@@ -542,6 +542,41 @@ h3 {
   background: rgba(0, 0, 0, 0.35);
 }
 
+.upload-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.upload-modal {
+  position: fixed;
+  z-index: 221;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(980px, calc(100vw - 36px));
+  height: auto;
+  max-height: min(78vh, 760px);
+}
+
+.upload-modal__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px 0;
+}
+
+.upload-modal__title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .upload-panel.in-modal {
   position: fixed;
   z-index: 21;
@@ -642,7 +677,7 @@ h3 {
 .upload-add-more-button__icon {
   width: 18px;
   height: 18px;
-  object-fit: contain;
+  display: block;
   flex: 0 0 18px;
 }
 
@@ -887,7 +922,8 @@ h3 {
   padding-right: 4px;
 }
 
-.upload-panel.in-modal .upload-queue-list {
+.upload-panel.in-modal .upload-queue-list,
+.upload-modal .upload-queue-list {
   flex: 0 1 auto;
   max-height: min(42vh, 420px);
 }
@@ -1271,11 +1307,11 @@ h3 {
 }
 
 .top-bar--home {
-  position: static;
+  position: relative;
   top: auto;
   right: auto;
   gap: 8px;
-  z-index: 1;
+  z-index: 20000;
 }
 
 /* Home: workspace switcher uses same control + menu pattern as “Sort uploaded tables” */
@@ -1283,6 +1319,8 @@ h3 {
   flex-shrink: 1;
   min-width: 0;
   margin-right: 4px;
+  position: relative;
+  z-index: 20001;
 }
 
 .top-bar--home .top-bar-workspace-menu-wrap {
@@ -1402,10 +1440,25 @@ h3 {
 }
 
 .top-bar-workspace-menu {
-  z-index: 120;
+  z-index: 20010;
   /* Wide enough for “Add or join workspace” on one line at 13px / 600 */
   min-width: min(100vw - 3rem, 21rem);
   max-width: min(100vw - 2rem, 28rem);
+  max-height: min(35vh, 240px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.top-bar-workspace-menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.top-bar-workspace-menu-add {
+  flex-shrink: 0;
 }
 
 .top-bar-workspace-menu-sep {
@@ -3009,13 +3062,96 @@ ul {
 .uploaded-tables-panel {
   display: flex;
   flex-direction: column;
+  height: clamp(420px, 60vh, 740px);
   min-height: 0;
-  max-height: 45vh;
   /* Don't clip the sort dropdown (position: absolute); scrolling stays on .tables-scroll */
   overflow: visible;
 }
 
-.uploaded-tables-panel .tables-scroll {
+.uploaded-tables-panel__content {
+  display: flex;
+  gap: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.folders-rail {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.folders-rail--collapsed {
+  width: 44px;
+}
+
+.folders-rail--open {
+  width: var(--folders-pane-width, 280px);
+}
+
+.folders-rail__toggle {
+  width: 44px;
+  flex: 0 0 44px;
+  border-radius: 12px;
+  margin: 2px 6px 2px 2px;
+  align-self: flex-start;
+}
+
+.folders-rail__toggle-icon {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* When expanded, dock the toggle on the right edge */
+.folders-rail--open .folders-rail__toggle {
+  display: none;
+}
+
+.uploaded-tables-panel__folders,
+.folder-panel--embedded,
+.folder-panel--embedded .folder-panel__body {
+  overflow-x: hidden;
+}
+
+.uploaded-tables-panel__folders {
+  flex: 0 0 var(--folders-pane-width, 280px);
+  width: var(--folders-pane-width, 280px);
+  min-width: 220px;
+  min-height: 0;
+}
+
+.uploaded-tables-panel__folders-resizer {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  position: relative;
+}
+.uploaded-tables-panel__folders-resizer::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 3px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  opacity: 0.35;
+}
+.uploaded-tables-panel__folders-resizer:hover::before {
+  opacity: 0.9;
+}
+
+.uploaded-tables-panel__tables {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.uploaded-tables-panel__tables .tables-scroll {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
@@ -3056,6 +3192,41 @@ ul {
   margin-left: auto;
   flex: 1 1 auto;
   justify-content: flex-end;
+}
+
+.tables-header-upload-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.tables-header-upload-btn:hover {
+  color: var(--text);
+}
+
+.tables-header-upload-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tables-header-upload-btn:focus-visible {
+  outline: 2px solid var(--border-soft);
+  outline-offset: 2px;
+}
+
+.tables-header-upload-btn svg {
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
 .tables-search-input-wrap {
@@ -3111,7 +3282,7 @@ ul {
 .sort-menu-wrap {
   position: relative;
   display: inline-flex;
-  z-index: 2;
+  z-index: auto;
 }
 
 .sort-toggle-button {
@@ -3187,7 +3358,16 @@ ul {
   border: 1px solid var(--surface-blur-border);
   background: var(--surface-blur-bg-strong);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  z-index: 50;
+  z-index: 5;
+}
+
+/* Ensure top-right menus always layer above in-page controls (e.g. Sort tables). */
+.sort-menu.top-bar-workspace-menu {
+  z-index: 20010;
+}
+
+.sort-menu.top-bar-account-menu {
+  z-index: 20011;
 }
 
 :root[data-theme="dark"] .sort-menu {
@@ -3236,46 +3416,6 @@ ul {
   margin-bottom: 0;
 }
 
-.scroll-indicator {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 48px;
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  background: var(--surface-blur-bg);
-  border: 1px solid var(--surface-blur-border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 12px;
-  box-shadow: none;
-  cursor: pointer;
-  pointer-events: auto;
-  padding: 0;
-  z-index: 2;
-}
-
-.scroll-indicator:hover {
-  transform: translateX(-50%);
-  background: var(--surface-blur-bg-strong);
-  border-color: var(--border-soft);
-}
-
-.scroll-indicator:focus {
-  transform: translateX(-50%);
-}
-
-.preview-scroll-indicator {
-  bottom: 10px;
-}
-
-.uploaded-scroll-indicator {
-  bottom: 12px;
-}
-
 .full-table-area {
   position: relative;
 }
@@ -3294,6 +3434,11 @@ ul {
   align-items: center;
   gap: 5px;
   overflow: visible;
+}
+
+/* Make the whole row look like a list-item (bordered container). */
+.list-row.list-item {
+  position: relative;
 }
 
 .list-item {
@@ -3464,6 +3609,41 @@ ul {
   gap: 3px;
 }
 
+/* Inline indexing bar inside the list row (no "Indexed" pill). */
+.list-row-index {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 4px;
+  pointer-events: none;
+}
+
+.list-row-index-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  overflow: hidden;
+}
+
+.list-row-index-fill {
+  height: 100%;
+  border-radius: inherit;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 220ms ease;
+}
+
+.list-row-index-fill.indexing {
+  background: linear-gradient(
+    90deg,
+    var(--info),
+    var(--info-strong),
+    var(--info)
+  );
+  background-size: 200% 100%;
+  animation: indexJobFlow 1.3s linear infinite;
+}
+
 .index-job-head {
   display: flex;
   align-items: center;
@@ -3615,6 +3795,82 @@ ul {
   width: var(--table-row-control-height);
   height: var(--table-row-control-height);
   min-width: var(--table-row-control-height);
+}
+
+/* Row action kebab (Azure DevOps-style) */
+.row-action-menu {
+  position: relative;
+  margin-left: 6px;
+  opacity: 1;
+}
+
+/* Always visible now (no hover-only reveal). */
+
+.row-action-menu__trigger {
+  width: var(--table-row-control-height);
+  height: var(--table-row-control-height);
+  min-width: var(--table-row-control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 10px;
+  color: var(--text-muted);
+}
+
+.row-action-menu__trigger:hover {
+  color: var(--text);
+}
+
+.row-action-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 140px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
+}
+
+.row-action-menu__item {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.row-action-menu__item,
+.folder-action-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-item-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: currentColor;
+  opacity: 0.9;
+}
+
+.row-action-menu__item:hover {
+  background: var(--surface-blur-bg);
+}
+
+.row-action-menu__item--danger {
+  color: var(--danger);
 }
 
 .icon-button:hover,
@@ -6455,7 +6711,7 @@ a.login-repo-btn:hover {
 .top-bar-account-menu-wrap {
   position: relative;
   display: inline-flex;
-  z-index: 2;
+  z-index: 20002;
 }
 
 .top-bar-account-trigger {
@@ -6494,7 +6750,7 @@ a.login-repo-btn:hover {
 }
 
 .top-bar-account-menu {
-  z-index: 125;
+  z-index: 20011;
   right: 0;
   left: auto;
   width: min(240px, calc(100vw - 1.5rem));
@@ -6804,11 +7060,6 @@ a.login-repo-btn:hover {
 .folder-detail-search {
   margin-bottom: 0.5rem;
   max-width: 100%;
-}
-
-/* ── Upload page — folder additions ────────────────────────────────────── */
-.folder-panel-toggle {
-  /* matches sort-toggle-button but signals folder */
 }
 
 .folder-panel-toggle__icon {
@@ -7149,6 +7400,54 @@ a.login-repo-btn:hover {
   transform: translateX(0);
 }
 
+.folder-panel--embedded {
+  position: static;
+  inset: auto;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  transform: none;
+  transition: none;
+  z-index: auto;
+  border-right: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.folder-panel--embedded .folder-panel__header {
+  padding: 0.75rem 0.75rem 0.6rem;
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+
+/* Dark mode: reduce contrast for embedded folder pane */
+:root[data-theme="dark"] .folder-panel--embedded {
+  background: var(--surface-blur-bg);
+  border-right-color: var(--surface-blur-border);
+}
+
+:root[data-theme="dark"] .folder-panel--embedded .folder-panel__header {
+  background: var(--surface-blur-bg);
+  border-bottom-color: var(--surface-blur-border);
+}
+
+:root[data-theme="dark"] .folder-panel--embedded .folder-panel__item {
+  border-bottom-color: color-mix(in srgb, var(--surface-blur-border) 70%, transparent);
+}
+
+:root[data-theme="dark"] .folder-panel--embedded .folder-panel__folder-name:hover {
+  color: var(--text);
+  opacity: 0.92;
+}
+
+.folder-panel__collapse {
+  margin-left: auto;
+}
+
 .folder-panel__header {
   display: flex;
   align-items: center;
@@ -7233,6 +7532,9 @@ a.login-repo-btn:hover {
 .folder-panel__folder-name:hover {
   color: var(--info);
 }
+.folder-panel__folder-name[aria-current="true"] {
+  color: var(--info);
+}
 .folder-panel__folder-name:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -7280,6 +7582,56 @@ a.login-repo-btn:hover {
 .folder-panel__action-btn--danger:hover:not(:disabled) {
   color: var(--danger);
   opacity: 1;
+}
+
+/* Folder row kebab menu (keep privacy badge inline) */
+.folder-action-menu {
+  position: relative;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.folder-panel__item:hover .folder-action-menu,
+.folder-action-menu:focus-within {
+  opacity: 1;
+}
+
+.folder-action-menu__trigger {
+  opacity: 0.85;
+}
+
+.folder-action-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 160px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
+}
+
+.folder-action-menu__item {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.folder-action-menu__item:hover {
+  background: var(--surface-blur-bg);
+}
+
+.folder-action-menu__item--danger {
+  color: var(--danger);
 }
 
 /* create form */
@@ -7428,22 +7780,95 @@ a.login-repo-btn:hover {
 .privacy-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35em;
-  padding: 0.18em 0.55em;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-  line-height: 1.4;
-  border: 1px solid transparent;
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
 }
 
-.privacy-badge__dot {
-  display: inline-block;
-  width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
+.privacy-badge__icon {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
+  display: inline-block;
+  object-fit: contain;
+}
+
+.privacy-badge-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.privacy-badge--button {
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* No pill/tag — icon only. */
+.privacy-badge--success,
+.privacy-badge--warning,
+.privacy-badge--muted {
+  background: transparent;
+  border-color: transparent;
+}
+
+.privacy-badge--button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.privacy-badge-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 150px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--surface-blur-border);
+  background: var(--surface-blur-bg-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
+}
+
+.privacy-badge-menu__item {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.privacy-badge-menu__item:hover {
+  background: var(--surface-blur-bg);
+}
+
+.privacy-badge-menu__item.is-active {
+  border-color: var(--surface-blur-border);
+}
+
+.privacy-badge-menu__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-block;
 }
 
 /* colours */
@@ -7452,26 +7877,17 @@ a.login-repo-btn:hover {
   border-color: color-mix(in srgb, var(--success) 35%, transparent);
   color: var(--success-text);
 }
-.privacy-badge--success .privacy-badge__dot {
-  background: var(--success);
-}
 
 .privacy-badge--warning {
   background: var(--warning-soft);
   border-color: color-mix(in srgb, var(--warning) 35%, transparent);
   color: var(--warning-strong);
 }
-.privacy-badge--warning .privacy-badge__dot {
-  background: var(--warning);
-}
 
 .privacy-badge--muted {
   background: var(--tag);
   border-color: var(--border);
   color: var(--text-muted);
-}
-.privacy-badge--muted .privacy-badge__dot {
-  background: var(--text-muted);
 }
 
 /* select (admin editable) variant */

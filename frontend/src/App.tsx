@@ -278,35 +278,35 @@ function AppContent() {
                 role="menu"
                 aria-label="Workspace actions"
               >
-                {workspaces.map((w) => (
-                  <button
-                    key={w.enterprise_id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={w.enterprise_id === user.enterprise_id}
-                    className={`sort-menu-item ${w.enterprise_id === user.enterprise_id ? "active" : ""}`}
-                    onClick={() => {
-                      if (w.enterprise_id === user.enterprise_id) {
-                        setWorkspaceMenuOpen(false);
-                        return;
-                      }
-                      void switchWorkspace(w.enterprise_id).then(() => {
-                        bumpSession();
-                        setWorkspaceMenuOpen(false);
-                      });
-                    }}
-                  >
-                    <span className="top-bar-workspace-menu-item">
-                      <span className="top-bar-workspace-name">{w.enterprise_name}</span>
-                      <span className={`top-bar-workspace-role-badge top-bar-workspace-role-badge--${w.role}`}>
-                        {workspaceRoleLabel(w.role)}
+                <div className="top-bar-workspace-menu-scroll" role="presentation">
+                  {workspaces.map((w) => (
+                    <button
+                      key={w.enterprise_id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={w.enterprise_id === user.enterprise_id}
+                      className={`sort-menu-item ${w.enterprise_id === user.enterprise_id ? "active" : ""}`}
+                      onClick={() => {
+                        if (w.enterprise_id === user.enterprise_id) {
+                          setWorkspaceMenuOpen(false);
+                          return;
+                        }
+                        void switchWorkspace(w.enterprise_id).then(() => {
+                          bumpSession();
+                          setWorkspaceMenuOpen(false);
+                        });
+                      }}
+                    >
+                      <span className="top-bar-workspace-menu-item">
+                        <span className="top-bar-workspace-name">{w.enterprise_name}</span>
+                        <span className={`top-bar-workspace-role-badge top-bar-workspace-role-badge--${w.role}`}>
+                          {workspaceRoleLabel(w.role)}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                ))}
-                {workspaces.length > 0 ? (
-                  <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
-                ) : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
                 <Link
                   to="/onboarding"
                   role="menuitem"

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   createFolder,
   deleteFolder,
@@ -22,12 +23,32 @@ type Props = {
   isAdmin: boolean;
   /** Called when the user clicks a folder name — parent opens the detail popup. */
   onSelectFolder: (folder: Folder) => void;
+  /** Render as an overlay drawer (default) or an in-panel sidebar. */
+  variant?: "overlay" | "embedded";
+  /** Optional current selection (used for embedded folder filtering). */
+  selectedFolderId?: number | null;
+  /** Optional collapse/expand toggle (used by embedded pane header). */
+  onTogglePane?: () => void;
+  togglePaneLabel?: string;
 };
 
 type EditState = { folderId: number; name: string };
 type GroupsState = { grants: FolderGroupGrant[]; loading: boolean; error: string | null };
 
-export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder }: Props) {
+export default function FolderSidePanel({
+  open,
+  onClose,
+  isAdmin,
+  onSelectFolder,
+  variant = "overlay",
+  selectedFolderId = null,
+  onTogglePane,
+  togglePaneLabel = "Collapse folders pane",
+}: Props) {
+  const isEmbedded = variant === "embedded";
+  const isOverlay = !isEmbedded;
+  const isOpen = isEmbedded ? true : open;
+
   const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +61,13 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
   // delete
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  // privacy change busy
+  // per-folder action menu
+  const [folderActionMenuOpenId, setFolderActionMenuOpenId] = useState<number | null>(null);
+  const [folderActionMenuPos, setFolderActionMenuPos] = useState<
+    { id: number; top: number; right: number } | null
+  >(null);
+
+  // privacy change busy (via privacy icon dropdown)
   const [privacyBusyId, setPrivacyBusyId] = useState<number | null>(null);
 
   // create form
@@ -61,7 +88,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
   // load folders (and groups for admin) whenever panel opens
   useEffect(() => {
-    if (!open) return;
+    if (!isOpen) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -82,7 +109,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load folders"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, isAdmin]);
+  }, [isOpen, isAdmin]);
 
   // focus rename input when editing starts
   useEffect(() => {
@@ -96,13 +123,37 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
   // close on Escape
   useEffect(() => {
-    if (!open) return;
+    if (!isOverlay || !isOpen) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [isOverlay, isOpen, onClose]);
+
+  useEffect(() => {
+    if (folderActionMenuOpenId === null) return;
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(`[data-folder-action-menu-root="${folderActionMenuOpenId}"]`)) {
+        return;
+      }
+      setFolderActionMenuOpenId(null);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setFolderActionMenuOpenId(null);
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [folderActionMenuOpenId]);
 
   async function handlePrivacyChange(folder: Folder, privacy: FolderPrivacy) {
     setPrivacyBusyId(folder.folder_id);
@@ -259,31 +310,53 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
 
   return (
     <>
-      {/* backdrop */}
-      <div
-        className={`folder-panel-backdrop${open ? " folder-panel-backdrop--open" : ""}`}
-        aria-hidden="true"
-        onClick={onClose}
-      />
+      {/* backdrop (overlay only) */}
+      {isOverlay && (
+        <div
+          className={`folder-panel-backdrop${isOpen ? " folder-panel-backdrop--open" : ""}`}
+          aria-hidden="true"
+          onClick={onClose}
+        />
+      )}
 
       {/* panel */}
       <aside
-        className={`folder-panel${open ? " folder-panel--open" : ""}`}
+        className={[
+          "folder-panel",
+          isOpen ? "folder-panel--open" : "",
+          isEmbedded ? "folder-panel--embedded" : "",
+        ].filter(Boolean).join(" ")}
         aria-label="Folders"
         role="complementary"
       >
         <div className="folder-panel__header">
           <h2 className="folder-panel__title">Folders</h2>
-          <button
-            type="button"
-            className="icon-button folder-panel__close"
-            aria-label="Close folders panel"
-            onClick={onClose}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
+          {isEmbedded && onTogglePane && (
+            <button
+              type="button"
+              className="icon-button folder-panel__collapse"
+              aria-label={togglePaneLabel}
+              title={togglePaneLabel}
+              onClick={onTogglePane}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                {/* Sidebar/panel icon */}
+                <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm6 0H6v14h4V5zm2 0v14h6V5h-6z" />
+              </svg>
+            </button>
+          )}
+          {isOverlay && (
+            <button
+              type="button"
+              className="icon-button folder-panel__close"
+              aria-label="Close folders panel"
+              onClick={onClose}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {error && <p className="folder-panel__error" role="alert">{error}</p>}
@@ -328,6 +401,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                           className="folder-panel__folder-name"
                           onClick={() => onSelectFolder(folder)}
                           title="View datasets in this folder"
+                          aria-current={selectedFolderId === folder.folder_id ? "true" : undefined}
                         >
                           <svg className="folder-panel__folder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                             <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
@@ -339,65 +413,112 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                     </div>
 
                     <div className="folder-panel__item-actions">
-                      {isAdmin ? (
-                        <FolderPrivacyBadge
-                          privacy={folder.privacy}
-                          disabled={isPrivacyBusy || isDeleting}
-                          onChange={(p) => void handlePrivacyChange(folder, p)}
-                        />
-                      ) : (
-                        <FolderPrivacyBadge privacy={folder.privacy} />
+                      {isAdmin && !isEditing && (
+                        <div
+                          className="folder-action-menu"
+                          data-folder-action-menu-root={folder.folder_id}
+                        >
+                          <button
+                            type="button"
+                            className="icon-button folder-action-menu__trigger"
+                            aria-label={`Folder actions for "${folder.name}"`}
+                            aria-haspopup="menu"
+                            aria-expanded={folderActionMenuOpenId === folder.folder_id}
+                            disabled={isDeleting}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const nextOpen =
+                                folderActionMenuOpenId === folder.folder_id
+                                  ? null
+                                  : folder.folder_id;
+                              if (nextOpen === null) {
+                                setFolderActionMenuOpenId(null);
+                                setFolderActionMenuPos(null);
+                                return;
+                              }
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setFolderActionMenuOpenId(nextOpen);
+                              setFolderActionMenuPos({
+                                id: nextOpen,
+                                top: rect.bottom + 6,
+                                right: Math.max(8, window.innerWidth - rect.right),
+                              });
+                            }}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              <path d="M12 7.25a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5z" />
+                            </svg>
+                          </button>
+
+                          {folderActionMenuOpenId === folder.folder_id &&
+                            folderActionMenuPos?.id === folder.folder_id &&
+                            createPortal(
+                              <div
+                                className="folder-action-menu__dropdown"
+                                role="menu"
+                                data-folder-action-menu-root={folder.folder_id}
+                                style={{
+                                  position: "fixed",
+                                  top: folderActionMenuPos.top,
+                                  right: folderActionMenuPos.right,
+                                }}
+                              >
+                                {isOwner() && folder.privacy === "protected" && (
+                                  <button
+                                    type="button"
+                                    className="folder-action-menu__item"
+                                    role="menuitem"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      setFolderActionMenuOpenId(null);
+                                      setFolderActionMenuPos(null);
+                                      toggleGroupsPicker(folder.folder_id);
+                                    }}
+                                  >
+                                    {isGroupsExpanded ? "Hide group restrictions" : "Group restrictions"}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="folder-action-menu__item"
+                                  role="menuitem"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    setFolderActionMenuOpenId(null);
+                                    setFolderActionMenuPos(null);
+                                    startRename(folder);
+                                  }}
+                                >
+                                  Rename
+                                </button>
+                                <button
+                                  type="button"
+                                  className="folder-action-menu__item folder-action-menu__item--danger"
+                                  role="menuitem"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    setFolderActionMenuOpenId(null);
+                                    setFolderActionMenuPos(null);
+                                    void handleDelete(folder);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>,
+                              document.body,
+                            )}
+                        </div>
                       )}
 
-                      {isAdmin && !isEditing && (
-                        <>
-                          {/* Group restrictions toggle — owner only, protected folders only */}
-                          {isOwner() && folder.privacy === "protected" && (
-                            <button
-                              type="button"
-                              className={`icon-button folder-panel__action-btn${isGroupsExpanded ? " folder-panel__action-btn--active" : ""}`}
-                              aria-label={`Group restrictions for "${folder.name}"`}
-                              aria-expanded={isGroupsExpanded}
-                              title="Manage group restrictions"
-                              onClick={() => toggleGroupsPicker(folder.folder_id)}
-                            >
-                              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
-                              </svg>
-                            </button>
-                          )}
-                          {!isGroupsExpanded && (
-                            <>
-                              <button
-                                type="button"
-                                className="icon-button folder-panel__action-btn"
-                                aria-label={`Rename "${folder.name}"`}
-                                title="Rename"
-                                disabled={isDeleting || isPrivacyBusy}
-                                onClick={() => startRename(folder)}
-                              >
-                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                </svg>
-                              </button>
-                              <button
-                                type="button"
-                                className="icon-button folder-panel__action-btn folder-panel__action-btn--danger"
-                                aria-label={`Delete "${folder.name}"`}
-                                title="Delete folder"
-                                disabled={isDeleting || isPrivacyBusy}
-                                onClick={() => void handleDelete(folder)}
-                              >
-                                {isDeleting ? "…" : (
-                                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-                                  </svg>
-                                )}
-                              </button>
-                            </>
-                          )}
-                        </>
-                      )}
+                      <FolderPrivacyBadge
+                        privacy={folder.privacy}
+                        disabled={isDeleting || isPrivacyBusy}
+                        onChange={
+                          isAdmin
+                            ? (p) => void handlePrivacyChange(folder, p)
+                            : undefined
+                        }
+                      />
                     </div>
 
                     {/* Group restrictions inline panel */}
