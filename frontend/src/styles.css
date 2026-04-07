@@ -55,6 +55,9 @@
     transparent 1px
   );
   --search-bar-max-width: 260px;
+  /* Top-left chrome logo (App.tsx `.app-brand`): one size for settings, table shell, virtual table, etc. */
+  --app-brand-logo-size: 40px;
+  --app-brand-logo-radius: 11px;
 
   color-scheme: light;
   font-family: var(--font-sans);
@@ -503,11 +506,15 @@ h3 {
 }
 
 .app-brand img {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: var(--app-brand-logo-size);
+  height: var(--app-brand-logo-size);
+  border-radius: var(--app-brand-logo-radius);
   object-fit: cover;
   border: none;
+}
+
+:root[data-theme="dark"] .app-brand img {
+  filter: brightness(1.16) saturate(1.08);
 }
 
 .app-brand-text {
@@ -1456,7 +1463,8 @@ label.upload-queue-folder-label.edit-file-field {
 }
 
 .table-shell-top-row .app-brand-text--table-shell {
-  font-size: 18px;
+  /* Keep the top-left TabulaRAG lockup consistent across routes (e.g. onboarding vs full-table). */
+  font-size: 20px;
 }
 
 /* Room for Teams-style workspace pill + avatar + (optional) settings */
@@ -4467,15 +4475,15 @@ textarea.rename-input.edit-file-description {
 
 /* Dark mode: inactive tabs darker than active (swap contrast). */
 :root[data-theme="dark"] .preview-selected-pill {
-  /* Inactive tabs: darker. */
-  background: color-mix(in srgb, var(--bg) 78%, var(--bg-elev) 22%);
+  /* Inactive: between --bg-elev and --bg-elev-2 — lighter than near-black mix, still below active tab. */
+  background: color-mix(in srgb, var(--bg-elev) 42%, var(--bg-elev-2) 58%);
   border-color: color-mix(in srgb, var(--border) 85%, transparent);
   border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
-  color: color-mix(in srgb, var(--text) 88%, var(--text-muted) 12%);
+  color: color-mix(in srgb, var(--text) 91%, var(--text-muted) 9%);
 }
 
 :root[data-theme="dark"] .preview-selected-pill:hover {
-  background: color-mix(in srgb, var(--bg) 64%, var(--bg-elev) 36%);
+  background: color-mix(in srgb, var(--bg-elev) 24%, var(--bg-elev-2) 76%);
   border-color: color-mix(in srgb, var(--border) 92%, transparent);
   border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
@@ -4925,9 +4933,13 @@ a.sort-toggle-button.preview-open-link {
 
 .page-stack.full-table-page .table-view-back-row {
   position: absolute;
-  top: calc(48px + env(safe-area-inset-top, 0px));
+  top: calc(64px + env(safe-area-inset-top, 0px));
   left: 24px;
   z-index: 2;
+}
+
+.page-stack.full-table-page.full-table-page-dataset-wide .table-view-back-row {
+  top: calc(72px + env(safe-area-inset-top, 0px));
 }
 
 .table-view-context-btn.table-view-context-btn-text {
@@ -5034,7 +5046,7 @@ a.sort-toggle-button.preview-open-link {
 .page-stack.full-table-page .table-view-pagination--overlay {
   position: absolute;
   left: 50%;
-  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  bottom: env(safe-area-inset-bottom, 0px);
   transform: translateX(-50%);
   margin-top: 0;
   width: auto;
@@ -5055,7 +5067,7 @@ a.sort-toggle-button.preview-open-link {
 }
 
 .page-stack.full-table-page .full-table-area--has-pagination .table-scroll {
-  padding-bottom: 78px;
+  padding-bottom: 44px;
 }
 
 .page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-meta {
@@ -5316,12 +5328,12 @@ a.sort-toggle-button.preview-open-link {
   height: 28px;
 }
 
-/* Physical `/tables/:id` view: full viewport width, fill height, tighter top chrome for more grid area */
+/* Physical `/tables/:id` view: clear app `table-shell-top-row` (brand + banner + account) */
 .page-stack.full-table-page.full-table-page-dataset-wide {
   max-width: none;
   width: 100%;
   box-sizing: border-box;
-  padding-top: calc(48px + env(safe-area-inset-top, 0px));
+  padding-top: calc(72px + env(safe-area-inset-top, 0px));
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
   flex: 1 1 auto;
@@ -5996,6 +6008,11 @@ input:focus-visible,
 }
 
 @media (max-width: 720px) {
+  :root {
+    --app-brand-logo-size: 36px;
+    --app-brand-logo-radius: 10px;
+  }
+
   .upload-panel.in-modal {
     width: calc(100vw - 20px);
     height: min(84vh, 680px);
@@ -6211,12 +6228,11 @@ input:focus-visible,
     gap: 3px;
   }
 
-  .app-brand img {
-    width: 30px;
-    height: 30px;
+  .app-brand-text {
+    font-size: 16px;
   }
 
-  .app-brand-text {
+  .table-shell-top-row .app-brand-text--table-shell {
     font-size: 16px;
   }
 
@@ -6283,7 +6299,7 @@ input:focus-visible,
   }
 
   .page-stack.full-table-page.full-table-page-dataset-wide {
-    padding-top: calc(110px + env(safe-area-inset-top, 0px));
+    padding-top: calc(134px + env(safe-area-inset-top, 0px));
   }
 
   .table-view-edit-mode-banner {
