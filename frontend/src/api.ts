@@ -932,7 +932,8 @@ export async function renameTable(
 export async function listFolders(): Promise<Folder[]> {
   const res = await authFetch(`${API_BASE}/folders`, { headers: authHeaders() });
   if (!res.ok) {
-    throw new Error(await res.text());
+    const text = await res.text();
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to load folders");
   }
   return (await res.json()) as Folder[];
 }
@@ -947,7 +948,8 @@ export async function createFolder(
     body: JSON.stringify({ name, privacy }),
   });
   if (!res.ok) {
-    throw new Error(await res.text());
+    const text = await res.text();
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to create folder");
   }
   return (await res.json()) as Folder;
 }
@@ -962,7 +964,8 @@ export async function updateFolder(
     body: JSON.stringify(patch),
   });
   if (!res.ok) {
-    throw new Error(await res.text());
+    const text = await res.text();
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to update folder");
   }
   return (await res.json()) as Folder;
 }
@@ -973,7 +976,8 @@ export async function deleteFolder(folderId: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) {
-    throw new Error(await res.text());
+    const text = await res.text();
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to delete folder");
   }
 }
 

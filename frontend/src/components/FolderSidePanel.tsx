@@ -204,6 +204,18 @@ export default function FolderSidePanel({
       setNewName("");
     }
 
+    function commitCreateIfNeeded() {
+      const trimmed = newName.trim();
+      if (!trimmed) {
+        cancelCreate();
+        return;
+      }
+      if (createBusy) {
+        return;
+      }
+      void handleCreate(trimmed);
+    }
+
     function onPointerDown(event: PointerEvent) {
       if (createBusy) return;
       const target = event.target as HTMLElement | null;
@@ -212,12 +224,12 @@ export default function FolderSidePanel({
       // Privacy dropdown is rendered in a portal; interacting with it should not cancel create.
       if (target.closest(".privacy-badge-menu")) return;
       if (target.closest(".privacy-badge-wrap")) return;
-      cancelCreate();
+      commitCreateIfNeeded();
     }
 
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [createBusy, showCreate]);
+  }, [createBusy, showCreate, newName]);
 
   useEffect(() => {
     if (folderActionMenuOpenId === null) return;
@@ -370,9 +382,8 @@ export default function FolderSidePanel({
     }
   }
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = newName.trim();
+  async function handleCreate(trimmedName: string) {
+    const trimmed = trimmedName.trim();
     if (!trimmed) return;
     setCreateBusy(true);
     setError(null);
@@ -413,8 +424,7 @@ export default function FolderSidePanel({
               <span className="confirm-modal-table-name">
                 {deleteConfirmFolder.name}
               </span>
-              . Files inside will be moved to{" "}
-              <span className="confirm-modal-table-name">Unassigned</span>.
+              . Any files inside this folder will also be permanently deleted.
             </p>
             <div className="confirm-modal-actions">
               <button
@@ -805,7 +815,10 @@ export default function FolderSidePanel({
               <form
                 ref={createFormRef}
                 className="folder-panel__create-form"
-                onSubmit={(e) => void handleCreate(e)}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void handleCreate(newName);
+                }}
               >
                 <div className="folder-panel__create-input-wrap">
                   <input
@@ -822,6 +835,13 @@ export default function FolderSidePanel({
                         setNewName("");
                       }
                     }}
+                    onBlur={() => {
+                      // Clicking the privacy badge should not commit; pointerdown handler already guards it.
+                      const trimmed = newName.trim();
+                      if (!trimmed) return;
+                      if (createBusy) return;
+                      void handleCreate(trimmed);
+                    }}
                   />
                   <div className="folder-panel__create-privacy">
                     <FolderPrivacyBadge
@@ -830,15 +850,6 @@ export default function FolderSidePanel({
                       disabled={createBusy}
                     />
                   </div>
-                </div>
-                <div className="folder-panel__create-row">
-                  <button
-                    type="submit"
-                    className="login-btn folder-panel__create-submit"
-                    disabled={createBusy || !newName.trim()}
-                  >
-                    {createBusy ? "Creating…" : "Create"}
-                  </button>
                 </div>
               </form>
             ) : (

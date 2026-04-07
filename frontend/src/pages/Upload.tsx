@@ -548,6 +548,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const [preview, setPreview] = useState<TableSlice | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const previewRequestSeqRef = useRef(0);
   const [activeTableId, setActiveTableId] = useState<number | null>(
     () => initialUploadSelection.active,
   );
@@ -1201,6 +1202,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         sortDirection: "asc" | "desc";
       },
     ) => {
+      const requestId = (previewRequestSeqRef.current += 1);
       setActiveTableId(datasetId);
       setPreviewPage(page);
       setPreviewPageInput(String(page));
@@ -1232,12 +1234,15 @@ export default function Upload({ homeControls = null }: UploadProps) {
           sort: sortParam ?? undefined,
           search: searchParam,
         });
+        if (requestId !== previewRequestSeqRef.current) return;
         setPreview(slice);
         setPreviewRowCount(Math.max(0, slice.row_count ?? 0));
       } catch (error: unknown) {
+        if (requestId !== previewRequestSeqRef.current) return;
         setPreviewErr(getErrorMessage(error));
         setPreview(null);
       } finally {
+        if (requestId !== previewRequestSeqRef.current) return;
         setPreviewBusy(false);
       }
     },
@@ -1346,6 +1351,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
   );
 
   const clearPreviewSelection = useCallback(() => {
+    // Invalidate any in-flight preview request so it can't set 404 after the tab is closed/deleted.
+    previewRequestSeqRef.current += 1;
     setActiveTableId(null);
     setPreview(null);
     setPreviewErr(null);
@@ -1721,6 +1728,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
     try {
       await deleteTable(datasetId);
+      // Ensure preview tabs close immediately if this file was selected/active.
+      removeSelectedTableId(datasetId);
       const nextTables = tables.filter(
         (current) => current.dataset_id !== datasetId,
       );
@@ -1740,6 +1749,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
       if (isTableNotFoundError(error)) {
+        removeSelectedTableId(datasetId);
         const nextTables = tables.filter(
           (current) => current.dataset_id !== datasetId,
         );
@@ -1807,6 +1817,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
       }
 
       if (removed.size > 0) {
+        // Immediately drop any removed ids from preview tabs/active selection.
+        for (const id of removed) {
+          removeSelectedTableId(id);
+        }
         const nextTables = tables.filter((t) => !removed.has(t.dataset_id));
         const nextPinnedTableIds = pinnedTableIds.filter(
           (id) => !removed.has(id),
@@ -3705,7 +3719,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
           </div>
         </div>
 
-        {activeTableId !== null && (
+        {previewStripTableIds.length > 0 && (
           <div
             className="panel upload-preview"
             aria-hidden={isUploadPopupOpen}
