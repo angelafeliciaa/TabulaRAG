@@ -3439,11 +3439,14 @@ ul {
   overflow-y: auto;
   overflow-x: hidden;
   /* Scrollbar at the right edge; horizontal inset is on ul / load-more below */
-  padding: 6px 0 2px;
+  padding: 0 0 2px;
 }
 
 .uploaded-tables-panel__tables .tables-header-row {
   padding-right: 12px;
+  /* Space below sort/search/upload (replaces former .tables-scroll padding-top + margin below header) */
+  padding-bottom: 25px;
+  margin-bottom: 0;
 }
 
 /* Match prior 12px column padding + 10px empty-state horizontal padding on the right */
