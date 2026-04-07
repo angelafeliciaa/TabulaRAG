@@ -365,7 +365,7 @@ function buildQueryContextTitle(returnPath: string): string | null {
 }
 
 export default function TableView() {
-  const { valueMode } = useAppUi();
+  const { valueMode, setHeaderNotice } = useAppUi();
   const userIsAdmin = isAdmin();
   const { datasetId } = useParams();
   const location = useLocation();
@@ -455,6 +455,18 @@ export default function TableView() {
   const pageChangeSourceRef = useRef<"table" | "highlight">("table");
   /** Tracks last page for multi-highlight sync — only snap cursor when the *page* changes (pagination), not when only the cursor changes (arrows preserve semantic order). */
   const prevPageForHighlightSyncRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isPlainDatasetView && canEdit) {
+      setHeaderNotice({
+        label: "Edit Mode",
+        text: "Double tap cell values to start editing",
+      });
+      return () => setHeaderNotice(null);
+    }
+    setHeaderNotice(null);
+    return undefined;
+  }, [canEdit, isPlainDatasetView, setHeaderNotice]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {

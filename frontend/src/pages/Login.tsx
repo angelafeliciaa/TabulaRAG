@@ -1,13 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
 import { redirectToGoogleSignIn } from "../api";
 
 const TABULARAG_REPO_URL = "https://github.com/angelafeliciaa/tabulaRAG";
+type LoginIntroPhase = "active" | "exiting" | "done";
 
 export default function Login() {
+  const [introPhase, setIntroPhase] = useState<LoginIntroPhase>(() => {
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return "done";
+    }
+    return "active";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (introPhase !== "active") {
+      return;
+    }
+    const exitTimer = window.setTimeout(() => setIntroPhase("exiting"), 760);
+    const doneTimer = window.setTimeout(() => setIntroPhase("done"), 1380);
+    return () => {
+      window.clearTimeout(exitTimer);
+      window.clearTimeout(doneTimer);
+    };
+  }, [introPhase]);
 
   async function handleGoogleLogin() {
     setLoading(true);
@@ -21,7 +40,19 @@ export default function Login() {
   }
 
   return (
-    <div className="login-page login-page--split">
+    <div className="login-page login-page--split" data-intro-phase={introPhase}>
+      {introPhase !== "done" ? (
+        <div className="login-intro-splash" aria-hidden="true">
+          <img
+            src={logo64}
+            srcSet={`${logo64} 1x, ${logo128} 2x`}
+            width={128}
+            height={128}
+            alt=""
+            className="login-intro-logo"
+          />
+        </div>
+      ) : null}
       <div className="login-split-panel">
         <section className="login-split-overview" aria-labelledby="login-overview-heading">
           <div className="login-split-overview-brand">
@@ -41,9 +72,11 @@ export default function Login() {
             Fast-ingesting tabular data RAG with cell-level citations
           </p>
           <ul className="login-split-overview-list">
-            <li>Upload CSV and TSV files—indexed in the background so you can explore quickly</li>
-            <li>Query tables in natural language; answers point to the exact cells they came from</li>
-            <li>Workspaces for teams: owners, admins, and read-only access where you need it</li>
+            <li>Fast uploads for CSV and TSV files.</li>
+            <li>Connect with your LLM of choice and query tables in natural language.</li>
+            <li>Traceable answers with direct cell highlights.</li>
+            <li>Workspaces for teams with role-based access.</li>
+            <li>Customizable folders for building knowledge bases.</li>
           </ul>
           <a
             className="login-repo-btn"

@@ -419,7 +419,7 @@ def _validate_upload_content(upload: UploadFile) -> None:
     if size > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=400,
-            detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES} bytes.",
+            detail="File is too large. Maximum size is 50MB.",
         )
 
     head = upload.file.read(FILE_SNIFF_BYTES)

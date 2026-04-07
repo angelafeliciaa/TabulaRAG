@@ -27,6 +27,8 @@ export type AppUiContextValue = {
   setTheme: (t: "dark" | "light") => void;
   valueMode: ValueMode;
   setValueMode: (v: ValueMode) => void;
+  headerNotice: { label: string; text: string } | null;
+  setHeaderNotice: (notice: { label: string; text: string } | null) => void;
 };
 
 const AppUiContext = createContext<AppUiContextValue | null>(null);
@@ -46,6 +48,7 @@ export function AppUiProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const [valueMode, setValueMode] = useState<ValueMode>(() => readGlobalValueMode() ?? "normalized");
+  const [headerNotice, setHeaderNotice] = useState<{ label: string; text: string } | null>(null);
 
   useEffect(() => {
     const fromGlobal = readGlobalValueMode();
@@ -71,8 +74,10 @@ export function AppUiProvider({ children }: { children: ReactNode }) {
       setTheme,
       valueMode,
       setValueMode,
+      headerNotice,
+      setHeaderNotice,
     }),
-    [sessionRev, bumpSession, theme, valueMode],
+    [sessionRev, bumpSession, theme, valueMode, headerNotice],
   );
 
   return <AppUiContext.Provider value={value}>{children}</AppUiContext.Provider>;

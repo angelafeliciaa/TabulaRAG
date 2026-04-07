@@ -674,6 +674,15 @@ export async function uploadTable(
         return;
       }
 
+      if (xhr.status === 0) {
+        reject(
+          new Error(
+            "The upload connection was interrupted before the server responded. Please try again.",
+          ),
+        );
+        return;
+      }
+
       if (xhr.status === 401) {
         logout();
         window.location.replace("/");
@@ -686,7 +695,11 @@ export async function uploadTable(
 
     xhr.onerror = () => {
       stopProcessingTimer();
-      reject(new Error("Network error while uploading file."));
+      reject(
+        new Error(
+          "The upload connection was interrupted before the server responded. Please try again.",
+        ),
+      );
     };
 
     xhr.onabort = () => {
