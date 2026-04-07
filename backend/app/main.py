@@ -20,6 +20,7 @@ from app.dataset_state import (
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
     ensure_enterprise_name_non_unique,
+    ensure_folder_sort_order_column,
     ensure_folders_table,
     ensure_mcp_access_tokens_table,
     ensure_querier_role_and_migrate_member,
@@ -38,7 +39,7 @@ from app.index_jobs import (
 from app.indexing import index_dataset
 from app.index_worker import IndexWorker
 from app.models import Base, Dataset, DatasetColumn, DatasetRow, EnterpriseMembership, Folder, FolderPrivacy, User, UserRole
-from app.qdrant_client import get_collection_point_count
+from app.qdrant_client import delete_collection, get_collection_point_count
 from fastapi_mcp import FastApiMCP
 from app.mcp_connection import require_mcp_connection_auth
 from app.routes_tables import router as tables_router
@@ -46,6 +47,7 @@ from app.routes_query import router as query_router
 from app.routes_enterprises import router as enterprises_router
 from app.routes_folders import router as folders_router
 from app.routes_groups import router as groups_router
+from app.unassigned_folder import get_or_create_unassigned_folder
 from app.normalization import (
     infer_date_formats_for_columns,
     infer_measurement_columns,
@@ -74,6 +76,47 @@ logger = logging.getLogger(__name__)
 _index_worker: IndexWorker | None = None
 INDEX_WORKER_CONCURRENCY = max(1, int(os.getenv("INDEX_WORKER_CONCURRENCY", "4")))
 
+def _delete_orphan_datasets_on_startup() -> None:
+    """
+    Optional one-time cleanup: delete datasets with folder_id NULL.
+
+    This is destructive and is controlled by env var:
+      TABULARAG_DELETE_ORPHAN_DATASETS_ON_STARTUP=1
+    """
+    flag = os.getenv("TABULARAG_DELETE_ORPHAN_DATASETS_ON_STARTUP", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return
+
+    # Import here to avoid circular imports at module load time.
+    from sqlalchemy import delete, select
+    from app.index_jobs import clear_index_job
+
+    with SessionLocal() as db:
+        orphan_ids = db.execute(
+            select(Dataset.id).where(Dataset.folder_id.is_(None))
+        ).scalars().all()
+        if not orphan_ids:
+            logger.info("Startup cleanup: no orphan datasets (folder_id NULL) found.")
+            return
+
+        logger.warning("Startup cleanup: deleting %d orphan dataset(s) (folder_id NULL).", len(orphan_ids))
+        # Use direct SQL deletes to avoid expensive ORM cascade loading.
+        db.execute(delete(DatasetRow).where(DatasetRow.dataset_id.in_(orphan_ids)))
+        db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id.in_(orphan_ids)))
+        db.execute(delete(Dataset).where(Dataset.id.in_(orphan_ids)))
+        db.commit()
+
+    # Best-effort external cleanup (index jobs + vector collections).
+    for did in orphan_ids:
+        try:
+            clear_index_job(int(did))
+        except Exception:
+            pass
+        try:
+            delete_collection(int(did))
+        except Exception:
+            pass
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -91,8 +134,10 @@ async def lifespan(app: FastAPI):
     promote_legacy_admin_to_owner_per_enterprise()
     ensure_mcp_access_tokens_table()
     ensure_folders_table()
+    ensure_folder_sort_order_column()
     ensure_dataset_folder_id_column()
     ensure_user_groups_tables()
+    _delete_orphan_datasets_on_startup()
     try:
         from app.embeddings import get_model
         get_model()
@@ -731,6 +776,9 @@ def ingest_table(
             status_code=403,
             detail="You must specify a public folder to upload into.",
         )
+    else:
+        # Admin/owner upload without a folder: keep folder_id NULL ("Unassigned" is a UI concept).
+        resolved_folder_id = None
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")

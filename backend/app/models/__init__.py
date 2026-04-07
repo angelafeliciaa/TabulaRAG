@@ -14,7 +14,7 @@ from sqlalchemy import (
     false,
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 
 from app.db import Base
 
@@ -40,6 +40,7 @@ class Folder(Base):
     privacy = Column(Enum(FolderPrivacy), nullable=False, default=FolderPrivacy.protected)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    sort_order = Column(Integer, nullable=False, server_default=text("0"), default=0)
 
     datasets = relationship("Dataset", back_populates="folder")
 

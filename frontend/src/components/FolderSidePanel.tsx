@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   createFolder,
@@ -101,6 +101,31 @@ export default function FolderSidePanel({
   /** When true, drag handles appear and rows can be reordered (any member; not admin-only). */
   const [folderReorderMode, setFolderReorderMode] = useState(false);
 
+  const handleCreate = useCallback(
+    async (trimmedName: string) => {
+      const trimmed = trimmedName.trim();
+      if (!trimmed) return;
+      setCreateBusy(true);
+      setError(null);
+      try {
+        const created = await createFolder(trimmed, newPrivacy);
+        setFolders((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+        setNewName("");
+        setNewPrivacy("protected");
+        setShowCreate(false);
+        onFolderListChange?.();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create folder");
+      } finally {
+        setCreateBusy(false);
+      }
+    },
+    [newPrivacy, onFolderListChange],
+  );
+
+  const handleCreateRef = useRef(handleCreate);
+  handleCreateRef.current = handleCreate;
+
   // load folders whenever panel opens / refreshes
   useEffect(() => {
     if (!isOpen) return;
@@ -196,7 +221,7 @@ export default function FolderSidePanel({
       if (createBusy) {
         return;
       }
-      void handleCreate(trimmed);
+      void handleCreateRef.current(trimmed);
     }
 
     function onPointerDown(event: PointerEvent) {
@@ -279,25 +304,6 @@ export default function FolderSidePanel({
       setError(err instanceof Error ? err.message : "Failed to delete folder");
     } finally {
       setDeletingId(null);
-    }
-  }
-
-  async function handleCreate(trimmedName: string) {
-    const trimmed = trimmedName.trim();
-    if (!trimmed) return;
-    setCreateBusy(true);
-    setError(null);
-    try {
-      const created = await createFolder(trimmed, newPrivacy);
-      setFolders((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
-      setNewName("");
-      setNewPrivacy("protected");
-      setShowCreate(false);
-      onFolderListChange?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create folder");
-    } finally {
-      setCreateBusy(false);
     }
   }
 

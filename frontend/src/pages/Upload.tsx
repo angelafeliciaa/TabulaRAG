@@ -1302,8 +1302,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
         setPreviewErr(getErrorMessage(error));
         setPreview(null);
       } finally {
-        if (requestId !== previewRequestSeqRef.current) return;
-        setPreviewBusy(false);
+        if (requestId === previewRequestSeqRef.current) {
+          setPreviewBusy(false);
+        }
       }
     },
     [previewSortColumn, previewSortDirection, previewSearchQuery],

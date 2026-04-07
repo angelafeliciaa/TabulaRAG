@@ -243,6 +243,39 @@ def ensure_folders_table() -> None:
     Folder.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
+def ensure_folder_sort_order_column() -> None:
+    """Add folders.sort_order for user-defined ordering (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "folders" not in inspector.get_table_names():
+        return
+    column_names = {c["name"] for c in inspector.get_columns("folders")}
+    if "sort_order" in column_names:
+        return
+    dialect = app_db.engine.dialect.name
+    with app_db.engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(text("ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"))
+        else:
+            conn.execute(text("ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"))
+    # Backfill: stable order matches previous behavior (name) within each enterprise.
+    with app_db.engine.begin() as conn:
+        enterprises = conn.execute(
+            select(Folder.enterprise_id).distinct()
+        ).scalars().all()
+        for eid in enterprises:
+            if eid is None:
+                continue
+            rows = conn.execute(
+                select(Folder.id, Folder.name)
+                .where(Folder.enterprise_id == eid)
+                .order_by(Folder.name)
+            ).all()
+            for i, (fid, _name) in enumerate(rows):
+                conn.execute(
+                    update(Folder).where(Folder.id == fid).values(sort_order=i)
+                )
+
+
 def ensure_dataset_folder_id_column() -> None:
     """Add datasets.folder_id for folder-based access control (existing DB volumes)."""
     inspector = inspect(app_db.engine)

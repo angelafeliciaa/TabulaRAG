@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.auth import AuthUser, require_owner
+from app.auth import AuthUser, require_admin
 from app.db import SessionLocal
 from app.models import EnterpriseMembership, Folder, FolderGroupAccess, FolderPrivacy, User, UserGroup, UserGroupMembership
 
@@ -48,7 +48,7 @@ class SetFolderAccessRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("", include_in_schema=False)
-def list_groups(current_user: AuthUser = Depends(require_owner)):
+def list_groups(current_user: AuthUser = Depends(require_admin)):
     """List all user groups for the current workspace."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
@@ -82,9 +82,9 @@ def list_groups(current_user: AuthUser = Depends(require_owner)):
 @router.post("", status_code=201, include_in_schema=False)
 def create_group(
     body: CreateGroupRequest,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Create a new user group. Owner only."""
+    """Create a new user group. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -120,9 +120,9 @@ def create_group(
 def update_group(
     group_id: int,
     body: UpdateGroupRequest,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Rename a user group. Owner only."""
+    """Rename a user group. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -153,9 +153,9 @@ def update_group(
 @router.delete("/{group_id}", status_code=204, include_in_schema=False)
 def delete_group(
     group_id: int,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Delete a user group. Owner only."""
+    """Delete a user group. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -173,7 +173,7 @@ def delete_group(
 @router.get("/{group_id}/members", include_in_schema=False)
 def list_members(
     group_id: int,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
     """List all members of a group with their login and user_id."""
     enterprise_id = current_user.enterprise_id
@@ -205,9 +205,9 @@ def list_members(
 def add_member(
     group_id: int,
     body: AddMemberRequest,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Add a workspace member to a group. Owner only."""
+    """Add a workspace member to a group. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -259,9 +259,9 @@ def add_member(
 def remove_member(
     group_id: int,
     user_id: int,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Remove a user from a group. Owner only."""
+    """Remove a user from a group. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -289,7 +289,7 @@ def remove_member(
 @router.get("/{group_id}/folders", include_in_schema=False)
 def list_folder_accesses(
     group_id: int,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
     """List all folders this group has access to."""
     enterprise_id = current_user.enterprise_id
@@ -303,7 +303,7 @@ def list_folder_accesses(
             select(FolderGroupAccess, Folder)
             .join(Folder, Folder.id == FolderGroupAccess.folder_id)
             .where(FolderGroupAccess.group_id == group_id)
-            .order_by(Folder.name)
+            .order_by(Folder.sort_order, Folder.name)
         ).all()
 
         return [
@@ -322,9 +322,9 @@ def list_folder_accesses(
 def grant_folder_access(
     group_id: int,
     body: SetFolderAccessRequest,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Grant a group access to a protected folder. Owner only."""
+    """Grant a group access to a protected folder. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")
@@ -379,9 +379,9 @@ def grant_folder_access(
 def revoke_folder_access(
     group_id: int,
     folder_id: int,
-    current_user: AuthUser = Depends(require_owner),
+    current_user: AuthUser = Depends(require_admin),
 ):
-    """Revoke a group's access to a folder. Owner only."""
+    """Revoke a group's access to a folder. Owner or admin only."""
     enterprise_id = current_user.enterprise_id
     if enterprise_id is None:
         raise HTTPException(status_code=403, detail="Join or create a workspace first.")

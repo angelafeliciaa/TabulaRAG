@@ -50,30 +50,30 @@ export default function FolderPrivacyBadge({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
 
+  useEffect(() => {
+    if (!onChange || !open) return;
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onChange, open]);
+
   if (onChange) {
-    useEffect(() => {
-      if (!open) return;
-
-      function onPointerDown(event: PointerEvent) {
-        const target = event.target as HTMLElement | null;
-        if (!target) return;
-        if (rootRef.current?.contains(target)) return;
-        if (menuRef.current?.contains(target)) return;
-        setOpen(false);
-      }
-
-      function onKeyDown(event: KeyboardEvent) {
-        if (event.key === "Escape") setOpen(false);
-      }
-
-      window.addEventListener("pointerdown", onPointerDown);
-      window.addEventListener("keydown", onKeyDown);
-      return () => {
-        window.removeEventListener("pointerdown", onPointerDown);
-        window.removeEventListener("keydown", onKeyDown);
-      };
-    }, [open]);
-
     return (
       <span
         ref={rootRef}

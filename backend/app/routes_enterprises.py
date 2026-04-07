@@ -534,11 +534,8 @@ def transfer_ownership(body: TransferOwnershipRequest, current_user: AuthUser = 
         ).scalar_one_or_none()
         if target is None:
             raise HTTPException(status_code=404, detail="Member not found")
-        if target.role != UserRole.admin:
-            raise HTTPException(
-                status_code=400,
-                detail="Ownership can only be transferred to an existing admin",
-            )
+        if target.role not in (UserRole.admin, UserRole.querier):
+            raise HTTPException(status_code=400, detail="Invalid target role for ownership transfer")
 
         me.role = UserRole.admin
         target.role = UserRole.owner
