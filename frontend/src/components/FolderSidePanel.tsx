@@ -662,7 +662,7 @@ export default function FolderSidePanel({
                                       setFolderActionMenuPos(null);
                                     }}
                                   >
-                                    {folderReorderMode ? "Done reordering" : "Reorder folders"}
+                                    {folderReorderMode ? "Done reordering" : "Reorder"}
                                   </button>
                                 )}
                                 {isAdmin && isOwner() && folder.privacy === "protected" && (

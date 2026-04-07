@@ -626,9 +626,9 @@ h3 {
   width: min(980px, calc(100vw - 36px));
   box-sizing: border-box;
   /* Fixed shell: same height empty vs queue; inner areas scroll/flex. */
-  height: min(92vh, 940px);
-  min-height: min(92vh, 940px);
-  max-height: min(92vh, 940px);
+  height: min(75vh, 640px);
+  min-height: min(75vh, 640px);
+  max-height: min(75vh, 640px);
 }
 
 .upload-modal__topbar {
@@ -3320,14 +3320,20 @@ ul {
   display: none;
 }
 
-/* Icon + count pill stacked in the narrow rail (label hidden) */
+/* Icon + count pill in one row in the narrow rail (label hidden) */
 .uploaded-tables-panel__folders--collapsed .folder-panel__folder-name {
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 0.25rem;
+  flex-wrap: nowrap;
   overflow: visible;
   text-align: center;
+}
+
+.uploaded-tables-panel__folders--collapsed .folder-panel__dataset-count {
+  font-size: 0.65rem;
+  padding: 0.04em 0.35em;
 }
 
 .uploaded-tables-panel__folders--collapsed .folder-panel__item-main {
@@ -5877,9 +5883,9 @@ input:focus-visible,
 
   .upload-modal.upload-panel {
     width: calc(100vw - 20px);
-    height: min(90vh, 720px);
-    min-height: min(90vh, 720px);
-    max-height: min(90vh, 720px);
+    height: min(82vh, 580px);
+    min-height: min(82vh, 580px);
+    max-height: min(82vh, 580px);
   }
 
   .upload-queue-footer {
