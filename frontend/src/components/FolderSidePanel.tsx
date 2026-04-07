@@ -26,6 +26,12 @@ type Props = {
   togglePaneLabel?: string;
   /** Trigger a refetch when this value changes (e.g., after upload/delete). */
   refreshKey?: number;
+  /**
+   * Called after the folder list changes from this panel (create/delete/rename).
+   * Embedded home view should refetch parent `folders` + dataset list so selection and previews stay valid.
+   * Pass `deletedFolderId` when a folder was removed so the parent can drop those datasets from the list immediately.
+   */
+  onFolderListChange?: (detail?: { deletedFolderId?: number }) => void;
 };
 
 type EditState = { folderId: number; name: string };
@@ -55,6 +61,7 @@ export default function FolderSidePanel({
   onTogglePane,
   togglePaneLabel = "Collapse folders pane",
   refreshKey = 0,
+  onFolderListChange,
 }: Props) {
   const isEmbedded = variant === "embedded";
   const isOverlay = !isEmbedded;
@@ -231,6 +238,7 @@ export default function FolderSidePanel({
     try {
       const updated = await updateFolder(folder.folder_id, { privacy });
       setFolders((prev) => prev.map((f) => (f.folder_id === updated.folder_id ? updated : f)));
+      onFolderListChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update folder");
     } finally {
@@ -252,6 +260,7 @@ export default function FolderSidePanel({
       const updated = await updateFolder(editing.folderId, { name: trimmed });
       setFolders((prev) => prev.map((f) => (f.folder_id === updated.folder_id ? updated : f)));
       setEditing(null);
+      onFolderListChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to rename folder");
     } finally {
@@ -265,6 +274,7 @@ export default function FolderSidePanel({
     try {
       await deleteFolder(folder.folder_id);
       setFolders((prev) => prev.filter((f) => f.folder_id !== folder.folder_id));
+      onFolderListChange?.({ deletedFolderId: folder.folder_id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete folder");
     } finally {
@@ -283,6 +293,7 @@ export default function FolderSidePanel({
       setNewName("");
       setNewPrivacy("protected");
       setShowCreate(false);
+      onFolderListChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create folder");
     } finally {

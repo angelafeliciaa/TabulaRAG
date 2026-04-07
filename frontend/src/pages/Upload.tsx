@@ -44,6 +44,7 @@ const SELECTED_PREVIEW_TABLE_KEY = "tabularag_selected_preview_table_id";
 /** Full preview tab strip + active tab (JSON). Legacy single-id key is still read for migration. */
 const UPLOAD_PREVIEW_SELECTION_STORAGE_KEY = "tabularag_upload_preview_selection";
 const FOLDER_PANE_WIDTH_STORAGE_KEY = "tabularag_folder_pane_width";
+const SELECTED_FOLDER_ID_STORAGE_KEY = "tabularag_selected_folder_id";
 
 function readUploadSelectionFromStorage(): {
   ids: number[];
@@ -754,7 +755,56 @@ export default function Upload({ homeControls = null }: UploadProps) {
   useEffect(() => {
     if (selectedFolder !== null) return;
     if (folders.length === 0) return;
+    try {
+      const raw = window.localStorage.getItem(SELECTED_FOLDER_ID_STORAGE_KEY);
+      const parsed = raw ? parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed)) {
+        const match = folders.find((f) => f.folder_id === parsed);
+        if (match) {
+          setSelectedFolder(match);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
     setSelectedFolder(folders[0]);
+  }, [folders, selectedFolder]);
+
+  useEffect(() => {
+    if (!selectedFolder) return;
+    try {
+      window.localStorage.setItem(
+        SELECTED_FOLDER_ID_STORAGE_KEY,
+        String(selectedFolder.folder_id),
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedFolder]);
+
+  useEffect(() => {
+    if (folders.length === 0 || selectedFolder === null) {
+      return;
+    }
+    const stillExists = folders.some((f) => f.folder_id === selectedFolder.folder_id);
+    if (stillExists) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(SELECTED_FOLDER_ID_STORAGE_KEY);
+      const parsed = raw ? parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed)) {
+        const match = folders.find((f) => f.folder_id === parsed);
+        if (match) {
+          setSelectedFolder(match);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setSelectedFolder(folders[0] ?? null);
   }, [folders, selectedFolder]);
 
   async function estimateFileStats(nextFile: File): Promise<{
@@ -1360,6 +1410,32 @@ export default function Upload({ homeControls = null }: UploadProps) {
     [],
   );
 
+  /** FolderSidePanel keeps its own folder list; keep Upload folders + tables in sync after create/delete/rename. */
+  const syncFoldersAndTablesAfterPanelChange = useCallback(
+    async (detail?: { deletedFolderId?: number }) => {
+      const deletedId = detail?.deletedFolderId;
+      if (deletedId != null) {
+        setTables((prev) => prev.filter((t) => t.folder_id !== deletedId));
+      }
+      try {
+        await refresh();
+        const nextFolders = await listFolders();
+        setFolders(nextFolders);
+        bumpFolderCounts();
+        setSelectedFolder((prev) => {
+          if (prev === null) {
+            return nextFolders[0] ?? null;
+          }
+          const match = nextFolders.find((f) => f.folder_id === prev.folder_id);
+          return match ?? nextFolders[0] ?? null;
+        });
+      } catch {
+        // ignore
+      }
+    },
+    [refresh, bumpFolderCounts],
+  );
+
   const clearPreviewSelection = useCallback(() => {
     // Invalidate any in-flight preview request so it can't set 404 after the tab is closed/deleted.
     previewRequestSeqRef.current += 1;
@@ -1755,7 +1831,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
         return next;
       });
       setDeleteConfirmTable(null);
-      await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
       bumpFolderCounts();
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
@@ -1775,7 +1850,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
           return next;
         });
         setDeleteConfirmTable(null);
-        await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
         bumpFolderCounts();
         showSuccessToast(`Successfully deleted table '${table.name}'`);
       } else {
@@ -1845,7 +1919,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         });
         setSelectedTableIds([]);
         setBulkDeleteConfirmIds(null);
-        await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
+        clearPreviewSelection();
         bumpFolderCounts();
         showSuccessToast(
           removed.size === 1
@@ -3197,6 +3271,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 onSelectFolder={(folder) => {
                   setSelectedFolder(folder);
                 }}
+                onFolderListChange={(folderChangeDetail) => {
+                  void syncFoldersAndTablesAfterPanelChange(folderChangeDetail);
+                }}
               />
             </div>
             {!folderPaneCollapsed && (
@@ -3235,6 +3312,21 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       <span className="sort-toggle-text">
                         Sort by: {tableSortHint}
                       </span>
+                      <svg
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                        className="sort-toggle-chevron"
+                      >
+                        <path
+                          d="M7 10l5 5 5-5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.25"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
                     </button>
                     {sortMenuOpen && (
                       <div

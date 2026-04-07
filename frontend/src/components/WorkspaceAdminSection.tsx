@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAppUi } from "../appUiContext";
 import CopyClipboardButton from "./CopyClipboardButton";
 import {
   adminRevokeMemberMcpToken,
@@ -23,6 +24,7 @@ type WorkspaceAdminSectionProps = {
 };
 
 export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOwner }: WorkspaceAdminSectionProps) {
+  const { bumpSession } = useAppUi();
   const currentUser = getUser();
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -191,6 +193,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
     try {
       const res = await transferEnterpriseOwnership(target.id);
       applyEnterpriseSession(res.token, workspaceId, res.role);
+      bumpSession();
       const refreshed = await listMembers();
       setMembers(refreshed);
     } catch (err) {

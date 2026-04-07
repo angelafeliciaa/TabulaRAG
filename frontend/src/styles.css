@@ -1025,6 +1025,10 @@ h3 {
   min-height: 150px;
 }
 
+.upload-panel.upload-modal.has-queue .upload-queue-list {
+  padding-top: 18px;
+}
+
 .upload-panel.upload-modal.has-queue .upload-queue-toolbar {
   flex-shrink: 0;
 }
@@ -3646,6 +3650,20 @@ ul {
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sort-toggle-button.tables-header-sort-toggle .sort-toggle-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.sort-toggle-button.tables-header-sort-toggle.active .sort-toggle-chevron {
+  transform: rotate(180deg);
+  color: var(--text);
 }
 
 .sort-toggle-icon {
