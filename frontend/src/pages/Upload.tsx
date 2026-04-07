@@ -216,6 +216,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function formatUploadFailureSummary(
+  failureCount: number,
+  firstFailureMessage: string | null,
+): string {
+  if (!firstFailureMessage) {
+    return failureCount === 1
+      ? "1 file failed to upload."
+      : `${failureCount} files failed to upload.`;
+  }
+  return failureCount === 1
+    ? `1 file failed to upload. ${firstFailureMessage}`
+    : `${failureCount} files failed to upload. First error: ${firstFailureMessage}`;
+}
+
 function formatFileSize(bytes: number): string {
   const safeBytes = Math.max(0, bytes);
   if (safeBytes < 1024) {
@@ -1378,10 +1392,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
           : `${successCount} files uploaded successfully`,
       );
     }
-    if (failureCount > 0 && firstFailureMessage) {
-      setErr(firstFailureMessage);
+    if (failureCount > 0) {
+      setErr(formatUploadFailureSummary(failureCount, firstFailureMessage));
     }
-    if (failureCount === 0 && successCount === queuedItems.length) {
+    if (successCount + failureCount === queuedItems.length) {
       setUploadQueue([]);
       setShowUploadQueue(false);
     }
@@ -1955,7 +1969,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
               loading="eager"
               fetchPriority="high"
             />
-            <div className="hero-title">TabulaRAG</div>
+            <div className="hero-title" aria-label="TabulaRAG">
+              <span className="hero-title-tabula">Tabula</span>
+              <span className="hero-title-rag">RAG</span>
+            </div>
           </div>
           <div className="hero-subtitle">
             Fast-ingesting tabular data RAG with cell-level citations
@@ -2254,7 +2271,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 Select or Drag &amp; Drop to Start Uploading
               </div>
               <div id={uploadDropDescriptionId} className="upload-subtitle">
-                Supported file formats: .csv, .tsv, and folders.
+                Supported file formats: .csv, .tsv, up to 50MB.
               </div>
             </div>
           ) : (

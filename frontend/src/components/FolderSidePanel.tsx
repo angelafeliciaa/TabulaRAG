@@ -366,32 +366,36 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                               </svg>
                             </button>
                           )}
-                          <button
-                            type="button"
-                            className="icon-button folder-panel__action-btn"
-                            aria-label={`Rename "${folder.name}"`}
-                            title="Rename"
-                            disabled={isDeleting || isPrivacyBusy}
-                            onClick={() => startRename(folder)}
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
-                            className="icon-button folder-panel__action-btn folder-panel__action-btn--danger"
-                            aria-label={`Delete "${folder.name}"`}
-                            title="Delete folder"
-                            disabled={isDeleting || isPrivacyBusy}
-                            onClick={() => void handleDelete(folder)}
-                          >
-                            {isDeleting ? "…" : (
-                              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-                              </svg>
-                            )}
-                          </button>
+                          {!isGroupsExpanded && (
+                            <>
+                              <button
+                                type="button"
+                                className="icon-button folder-panel__action-btn"
+                                aria-label={`Rename "${folder.name}"`}
+                                title="Rename"
+                                disabled={isDeleting || isPrivacyBusy}
+                                onClick={() => startRename(folder)}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-button folder-panel__action-btn folder-panel__action-btn--danger"
+                                aria-label={`Delete "${folder.name}"`}
+                                title="Delete folder"
+                                disabled={isDeleting || isPrivacyBusy}
+                                onClick={() => void handleDelete(folder)}
+                              >
+                                {isDeleting ? "…" : (
+                                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                                  </svg>
+                                )}
+                              </button>
+                            </>
+                          )}
                         </>
                       )}
                     </div>
@@ -408,7 +412,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                           <>
                             {groupsState?.grants.length === 0 ? (
                               <p className="folder-panel__groups-muted">
-                                No restrictions — all queriers can see this folder.
+                                No restrictions. All queriers can see this folder.
                               </p>
                             ) : (
                               <ul className="folder-panel__groups-list" role="list">
@@ -455,7 +459,7 @@ export default function FolderSidePanel({ open, onClose, isAdmin, onSelectFolder
                             )}
                             {allGroups.length === 0 && (
                               <p className="folder-panel__groups-muted">
-                                No groups exist yet. Create groups in Settings → Groups.
+                                No groups exist yet. Create groups in Settings, then open Groups.
                               </p>
                             )}
                           </>
