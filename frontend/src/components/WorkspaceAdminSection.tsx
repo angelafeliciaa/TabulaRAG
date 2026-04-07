@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CopyClipboardButton from "./CopyClipboardButton";
 import {
   adminRevokeMemberMcpToken,
   createInviteCode,
   getUser,
+  applyEnterpriseSession,
   listInviteCodes,
   listMembers,
   removeMember,
   revokeInviteCode,
+  transferEnterpriseOwnership,
   updateMemberRole,
   type InviteCode,
   type Member,
@@ -26,6 +28,12 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
   const [members, setMembers] = useState<Member[]>([]);
   const [membersError, setMembersError] = useState<string | null>(null);
   const [membersLoading, setMembersLoading] = useState(true);
+  const [removeConfirmMember, setRemoveConfirmMember] = useState<Member | null>(null);
+  const removeConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
+  const [transferConfirmMember, setTransferConfirmMember] = useState<Member | null>(null);
+  const transferConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
+  const [roleMenuOpenForId, setRoleMenuOpenForId] = useState<number | null>(null);
+  const [roleMenuPos, setRoleMenuPos] = useState<{ top: number; left: number } | null>(null);
 
   const [codes, setCodes] = useState<InviteCode[]>([]);
   const [codesError, setCodesError] = useState<string | null>(null);
@@ -71,6 +79,53 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
   }, [workspaceId]);
 
   useEffect(() => {
+    if (removeConfirmMember) {
+      removeConfirmCancelRef.current?.focus();
+    }
+  }, [removeConfirmMember]);
+
+  useEffect(() => {
+    if (transferConfirmMember) {
+      transferConfirmCancelRef.current?.focus();
+    }
+  }, [transferConfirmMember]);
+
+  useEffect(() => {
+    if (roleMenuOpenForId === null) {
+      return;
+    }
+
+    function close() {
+      setRoleMenuOpenForId(null);
+      setRoleMenuPos(null);
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[data-role-menu-root]")) return;
+      close();
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        close();
+      }
+    }
+
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close, true);
+    };
+  }, [roleMenuOpenForId]);
+
+  useEffect(() => {
     if (!isAdmin) {
       setCodes([]);
       setCodesError(null);
@@ -100,15 +155,46 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
     setCodes(list);
   }
 
-  async function handleRoleToggle(member: Member) {
+  async function handleRoleChange(member: Member, nextRole: Member["role"]) {
     if (member.role === "owner") return;
-    const nextRole = member.role === "admin" ? "querier" : "admin";
+    if (nextRole === member.role) return;
+
     setRoleUpdating(member.id);
+    setMembersError(null);
     try {
-      const updated = await updateMemberRole(member.id, nextRole);
-      setMembers((prev) => prev.map((m) => (m.id === updated.id ? { ...m, role: updated.role } : m)));
+      if (nextRole === "owner") {
+        if (!viewerIsOwner) {
+          throw new Error("Only the workspace owner can transfer ownership");
+        }
+        // Use in-app confirmation modal (not browser confirm).
+        setTransferConfirmMember(member);
+        return;
+      }
+
+      const updated = await updateMemberRole(member.id, nextRole as "admin" | "querier");
+      setMembers((prev) =>
+        prev.map((m) => (m.id === updated.id ? { ...m, role: updated.role } : m)),
+      );
     } catch (err) {
       setMembersError(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setRoleUpdating(null);
+    }
+  }
+
+  async function confirmTransferOwnership() {
+    if (!transferConfirmMember) return;
+    const target = transferConfirmMember;
+    setTransferConfirmMember(null);
+    setRoleUpdating(target.id);
+    setMembersError(null);
+    try {
+      const res = await transferEnterpriseOwnership(target.id);
+      applyEnterpriseSession(res.token, workspaceId, res.role);
+      const refreshed = await listMembers();
+      setMembers(refreshed);
+    } catch (err) {
+      setMembersError(err instanceof Error ? err.message : "Failed to transfer ownership");
     } finally {
       setRoleUpdating(null);
     }
@@ -124,6 +210,13 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
     } finally {
       setRemoving(null);
     }
+  }
+
+  async function confirmRemoveMember() {
+    if (!removeConfirmMember) return;
+    const member = removeConfirmMember;
+    setRemoveConfirmMember(null);
+    await handleRemove(member);
   }
 
   async function handleCreateOrRegenerateInvite() {
@@ -179,12 +272,107 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
   }
 
   function displayMemberRole(role: Member["role"]): string {
-    if (role === "querier") return "member";
+    if (role === "querier") return "Member";
+    if (role === "admin") return "Admin";
+    if (role === "owner") return "Owner";
     return role;
+  }
+
+  function openRoleMenu(member: Member, anchor: HTMLElement) {
+    const rect = anchor.getBoundingClientRect();
+    setRoleMenuOpenForId((prev) => (prev === member.id ? null : member.id));
+    setRoleMenuPos({
+      top: rect.bottom + 6,
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - 220)),
+    });
   }
 
   return (
     <div className="settings-workspace-admin">
+      {removeConfirmMember ? (
+        <div
+          className="confirm-modal-overlay"
+          role="presentation"
+          onClick={() => setRemoveConfirmMember(null)}
+        >
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm member removal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>Remove member?</h3>
+            <p>
+              Remove{" "}
+              <span className="confirm-modal-table-name">{removeConfirmMember.login}</span>{" "}
+              from this workspace.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                ref={removeConfirmCancelRef}
+                type="button"
+                className="surface-btn"
+                onClick={() => setRemoveConfirmMember(null)}
+                disabled={removing === removeConfirmMember.id}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="confirm-delete-button"
+                onClick={() => void confirmRemoveMember()}
+                disabled={removing === removeConfirmMember.id}
+              >
+                {removing === removeConfirmMember.id ? "Removing…" : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {transferConfirmMember ? (
+        <div
+          className="confirm-modal-overlay"
+          role="presentation"
+          onClick={() => setTransferConfirmMember(null)}
+        >
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm ownership transfer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>Transfer ownership?</h3>
+            <p>
+              Transfer ownership to{" "}
+              <span className="confirm-modal-table-name">{transferConfirmMember.login}</span>.
+              {" "}You will become an Admin after the transfer.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                ref={transferConfirmCancelRef}
+                type="button"
+                className="surface-btn"
+                onClick={() => setTransferConfirmMember(null)}
+                disabled={roleUpdating === transferConfirmMember.id}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="confirm-delete-button"
+                onClick={() => void confirmTransferOwnership()}
+                disabled={roleUpdating === transferConfirmMember.id}
+              >
+                {roleUpdating === transferConfirmMember.id ? "Transferring…" : "Transfer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className="settings-workspace-admin-block">
         <h2 className="settings-workspace-admin-heading">Members</h2>
         {membersError ? <p className="login-error" role="alert">{membersError}</p> : null}
@@ -214,6 +402,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                   const isWorkspaceOwner = member.role === "owner";
                   const adminDemoteNeedsOwner =
                     isAdmin && !viewerIsOwner && member.role === "admin" && !isSelf;
+                  const roleMenuOpen = roleMenuOpenForId === member.id;
                   return (
                     <tr key={member.id}>
                       <td>
@@ -226,24 +415,87 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                       </td>
                       <td>
                         {isWorkspaceOwner ? (
-                          <span className="settings-workspace-admin-muted">owner</span>
+                          <span className="settings-workspace-admin-muted">Owner</span>
                         ) : isAdmin && adminDemoteNeedsOwner ? (
                           <span
                             className="settings-workspace-admin-muted"
                             title="Only the workspace owner can demote an admin to member"
                           >
-                            admin
+                            Admin
                           </span>
                         ) : isAdmin ? (
-                          <button
-                            type="button"
-                            className="surface-btn settings-workspace-admin-table-btn"
-                            disabled={isSelf || roleUpdating === member.id}
-                            onClick={() => void handleRoleToggle(member)}
-                            title={isSelf ? "Cannot change your own role" : undefined}
-                          >
-                            {roleUpdating === member.id ? "Saving…" : member.role}
-                          </button>
+                          <span className="sort-menu-wrap" data-role-menu-root>
+                            <button
+                              type="button"
+                              className={`surface-btn settings-workspace-admin-table-btn${roleMenuOpen ? " active" : ""}`}
+                              disabled={isSelf || roleUpdating === member.id}
+                              onClick={(e) => openRoleMenu(member, e.currentTarget)}
+                              aria-haspopup="menu"
+                              aria-expanded={roleMenuOpen}
+                              aria-label={`Role for ${member.login}`}
+                              title={isSelf ? "Cannot change your own role" : undefined}
+                            >
+                              {roleUpdating === member.id ? "Saving…" : displayMemberRole(member.role)}
+                            </button>
+
+                            {roleMenuOpen && roleMenuPos ? (
+                              <div
+                                className="sort-menu"
+                                role="menu"
+                                aria-label={`Set role for ${member.login}`}
+                                style={{
+                                  position: "fixed",
+                                  top: roleMenuPos.top,
+                                  left: roleMenuPos.left,
+                                  right: "auto",
+                                  minWidth: 200,
+                                  zIndex: 20050,
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={member.role === "querier"}
+                                  className={`sort-menu-item${member.role === "querier" ? " active" : ""}`}
+                                  onClick={() => {
+                                    setRoleMenuOpenForId(null);
+                                    setRoleMenuPos(null);
+                                    void handleRoleChange(member, "querier");
+                                  }}
+                                >
+                                  Member
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={member.role === "admin"}
+                                  className={`sort-menu-item${member.role === "admin" ? " active" : ""}`}
+                                  onClick={() => {
+                                    setRoleMenuOpenForId(null);
+                                    setRoleMenuPos(null);
+                                    void handleRoleChange(member, "admin");
+                                  }}
+                                >
+                                  Admin
+                                </button>
+                                {viewerIsOwner ? (
+                                  <button
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={member.role === "owner"}
+                                    className="sort-menu-item"
+                                    onClick={() => {
+                                      setRoleMenuOpenForId(null);
+                                      setRoleMenuPos(null);
+                                      void handleRoleChange(member, "owner");
+                                    }}
+                                  >
+                                    Owner (transfer)
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </span>
                         ) : (
                           <span className="settings-workspace-admin-muted">{displayMemberRole(member.role)}</span>
                         )}
@@ -273,7 +525,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                                 type="button"
                                 className="surface-btn settings-workspace-admin-remove"
                                 disabled={removing === member.id}
-                                onClick={() => void handleRemove(member)}
+                                onClick={() => setRemoveConfirmMember(member)}
                               >
                                 {removing === member.id ? "Removing…" : "Remove"}
                               </button>

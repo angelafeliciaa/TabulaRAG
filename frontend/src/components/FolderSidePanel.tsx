@@ -121,7 +121,7 @@ export default function FolderSidePanel({
 
     const fetches: [Promise<Folder[]>, Promise<UserGroup[]>] = [
       listFolders(),
-      isOwner() ? listGroups() : Promise.resolve([]),
+      isAdmin ? listGroups() : Promise.resolve([]),
     ];
 
     Promise.all(fetches)
@@ -739,7 +739,7 @@ export default function FolderSidePanel({
                           <>
                             {groupsState?.grants.length === 0 ? (
                               <p className="folder-panel__groups-muted">
-                                No restrictions. All queriers can see this folder.
+                                No restrictions. All members can see this folder.
                               </p>
                             ) : (
                               <ul className="folder-panel__groups-list" role="list">

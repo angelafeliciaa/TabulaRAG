@@ -58,7 +58,7 @@ function AppContent() {
   const onDatasetTablePage = location.pathname.startsWith("/tables/") && location.pathname !== "/tables/virtual";
   const showWorkspaceSwitcher = Boolean(onHomePage && user?.enterprise_id);
   const showInlineTableHeader = !onHomePage && onDatasetTablePage;
-  const useIconOnlyBrand = onSettingsPage || onDatasetTablePage;
+  const useIconOnlyBrand = onDatasetTablePage;
 
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuWrapRef = useRef<HTMLDivElement | null>(null);

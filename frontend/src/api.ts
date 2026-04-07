@@ -410,7 +410,10 @@ export async function disbandEnterprise(): Promise<{
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error((fastApiErrorMessage(text) ?? text) || "Failed to disband workspace");
+  }
   return res.json();
 }
 

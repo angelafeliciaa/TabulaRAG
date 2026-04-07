@@ -21,7 +21,7 @@ import {
 
 type SettingsTab = "account" | "workspace" | "groups" | "appearance" | "mcp";
 
-const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; ownerOnly?: boolean }> = [
+const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; adminOnly?: boolean }> = [
   { id: "account", label: "Account", description: "Your profile and workspaces" },
   {
     id: "workspace",
@@ -32,7 +32,7 @@ const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; own
     id: "groups",
     label: "Groups",
     description: "User groups and their access to protected folders",
-    ownerOnly: true,
+    adminOnly: true,
   },
   { id: "appearance", label: "Appearance", description: "Theme and table value display" },
   { id: "mcp", label: "MCP", description: "External tool access" },
@@ -135,13 +135,10 @@ export default function Settings() {
   }, [sessionRev, user?.enterprise_id]);
 
   const workspacesSorted = useMemo(() => {
-    const activeId = user?.enterprise_id;
     return [...workspaces].sort((a, b) => {
-      if (a.enterprise_id === activeId) return -1;
-      if (b.enterprise_id === activeId) return 1;
       return a.enterprise_name.localeCompare(b.enterprise_name, undefined, { sensitivity: "base" });
     });
-  }, [workspaces, user?.enterprise_id]);
+  }, [workspaces]);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.enterprise_id === user?.enterprise_id) ?? null,
@@ -225,7 +222,7 @@ export default function Settings() {
     }
   }
 
-  const TABS = ALL_TABS.filter((t) => !t.ownerOnly || isOwner());
+  const TABS = ALL_TABS.filter((t) => !t.adminOnly || isAdmin());
   const tabMeta = TABS.find((t) => t.id === activeTab) ?? TABS[0];
   const workspaceId = user?.enterprise_id;
 
@@ -485,7 +482,7 @@ export default function Settings() {
                       <strong>
                         {activeWorkspace ? workspaceRoleLabel(activeWorkspace.role) : "—"}
                       </strong>
-                      {activeWorkspace?.role === "querier" ? " (read-only)" : null}
+                      {activeWorkspace?.role === "querier" ? " (member access)" : null}
                     </span>
                   </div>
                 </div>
@@ -574,7 +571,7 @@ export default function Settings() {
             </section>
           )}
 
-          {activeTab === "groups" && isOwner() && (
+          {activeTab === "groups" && isAdmin() && (
             <section className="settings-pane" aria-label="Groups">
               <div className="settings-section-body">
                 <UserGroupsSection />
