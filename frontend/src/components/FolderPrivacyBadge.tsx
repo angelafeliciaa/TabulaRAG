@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { FolderPrivacy } from "../api";
-import iconPublic from "../images/icon-public.svg";
-import iconProtected from "../images/icon-protected.svg";
-import iconPrivate from "../images/icon-private.svg";
+import iconPublic from "../images/icon_lock_public.svg";
+import iconProtected from "../images/icon_lock_protected.svg";
+import iconPrivate from "../images/icon_lock_private.svg";
 
 const LABELS: Record<FolderPrivacy, string> = {
   public: "Public",

@@ -379,6 +379,10 @@ export default function TableView() {
   /** Physical dataset view (`/tables/:id`) without multi-highlight: load all rows, no pagination. */
   const isPlainDatasetView = !isMultiHighlightMode;
   const returnPath = resolveReturnPath(location.search);
+  const isVirtualTableView = useMemo(
+    () => Boolean(getVirtualTableEncodedQ(returnPath)),
+    [returnPath],
+  );
   const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
   const returnQueryMode = useMemo<"filter" | "aggregate" | "semantic" | null>(() => {
     if (!returnPath || returnPath === "/") {
@@ -445,7 +449,8 @@ export default function TableView() {
   const [multiHighlightTruncated, setMultiHighlightTruncated] = useState(false);
   const [activeHighlightCursor, setActiveHighlightCursor] = useState(0);
   const [multiHighlightLabel, setMultiHighlightLabel] = useState("All matching rows");
-  const canEdit = userIsAdmin || tableFolderPrivacy === "public";
+  // "Virtual table view" (opened from results via `return_to` carrying `q`) is always read-only, even for admins.
+  const canEdit = (userIsAdmin || tableFolderPrivacy === "public") && !isVirtualTableView;
   const dateMenuId = useId();
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
   const dateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -455,6 +460,15 @@ export default function TableView() {
   const prevPageForHighlightSyncRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const showVirtualBanner =
+      isPlainDatasetView
+      && isVirtualTableView
+      && Number.isFinite(numericDatasetId)
+      && numericDatasetId > 0
+      && !serverError
+      && !tableNotFound
+      && !err
+      && !highlightErr;
     const showEditBanner =
       isPlainDatasetView
       && canEdit
@@ -465,6 +479,13 @@ export default function TableView() {
       && !err
       && !highlightErr;
 
+    if (showVirtualBanner) {
+      setHeaderNotice({
+        label: "Virtual View",
+        text: "Read-only preview (editing is disabled in virtual views)",
+      });
+      return () => setHeaderNotice(null);
+    }
     if (showEditBanner) {
       setHeaderNotice({
         label: "Edit Mode",
@@ -477,6 +498,7 @@ export default function TableView() {
   }, [
     canEdit,
     isPlainDatasetView,
+    isVirtualTableView,
     setHeaderNotice,
     numericDatasetId,
     serverError,
@@ -1418,10 +1440,16 @@ export default function TableView() {
       pendingEdits.size > 0
       || pendingColumnEdits.size > 0
     );
+  /** Same shell as filter drilldown: virtual results page for every multi-highlight (filter / semantic / aggregate). */
+  const useVirtualResultsLayout = isMultiHighlightMode;
 
   return (
     <div
-      className={`page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}`}
+      className={
+        useVirtualResultsLayout
+          ? "page-stack virtual-results-page table-view-virtual-result-preview"
+          : `page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}${isVirtualTableView ? " full-table-page--virtual-preview" : ""}`
+      }
     >
       {hasQueryContext && (isMultiHighlightMode || highlightedRow !== null) && (
         <div className="table-view-back-row">
@@ -1435,13 +1463,30 @@ export default function TableView() {
       )}
       <div
         className={`card${isPlainDatasetView ? " table-view-header-card--dataset" : ""}`}
-        style={{ marginBottom: isPlainDatasetView ? 6 : 8 }}
+        style={{
+          marginBottom: useVirtualResultsLayout ? 12 : isPlainDatasetView ? 6 : 8,
+        }}
       >
-        <div className="row table-view-header-row" style={{ justifyContent: "space-between" }}>
-          <div className="table-view-header-main">
-            <div className="table-view-title">{headerTitle}</div>
+        <div
+          className={`row ${useVirtualResultsLayout ? "virtual-results-header-row" : "table-view-header-row"}`}
+          style={useVirtualResultsLayout ? undefined : { justifyContent: "space-between" }}
+        >
+          <div
+            className={
+              useVirtualResultsLayout ? "virtual-results-header-main" : "table-view-header-main"
+            }
+          >
+            <div className={useVirtualResultsLayout ? "result-title" : "table-view-title"}>
+              {headerTitle}
+            </div>
             {isMultiHighlightMode && (
-              <div className="table-view-row-meta table-view-header-status">
+              <div
+                className={
+                  useVirtualResultsLayout
+                    ? "result-subtitle"
+                    : "table-view-row-meta table-view-header-status"
+                }
+              >
                 <span>
                   {returnQueryMode === "semantic"
                     ? `${(multiHighlightLabel || parsedMultiSpec?.question || "Query").trim()}: top-${semanticMultiHighlightTopK ?? Math.max(1, multiHighlightRows.length)} results`
@@ -1483,7 +1528,13 @@ export default function TableView() {
               </div>
             )}
           </div>
-          <div className="table-view-tools">
+          <div
+            className={
+              useVirtualResultsLayout
+                ? "table-view-tools virtual-results-tools"
+                : "table-view-tools"
+            }
+          >
             {isPlainDatasetView && hasUnsavedChanges && canEdit && (
               <div className="table-view-save-edits-wrap">
                 <button
@@ -1560,7 +1611,7 @@ export default function TableView() {
             <div
               className={`table-area full-table-area${
                 effectiveRowCount > 0 && totalPages > 1 ? " full-table-area--has-pagination" : ""
-              }`}
+              }${useVirtualResultsLayout ? " aggregate-results-table" : ""}`}
               ref={tableAreaRef}
             >
             <DataTable
@@ -1635,7 +1686,14 @@ export default function TableView() {
             />
             </div>
             {effectiveRowCount > 0 && (
-              <div className="table-view-pagination table-view-pagination--overlay" aria-label="Full table pagination">
+              <div
+                className={
+                  useVirtualResultsLayout
+                    ? "table-view-pagination"
+                    : "table-view-pagination table-view-pagination--overlay"
+                }
+                aria-label="Full table pagination"
+              >
                 <div className="table-view-pagination-controls">
                   <button
                     type="button"

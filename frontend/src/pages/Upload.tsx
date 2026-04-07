@@ -105,7 +105,7 @@ const PREVIEW_ROWS_PER_PAGE = 100;
 type ToastState = { id: number; kind: "success"; message: string };
 type UploadQueuePhase = "idle" | UploadProgress["phase"] | "success" | "error";
 type TableSortMode = "alphabet" | "rows" | "recent";
-type UploadPickerTarget = "empty" | "queue";
+type UploadPickerTarget = "empty";
 type UploadQueueItem = {
   id: string;
   file: File;
@@ -645,14 +645,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const uploadPanelRef = useRef<HTMLDivElement | null>(null);
   const uploadDropFileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadDropFolderInputRef = useRef<HTMLInputElement | null>(null);
-  const queueFileInputRef = useRef<HTMLInputElement | null>(null);
-  const queueFolderInputRef = useRef<HTMLInputElement | null>(null);
   const uploadPickerEmptyRef = useRef<HTMLDivElement | null>(null);
-  const uploadPickerQueueRef = useRef<HTMLDivElement | null>(null);
   const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
-  const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
-  const uploadDropClickLockRef = useRef(false);
-  const uploadDropClickLockTimeoutRef = useRef<number | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedDescriptionInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -1045,14 +1039,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    const activePickerRef =
-      uploadPickerOpen === "empty"
-        ? uploadPickerEmptyRef
-        : uploadPickerQueueRef;
-    const activeToggleRef =
-      uploadPickerOpen === "empty"
-        ? uploadPickerEmptyButtonRef
-        : uploadPickerQueueButtonRef;
+    const activePickerRef = uploadPickerEmptyRef;
+    const activeToggleRef = uploadPickerEmptyButtonRef;
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
@@ -1108,9 +1096,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
   useEffect(() => {
     return () => {
       clearToastTimer();
-      if (uploadDropClickLockTimeoutRef.current !== null) {
-        window.clearTimeout(uploadDropClickLockTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -2151,26 +2136,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
     onSelectFiles(droppedFiles);
   }
 
-  function lockUploadDropClick() {
-    if (uploadDropClickLockTimeoutRef.current !== null) {
-      window.clearTimeout(uploadDropClickLockTimeoutRef.current);
-    }
-    uploadDropClickLockRef.current = true;
-    uploadDropClickLockTimeoutRef.current = window.setTimeout(() => {
-      uploadDropClickLockRef.current = false;
-      uploadDropClickLockTimeoutRef.current = null;
-    }, 250);
-  }
-
-  function onUploadFiles(target: UploadPickerTarget) {
-    setUploadPickerOpen(null);
-    if (target === "empty") {
-      lockUploadDropClick();
-      uploadDropFileInputRef.current?.click();
-      return;
-    }
-    queueFileInputRef.current?.click();
-  }
   const hasPendingUploads = uploadQueue.some(
     (item) => item.phase === "idle" || item.phase === "error",
   );
@@ -2770,7 +2735,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   ✕
                 </button>
               </div>
-          {!isUploadQueueVisible ? (
             <div
               className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
               role="button"
@@ -2778,7 +2742,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
               aria-labelledby="upload-drop-title"
               aria-describedby={uploadDropDescriptionId}
               onClick={() => {
-                if (busy || uploadDropClickLockRef.current) {
+                if (busy) {
                   return;
                 }
                 uploadDropFileInputRef.current?.click();
@@ -2834,7 +2798,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 Supported file formats: .csv, .tsv, up to 50MB.
               </div>
             </div>
-          ) : (
+          {isUploadQueueVisible && (
             <>
               <h2 id={uploadQueueTitleId} className="sr-only">
                 Upload CSV/TSV{selectedFolderName ? ` to ${selectedFolderName}` : ""}
@@ -2843,60 +2807,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 Review file names, fix any validation errors, then upload or
                 cancel the queue.
               </p>
-              <div className="row upload-queue-toolbar">
-                <input
-                  ref={queueFileInputRef}
-                  type="file"
-                  multiple
-                  accept=".csv,.tsv"
-                  onChange={(event) => {
-                    onSelectFiles(event.target.files);
-                    event.currentTarget.value = "";
-                  }}
-                  className="file-input-hidden"
-                />
-                <input
-                  ref={queueFolderInputRef}
-                  {...FOLDER_INPUT_PROPS}
-                  type="file"
-                  multiple
-                  accept=".csv,.tsv"
-                  onChange={(event) => {
-                    onSelectFiles(event.target.files);
-                    event.currentTarget.value = "";
-                  }}
-                  className="file-input-hidden"
-                />
-                <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
-                  <button
-                    ref={uploadPickerQueueButtonRef}
-                    onClick={() => onUploadFiles("queue")}
-                    type="button"
-                    className="surface-btn upload-add-more-button"
-                    aria-label="Add more files"
-                    title="Add more files"
-                    disabled={busy || isQueueInProgress}
-                  >
-                    <svg
-                      className="upload-add-more-button__icon"
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                      focusable="false"
-                      role="presentation"
-                    >
-                      <path
-                        d="M12 5v14M5 12h14"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                    <span className="upload-add-more-button__label">
-                      Add more files
-                    </span>
-                  </button>
-                </div>
-              </div>
 
               <ul
                 className="upload-queue-list"
@@ -3100,13 +3010,19 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         {!isQueueInProgress && (
                           <button
                             type="button"
-                            className="upload-queue-remove"
+                            className="icon-button upload-queue-remove"
                             onClick={() => onRemoveQueuedFile(item.id)}
                             aria-label={`Remove ${item.file.name}`}
                             title="Remove file"
                             disabled={busy}
                           >
-                            ×
+                            <svg
+                              viewBox="0 0 24 24"
+                              aria-hidden="true"
+                              focusable="false"
+                            >
+                              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                            </svg>
                           </button>
                         )}
                       </div>
@@ -3184,7 +3100,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       onClick={onCancelAllQueuedFiles}
                       disabled={busy}
                     >
-                      Cancel all
+                      Discard all
                     </button>
                     <button
                       onClick={onUpload}
