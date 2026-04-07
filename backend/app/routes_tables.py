@@ -534,7 +534,7 @@ def _list_tables_payload(
                 "created_at": d.created_at.isoformat(),
                 "folder_id": folder.id if folder else None,
                 "folder_name": folder.name if folder else None,
-                "folder_privacy": folder.privacy if folder else None,
+                "folder_privacy": _effective_privacy(d),
             }
             stored = _coerce_query_context(d.query_context, sample_rows)
             item["query_context"] = stored or _build_query_context_from_db(
