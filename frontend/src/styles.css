@@ -2037,7 +2037,7 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
+  margin-left: 1.5rem;
 }
 
 button.surface-btn.settings-account-logout {
@@ -2052,8 +2052,8 @@ button.surface-btn.settings-account-logout:hover:not(:disabled) {
 }
 
 .settings-account-delete-section {
-  margin-top: 2rem;
-  padding-top: 1.25rem;
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
   border-top: 1px solid var(--surface-blur-border);
 }
 
@@ -2142,7 +2142,7 @@ button.surface-btn.settings-account-logout:hover:not(:disabled) {
 /* Full width of settings content so the scrollbar sits on the panel edge, not beside the narrow list. */
 .settings-my-workspaces-list-scroll-outer {
   width: 100%;
-  max-height: min(45dvh, 22rem);
+  max-height: min(40dvh, 16rem);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -7680,34 +7680,6 @@ a.login-repo-btn:hover {
 
 .user-menu--compact {
   gap: 10px;
-}
-
-.top-bar-theme-toggle.icon-button {
-  width: 36px;
-  height: 36px;
-  border-color: var(--surface-blur-border);
-  background: var(--surface-blur-bg);
-  color: var(--text);
-}
-
-.top-bar-theme-toggle.icon-button:hover:not(:disabled) {
-  background: var(--bg-elev-2);
-  color: var(--text);
-}
-
-.app-theme-toggle-float {
-  position: fixed;
-  bottom: 1.25rem;
-  right: 1.25rem;
-  z-index: 20005;
-}
-
-.app-theme-toggle-float .top-bar-theme-toggle.icon-button {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-}
-
-:root[data-theme="dark"] .app-theme-toggle-float .top-bar-theme-toggle.icon-button {
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
 }
 
 .user-avatar {

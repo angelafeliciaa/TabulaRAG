@@ -46,41 +46,6 @@ function workspaceRoleLabel(role: WorkspaceSummary["role"]): string {
   return "";
 }
 
-/** Quick dark/light toggle (same preference as Settings → Appearance). */
-function ThemeToggleButton({ className = "" }: { className?: string }) {
-  const { theme, setTheme } = useAppUi();
-  const isDark = theme === "dark";
-  return (
-    <button
-      type="button"
-      className={`top-bar-theme-toggle icon-button${className ? ` ${className}` : ""}`}
-      onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      title={isDark ? "Light mode" : "Dark mode"}
-    >
-      {isDark ? (
-        <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
-          <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth={2} />
-          <path
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"
-          />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
-          <path
-            fill="currentColor"
-            d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
-          />
-        </svg>
-      )}
-    </button>
-  );
-}
-
 function AppContent() {
   const location = useLocation();
   const { sessionRev, bumpSession, headerNotice } = useAppUi();
@@ -344,7 +309,6 @@ function AppContent() {
             )}
           </div>
         )}
-        <ThemeToggleButton />
         <div className="sort-menu-wrap top-bar-account-menu-wrap" ref={accountMenuWrapRef}>
           <button
             ref={accountMenuButtonRef}
@@ -431,11 +395,6 @@ function AppContent() {
 
   return (
     <div className="app-shell">
-      {!isAuthenticated() ? (
-        <div className="app-theme-toggle-float">
-          <ThemeToggleButton />
-        </div>
-      ) : null}
       {!onHomePage && !showInlineTableHeader && (
         <Link
           className={`app-brand${useIconOnlyBrand ? " app-brand--icon-only" : ""}`}
