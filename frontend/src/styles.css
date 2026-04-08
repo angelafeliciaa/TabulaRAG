@@ -2335,16 +2335,6 @@ a.settings-my-workspaces-add-link:focus-visible {
   margin: 0.45rem 0 0;
 }
 
-.settings-name-edit {
-  margin-top: 1.25rem;
-}
-
-.settings-name-success {
-  margin: 0.45rem 0 0;
-  font-size: 0.82rem;
-  color: var(--color-success, #16a34a);
-}
-
 /* Workspace tab: admin (members, invites, owner) */
 .settings-workspace-admin {
   display: flex;
@@ -2360,11 +2350,21 @@ a.settings-my-workspaces-add-link:focus-visible {
 }
 
 .settings-workspace-admin-email-cell {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem 0.5rem;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
   vertical-align: middle;
+}
+
+.settings-workspace-admin-member-name {
+  font-weight: 500;
+}
+
+.settings-workspace-admin-member-email {
+  font-size: 0.8rem;
+  opacity: 0.65;
+  width: 100%;
 }
 
 .settings-workspace-admin-you-badge {

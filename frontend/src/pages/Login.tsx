@@ -82,8 +82,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [codeDigits, setCodeDigits] = useState<string[]>(() => emptyVerifyCodeDigits());
   const codeInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [verifyHint, setVerifyHint] = useState<string | null>(null);
@@ -99,12 +98,11 @@ export default function Login() {
   const signupFormComplete = useMemo(() => {
     const em = email.trim();
     return (
-      firstName.trim().length > 0 &&
       isValidEmailShape(em) &&
       password.length >= 8 &&
       password === confirmPassword
     );
-  }, [firstName, email, password, confirmPassword]);
+  }, [email, password, confirmPassword]);
 
   const verifyCodeComplete = useMemo(
     () =>
@@ -251,10 +249,6 @@ export default function Login() {
       return;
     }
     if (authMode === "signup") {
-      if (!firstName.trim()) {
-        setError("Enter your first name.");
-        return;
-      }
       if (password.length < 8) {
         setError("Password must be at least 8 characters.");
         return;
@@ -267,13 +261,10 @@ export default function Login() {
     setLoading(true);
     try {
       if (authMode === "signup") {
-        const f = firstName.trim();
-        const l = lastName.trim();
-        const combinedName = l ? `${f} ${l}` : f;
         const reg = await registerWithEmail({
           email: trimmedEmail,
           password,
-          name: combinedName,
+          name: displayName.trim() || undefined,
         });
         if (isGoogleAccountExists(reg)) {
           setSignupStep("google_found");
@@ -499,7 +490,7 @@ export default function Login() {
                 ? verifyHint ||
                   (email.trim()
                     ? `We sent a 6-digit code to ${email.trim()}`
-                    : "We sent a 6-digit code to your email")
+                    : "We sent a 6-digit code to your email.")
                 : authMode === "signup" && signupStep === "google_found"
                   ? googleFoundMessage ||
                     "This email is already registered with Google. Sign in with Google to continue—the password you entered will be saved for email sign-in too."
@@ -623,8 +614,7 @@ export default function Login() {
                     setGoogleFoundMessage(null);
                     setError(null);
                     setEmail("");
-                    setFirstName("");
-                    setLastName("");
+                    setDisplayName("");
                     clearPasswordFields();
                   }}
                 >
@@ -677,34 +667,18 @@ export default function Login() {
             ) : (
               <form className="login-form" onSubmit={handleEmailSubmit} noValidate>
                 {authMode === "signup" ? (
-                  <div className="login-name-row">
-                    <label className="login-field-label login-name-field">
-                      <span className="sr-only">First name (required)</span>
-                      <input
-                        type="text"
-                        className="login-input"
-                        autoComplete="given-name"
-                        placeholder="First"
-                        value={firstName}
-                        onChange={(e) => setFirstName(e.target.value)}
-                        disabled={loading}
-                        required
-                        aria-required={true}
-                      />
-                    </label>
-                    <label className="login-field-label login-name-field">
-                      <span className="sr-only">Last name (optional)</span>
-                      <input
-                        type="text"
-                        className="login-input"
-                        autoComplete="family-name"
-                        placeholder="Last (optional)"
-                        value={lastName}
-                        onChange={(e) => setLastName(e.target.value)}
-                        disabled={loading}
-                      />
-                    </label>
-                  </div>
+                  <label className="login-field-label">
+                    <span className="sr-only">Display name (optional)</span>
+                    <input
+                      type="text"
+                      className="login-input"
+                      autoComplete="name"
+                      placeholder="Display name (optional)"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      disabled={loading}
+                    />
+                  </label>
                 ) : null}
                 <label className="login-field-label">
                   <span className="sr-only">Email</span>
@@ -878,8 +852,7 @@ export default function Login() {
                         setCodeDigits(emptyVerifyCodeDigits());
                         setGoogleFoundMessage(null);
                         setConfirmPassword("");
-                        setFirstName("");
-                        setLastName("");
+                        setDisplayName("");
                         setForgotDoneMessage(null);
                         setShowPassword(false);
                         setShowConfirmPassword(false);

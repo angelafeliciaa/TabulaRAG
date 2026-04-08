@@ -308,7 +308,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
             <h3>Remove member?</h3>
             <p>
               Remove{" "}
-              <span className="confirm-modal-table-name">{removeConfirmMember.login}</span>{" "}
+              <span className="confirm-modal-table-name">{removeConfirmMember.display_name}</span>{" "}
               from this workspace.
             </p>
             <div className="confirm-modal-actions">
@@ -350,7 +350,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
             <h3>Transfer ownership?</h3>
             <p>
               Transfer ownership to{" "}
-              <span className="confirm-modal-table-name">{transferConfirmMember.login}</span>.
+              <span className="confirm-modal-table-name">{transferConfirmMember.display_name}</span>.
               {" "}You will become an Admin after the transfer.
             </p>
             <div className="confirm-modal-actions">
@@ -388,7 +388,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
             <table className="settings-workspace-admin-table">
               <thead>
                 <tr>
-                  <th>Email</th>
+                  <th>Name</th>
                   <th>Role</th>
                   {isAdmin ? (
                     <>
@@ -401,7 +401,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
               </thead>
               <tbody>
                 {members.map((member) => {
-                  const isSelf = member.login === currentUser?.login;
+                  const isSelf = member.is_self ?? false;
                   const isWorkspaceOwner = member.role === "owner";
                   const adminDemoteNeedsOwner =
                     isAdmin && !viewerIsOwner && member.role === "admin" && !isSelf;
@@ -410,9 +410,12 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                     <tr key={member.id}>
                       <td>
                         <span className="settings-workspace-admin-email-cell">
-                          {member.login}
+                          <span className="settings-workspace-admin-member-name">{member.display_name}</span>
                           {isSelf ? (
                             <span className="settings-workspace-admin-you-badge">You</span>
+                          ) : null}
+                          {member.login ? (
+                            <span className="settings-workspace-admin-member-email">{member.login}</span>
                           ) : null}
                         </span>
                       </td>
@@ -435,7 +438,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                               onClick={(e) => openRoleMenu(member, e.currentTarget)}
                               aria-haspopup="menu"
                               aria-expanded={roleMenuOpen}
-                              aria-label={`Role for ${member.login}`}
+                              aria-label={`Role for ${member.display_name}`}
                               title={isSelf ? "Cannot change your own role" : undefined}
                             >
                               {roleUpdating === member.id ? "Saving…" : displayMemberRole(member.role)}
@@ -445,7 +448,7 @@ export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOw
                               <div
                                 className="sort-menu"
                                 role="menu"
-                                aria-label={`Set role for ${member.login}`}
+                                aria-label={`Set role for ${member.display_name}`}
                                 style={{
                                   position: "fixed",
                                   top: roleMenuPos.top,

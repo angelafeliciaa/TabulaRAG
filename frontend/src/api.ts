@@ -630,7 +630,9 @@ export async function adminRevokeMemberMcpToken(userId: number): Promise<void> {
 
 export interface Member {
   id: number;
-  login: string;
+  login?: string;
+  display_name: string;
+  is_self?: boolean;
   role: "owner" | "admin" | "querier";
   joined_at: string;
   mcp_token_configured?: boolean;

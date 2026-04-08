@@ -429,67 +429,23 @@ export default function Settings() {
                     </div>
                   </div>
                   <div className="settings-account-actions">
+                    <button
+                      type="button"
+                      className="surface-btn"
+                      disabled={!authMe}
+                      onClick={() => {
+                        setNameDraft(authMe?.display_name || user?.name || "");
+                        setNameError(null);
+                        setEditProfileOpen(true);
+                      }}
+                    >
+                      Edit profile
+                    </button>
                     <button type="button" className="logout-btn" onClick={handleLogout}>
                       Log out
                     </button>
                   </div>
                 </div>
-
-                {authMe?.is_local ? (
-                  <div className="settings-name-edit">
-                    <label className="settings-workspace-rename-label" htmlFor="settings-display-name-input">
-                      Display name
-                    </label>
-                    <div className="settings-workspace-rename-row">
-                      <input
-                        id="settings-display-name-input"
-                        type="text"
-                        className="input settings-workspace-rename-input"
-                        maxLength={255}
-                        placeholder="Your name"
-                        value={nameDraft}
-                        onChange={(e) => {
-                          setNameDraft(e.target.value);
-                          setNameError(null);
-                          setNameSuccess(false);
-                        }}
-                        disabled={nameSaving}
-                      />
-                      <button
-                        type="button"
-                        className="login-btn settings-workspace-rename-save"
-                        disabled={
-                          nameSaving
-                          || !nameDraft.trim()
-                          || nameDraft.trim() === (authMe.display_name || "").trim()
-                        }
-                        onClick={async () => {
-                          setNameSaving(true);
-                          setNameError(null);
-                          setNameSuccess(false);
-                          try {
-                            const result = await updateDisplayName(nameDraft.trim());
-                            setAuthMe((prev) => prev ? { ...prev, display_name: result.display_name } : prev);
-                            setNameSuccess(true);
-                            bumpSession();
-                          } catch (err) {
-                            setNameError(err instanceof Error ? err.message : "Failed to update name");
-                          } finally {
-                            setNameSaving(false);
-                          }
-                        }}
-                      >
-                        {nameSaving ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-                    {nameError ? (
-                      <p className="login-error settings-workspace-rename-error" role="alert">{nameError}</p>
-                    ) : null}
-                    {nameSuccess ? (
-                      <p className="settings-name-success">Name updated.</p>
-                    ) : null}
-                  </div>
-                ) : null}
 
                 <div className="settings-my-workspaces">
                   <h2 className="settings-subsection-title">My Workspaces</h2>
@@ -766,6 +722,79 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {editProfileOpen ? (
+        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+          <div
+            className="settings-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-edit-profile-title"
+          >
+            <h2 id="settings-edit-profile-title" className="settings-modal-title">
+              Edit profile
+            </h2>
+            <label className="settings-workspace-rename-label" htmlFor="settings-edit-profile-name">
+              Display name
+            </label>
+            <input
+              id="settings-edit-profile-name"
+              type="text"
+              className="input settings-modal-input"
+              maxLength={255}
+              placeholder="Your name"
+              autoComplete="name"
+              value={nameDraft}
+              onChange={(e) => {
+                setNameDraft(e.target.value);
+                setNameError(null);
+              }}
+              disabled={nameSaving}
+            />
+            {nameError ? (
+              <p className="login-error" role="alert">{nameError}</p>
+            ) : null}
+            <div className="settings-modal-actions">
+              <button
+                type="button"
+                className="surface-btn"
+                disabled={nameSaving}
+                onClick={() => {
+                  setEditProfileOpen(false);
+                  setNameError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="login-btn"
+                disabled={
+                  nameSaving
+                  || !nameDraft.trim()
+                  || nameDraft.trim() === (authMe?.display_name || "").trim()
+                }
+                onClick={async () => {
+                  setNameSaving(true);
+                  setNameError(null);
+                  try {
+                    const result = await updateDisplayName(nameDraft.trim());
+                    setAuthMe((prev) => prev ? { ...prev, display_name: result.display_name } : prev);
+                    bumpSession();
+                    setEditProfileOpen(false);
+                  } catch (err) {
+                    setNameError(err instanceof Error ? err.message : "Failed to update name");
+                  } finally {
+                    setNameSaving(false);
+                  }
+                }}
+              >
+                {nameSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteModalOpen ? (
         <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">

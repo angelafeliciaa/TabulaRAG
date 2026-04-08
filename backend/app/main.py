@@ -757,8 +757,6 @@ def auth_me_update(body: UpdateProfileBody, current_user: AuthUser = Depends(req
         user = db.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
-        if not is_local_email_account(user):
-            raise HTTPException(status_code=403, detail="Google accounts manage their name through Google.")
         name = body.display_name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Name cannot be empty.")
@@ -1284,7 +1282,7 @@ async def auth_google_callback(body: dict):
                     user = existing
                     db.add(user)
                     google_link_notice = (
-                        "Your Google account has been linked. "
+                        "Your Google account has been linked to a profile we found for this email. "
                         "You can now sign in with either Google or your password."
                     )
             else:
