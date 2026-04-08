@@ -3543,18 +3543,22 @@ ul {
 }
 
 .tables-header-upload-btn {
-  width: 34px;
   height: 34px;
   min-width: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 0.35em;
+  padding: 0 0.65rem;
   border: 0;
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: inherit;
+  white-space: nowrap;
 }
 
 .tables-header-upload-btn:hover {

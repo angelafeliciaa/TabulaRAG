@@ -3438,6 +3438,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         strokeLinecap="round"
                       />
                     </svg>
+                    Upload Table
                   </button>
                 </div>
               </div>
