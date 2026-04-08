@@ -4041,7 +4041,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       className="preview-open-link-icon"
                       aria-hidden="true"
                     />
-                    <span className="sort-toggle-text">Full Preview</span>
+                    <span className="sort-toggle-text">Edit Table</span>
                   </Link>
                 )}
               </div>
