@@ -223,21 +223,19 @@ def health_deps():
 
     all_ok = postgres_ok and qdrant_ok
 
-    smtp_host = os.getenv("SMTP_HOST", "").strip()
-    smtp_user = os.getenv("SMTP_USER", "").strip()
-    smtp_pw = os.getenv("SMTP_PASSWORD", "")
-    smtp_from = os.getenv("SMTP_FROM", "").strip() or smtp_user
-    smtp_ready = bool(smtp_host and smtp_user and smtp_pw and smtp_from)
+    resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
+    resend_from = os.getenv("RESEND_FROM", "").strip() or os.getenv("SMTP_FROM", "").strip()
+    resend_ready = bool(resend_api_key and resend_from)
 
     return {
         "status": "ok" if all_ok else "degraded",
         "postgres": "ok" if postgres_ok else "down",
         "qdrant": "ok" if qdrant_ok else "down",
-        "smtp": {
-            "host_configured": bool(smtp_host),
-            "auth_configured": bool(smtp_user and smtp_pw),
-            "from_configured": bool(smtp_from),
-            "ready_to_send": smtp_ready,
+        "email": {
+            "provider": "resend",
+            "api_key_configured": bool(resend_api_key),
+            "from_configured": bool(resend_from),
+            "ready_to_send": resend_ready,
         },
     }
 
@@ -1056,7 +1054,7 @@ def auth_resend_verification(body: ResendVerificationBody):
             logger.info("Verification email sent (resend) to %s", email)
         else:
             logger.warning(
-                "Verification code for %s was not emailed (SMTP_HOST empty); see server logs for the code",
+                "Verification code for %s was not emailed (RESEND_API_KEY not set); see server logs for the code",
                 email,
             )
         return {"email": email, "email_sent": email_sent}
