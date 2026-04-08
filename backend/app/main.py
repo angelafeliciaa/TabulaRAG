@@ -489,11 +489,16 @@ def _peek_infer_has_header(upload: UploadFile) -> bool:
 
 def _validate_upload_content(upload: UploadFile) -> None:
     content_type = (upload.content_type or "").strip().lower()
+    filename_lower = (upload.filename or "").strip().lower()
+    has_tabular_ext = filename_lower.endswith(".csv") or filename_lower.endswith(".tsv")
     if any(content_type.startswith(prefix) for prefix in BLOCKED_UPLOAD_CONTENT_TYPE_PREFIXES):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported content type '{content_type}' for CSV/TSV upload.",
-        )
+        if content_type == "application/octet-stream" and has_tabular_ext:
+            pass  # browsers often send octet-stream for .tsv files
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported content type '{content_type}' for CSV/TSV upload.",
+            )
 
     # Enforce a hard file-size cap to reduce parser/DB abuse.
     upload.file.seek(0, io.SEEK_END)
@@ -833,7 +838,7 @@ def _issue_verification_email(user: User, display_name: str) -> tuple[bool, str]
     if smtp_configured() and not sent:
         import logging
         logging.getLogger(__name__).warning(
-            "SMTP configured but verification email failed for %s", user.login,
+            "Verification email failed for %s", user.login,
         )
     return sent, code
 
