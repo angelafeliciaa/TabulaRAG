@@ -170,31 +170,6 @@ body {
   height: 100dvh;
 }
 
-/* Temporary floating theme toggle (testing only). */
-.theme-float-toggle {
-  position: fixed;
-  right: 14px;
-  bottom: 14px;
-  z-index: 50000;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--surface-blur-border);
-  background: var(--surface-blur-bg-strong);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: none;
-}
-
-.theme-float-toggle:hover,
-.theme-float-toggle:focus-visible {
-  background: var(--surface-blur-bg);
-  border-color: var(--border-soft);
-}
-
 a {
   color: var(--text);
   text-decoration: none;
@@ -6670,7 +6645,7 @@ input:focus-visible,
   grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
   width: 100%;
   max-width: 1040px;
-  min-height: min(560px, calc(100dvh - 2rem));
+  min-height: min(640px, calc(100dvh - 2rem));
   border-radius: 24px;
   overflow: hidden;
   background: color-mix(in srgb, var(--surface-blur-bg-strong) 82%, transparent);
@@ -6902,6 +6877,8 @@ a.login-repo-btn:hover {
   text-align: center;
   gap: 0.65rem;
   padding: 1.6rem 1.4rem;
+  box-sizing: border-box;
+  min-height: 31rem;
   border-radius: 20px;
   border: 1px solid color-mix(in srgb, var(--surface-blur-border) 88%, transparent);
   background: color-mix(in srgb, var(--surface-blur-bg) 78%, transparent);
@@ -6935,6 +6912,134 @@ a.login-repo-btn:hover {
   line-height: 1.4;
 }
 
+.login-auth-error-slot {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.login-auth-card .login-form {
+  margin: 0.25rem 0 0;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.login-auth-card-footer {
+  margin-top: auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.login-auth-card-footer .login-auth-divider {
+  margin: 0;
+}
+
+.login-field-label {
+  display: block;
+  width: 100%;
+  margin: 0;
+}
+
+.login-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.login-name-row .login-name-field {
+  min-width: 0;
+}
+
+.login-password-wrap {
+  position: relative;
+}
+
+.login-password-wrap .login-input--password {
+  padding-right: 2.75rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.login-password-wrap .login-password-toggle.icon-button {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.login-password-wrap .login-password-toggle.icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--text);
+}
+
+.login-password-wrap .login-password-toggle.icon-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.login-password-toggle-icon {
+  display: block;
+  pointer-events: none;
+}
+
+.login-auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.85rem 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.login-auth-divider::before,
+.login-auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.login-auth-switch {
+  margin: 1rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.login-auth-switch-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.login-auth-switch-btn:hover {
+  color: var(--text);
+}
+
+.login-auth-switch-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  border-radius: 4px;
+}
+
 .login-auth-card .login-error {
   width: 100%;
   text-align: center;
@@ -6947,7 +7052,7 @@ a.login-repo-btn:hover {
   justify-content: center;
   gap: 0.55rem;
   width: 100%;
-  margin-top: 0.35rem;
+  margin-top: 0;
   background: var(--bg-elev-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -7012,6 +7117,10 @@ a.login-repo-btn:hover {
 
   .login-split-auth {
     padding: clamp(2rem, 5vw, 2.75rem) clamp(1.25rem, 4vw, 2rem);
+  }
+
+  .login-auth-card {
+    min-height: 28rem;
   }
 }
 
@@ -7087,6 +7196,11 @@ a.login-repo-btn:hover {
     max-width: none;
     padding: 1rem 0.9rem;
     gap: 0.5rem;
+    min-height: auto;
+  }
+
+  .login-auth-card-footer {
+    margin-top: 0.65rem;
   }
 
   .login-auth-title {

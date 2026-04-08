@@ -2,6 +2,7 @@
 
 import io
 import os
+import uuid
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -48,18 +49,21 @@ def test_auth_verify_jwt(client):
     from app.models import User
 
     with SessionLocal() as db:
-        db.add(User(
+        u = User(
             google_id="test_google_id",
-            login="tester",
-        ))
+            login="tester@example.com",
+        )
+        db.add(u)
         db.commit()
+        db.refresh(u)
+        uid = u.id
 
-    token = create_jwt({
-        "id": "test_google_id",
-        "email": "tester@example.com",
-        "name": "tester",
-        "picture": ""
-    })
+    token = create_jwt(
+        user_id=uid,
+        login="tester@example.com",
+        name="tester",
+        avatar_url="",
+    )
 
     resp = client.post(
         "/auth/verify",
@@ -81,6 +85,78 @@ def test_google_callback_missing_code(client):
 def test_google_callback_missing_redirect_uri(client):
     resp = client.post("/auth/google/callback", json={"code": "abc123"})
     assert resp.status_code == 400
+
+
+def test_register_login_email_flow(client):
+    email = f"local_{uuid.uuid4().hex[:10]}@example.com"
+    reg = client.post(
+        "/auth/register",
+        json={"email": email, "password": "secret1234", "name": "Local User"},
+    )
+    assert reg.status_code == 200, reg.text
+    body = reg.json()
+    assert "token" in body
+    assert body["user"]["login"] == email
+    assert body["onboarding_required"] is True
+
+    dup = client.post(
+        "/auth/register",
+        json={"email": email, "password": "othersecret1"},
+    )
+    assert dup.status_code == 409
+
+    bad_pw = client.post(
+        "/auth/login",
+        json={"email": email, "password": "wrongpassword"},
+    )
+    assert bad_pw.status_code == 401
+
+    ok = client.post(
+        "/auth/login",
+        json={"email": email, "password": "secret1234"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["user"]["login"] == email
+
+
+def test_google_callback_links_existing_email_password_account(client):
+    """Google OAuth with same email as an email/password user attaches Google id; both logins work."""
+    from unittest.mock import AsyncMock, patch
+
+    email = f"link_{uuid.uuid4().hex[:10]}@example.com"
+    reg = client.post(
+        "/auth/register",
+        json={"email": email, "password": "pwlinks1234", "name": "Local First"},
+    )
+    assert reg.status_code == 200, reg.text
+
+    mock_google = {
+        "id": "google-sub-linked-99",
+        "email": email,
+        "name": "From Google",
+        "picture": "https://example.com/a.png",
+    }
+
+    with patch("app.main.exchange_google_code", new_callable=AsyncMock, return_value=mock_google):
+        go = client.post(
+            "/auth/google/callback",
+            json={"code": "abc", "redirect_uri": "https://example.com/callback"},
+        )
+    assert go.status_code == 200, go.text
+    body = go.json()
+    assert body["user"]["login"] == email
+    assert body["user"]["name"] == "From Google"
+
+    pw = client.post("/auth/login", json={"email": email, "password": "pwlinks1234"})
+    assert pw.status_code == 200, pw.text
+    assert pw.json()["user"]["login"] == email
+
+    with patch("app.main.exchange_google_code", new_callable=AsyncMock, return_value=mock_google):
+        go2 = client.post(
+            "/auth/google/callback",
+            json={"code": "def", "redirect_uri": "https://example.com/callback"},
+        )
+    assert go2.status_code == 200, go2.text
 
 
 def test_google_callback_success(client):

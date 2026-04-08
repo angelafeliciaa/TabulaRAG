@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import httpx
 import jwt
 from fastapi import Depends, HTTPException, Security
@@ -27,6 +29,32 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "168"))  # 7 days
 
 MCP_TOKEN_PREFIX = "tgr_mcp_"
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_email(raw: str) -> str:
+    return (raw or "").strip().lower()
+
+
+def is_valid_email_shape(email: str) -> bool:
+    return bool(email) and len(email) <= 255 and _EMAIL_RE.match(email) is not None
+
+
+def make_local_google_id() -> str:
+    """Synthetic google_id for password-only accounts (unique, fits column length)."""
+    return "local_" + secrets.token_urlsafe(24).replace("-", "")[:40]
+
+
+def hash_password(raw: str) -> str:
+    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("ascii")
+
+
+def verify_password(raw: str, password_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(raw.encode("utf-8"), password_hash.encode("ascii"))
+    except (ValueError, TypeError):
+        return False
 
 
 def hash_mcp_token(raw: str) -> str:
@@ -100,15 +128,18 @@ def get_active_membership(db, user: User) -> EnterpriseMembership | None:
 
 def mint_token_for_user(db, user: User, google_profile: dict | None = None) -> str:
     """JWT reflecting current `last_active_enterprise_id` and membership role."""
-    profile = google_profile or {
-        "id": user.google_id,
-        "email": user.login,
-        "name": user.login,
-        "picture": "",
-    }
+    if google_profile is not None:
+        name = google_profile.get("name") or google_profile.get("email") or user.login
+        avatar_url = google_profile.get("picture", "") or ""
+    else:
+        name = user.login
+        avatar_url = ""
     m = get_active_membership(db, user)
     return create_jwt(
-        profile,
+        user_id=user.id,
+        login=user.login,
+        name=name,
+        avatar_url=avatar_url,
         enterprise_id=m.enterprise_id if m else None,
         role=m.role.value if m else None,
     )
@@ -139,23 +170,37 @@ def _auth_user_from_db_user(db, user: User) -> AuthUser:
 
 
 def create_jwt(
-    google_user: dict,
     *,
+    user_id: int,
+    login: str,
+    name: str,
+    avatar_url: str = "",
     enterprise_id: int | None = None,
     role: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
-        "sub": str(google_user["id"]),
-        "login": google_user["email"],
-        "name": google_user.get("name") or google_user["email"],
-        "avatar_url": google_user.get("picture", ""),
+        "sub": str(user_id),
+        "login": login,
+        "name": name or login,
+        "avatar_url": avatar_url or "",
         "enterprise_id": enterprise_id,
         "role": role,
         "iat": now,
         "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def user_from_jwt_sub(db, sub: str) -> User | None:
+    """Resolve JWT subject to User (numeric id preferred; legacy tokens used google_id)."""
+    if not sub:
+        return None
+    if sub.isdigit():
+        u = db.get(User, int(sub))
+        if u is not None:
+            return u
+    return db.execute(select(User).where(User.google_id == sub)).scalar_one_or_none()
 
 
 def require_auth(
@@ -185,9 +230,12 @@ def require_auth(
     if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    google_id = claims.get("sub")
+    sub = claims.get("sub")
+    if not isinstance(sub, str):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
+        user = user_from_jwt_sub(db, sub)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found — please log in again")
         return _auth_user_from_db_user(db, user)

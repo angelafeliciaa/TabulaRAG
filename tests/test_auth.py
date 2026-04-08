@@ -28,8 +28,12 @@ def _google_user(**kwargs) -> dict:
 
 
 def test_create_and_decode_jwt():
-    user = _google_user()
-    token = create_jwt(user)
+    token = create_jwt(
+        user_id=1,
+        login="octocat@example.com",
+        name="Octo Cat",
+        avatar_url="https://example.com/avatar.png",
+    )
     claims = _decode_jwt(token)
     assert claims is not None
     assert claims["sub"] == "1"
@@ -41,8 +45,12 @@ def test_create_and_decode_jwt():
 
 
 def test_create_jwt_uses_email_as_name_fallback():
-    user = _google_user(name=None)
-    token = create_jwt(user)
+    token = create_jwt(
+        user_id=1,
+        login="octocat@example.com",
+        name="octocat@example.com",
+        avatar_url="",
+    )
     claims = _decode_jwt(token)
     assert claims["name"] == "octocat@example.com"
 
@@ -61,7 +69,7 @@ def test_decode_jwt_expired():
     import jwt as pyjwt
     from datetime import datetime, timedelta, timezone
     payload = {
-        "sub": "1",
+        "sub": "42",
         "exp": datetime.now(timezone.utc) - timedelta(hours=1),
     }
     token = pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -90,14 +98,19 @@ def test_require_auth_valid_api_key():
 
 def test_require_auth_valid_jwt():
     from app.models import User, UserRole
-    google_user = _google_user(id="99")
-    token = create_jwt(google_user)
+    token = create_jwt(
+        user_id=99,
+        login="octocat@example.com",
+        name="Octo Cat",
+        avatar_url="",
+    )
     cred = MagicMock()
     cred.credentials = token
 
     mock_user = User(google_id="99", login="octocat@example.com")
+    mock_user.id = 99
     mock_db = MagicMock()
-    mock_db.execute.return_value.scalar_one_or_none.return_value = mock_user
+    mock_db.get.return_value = mock_user
     mock_db.__enter__ = MagicMock(return_value=mock_db)
     mock_db.__exit__ = MagicMock(return_value=False)
 
@@ -109,12 +122,17 @@ def test_require_auth_valid_jwt():
 
 def test_require_auth_user_not_found():
     from fastapi import HTTPException
-    google_user = _google_user(id="999")
-    token = create_jwt(google_user)
+    token = create_jwt(
+        user_id=999,
+        login="nobody@example.com",
+        name="Nobody",
+        avatar_url="",
+    )
     cred = MagicMock()
     cred.credentials = token
 
     mock_db = MagicMock()
+    mock_db.get.return_value = None
     mock_db.execute.return_value.scalar_one_or_none.return_value = None
     mock_db.__enter__ = MagicMock(return_value=mock_db)
     mock_db.__exit__ = MagicMock(return_value=False)

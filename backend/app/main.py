@@ -5,10 +5,11 @@ import logging
 import os
 from typing import Iterable, List, Optional, Tuple
 import httpx
+from pydantic import BaseModel, Field
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi_mcp.types import AuthConfig
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, insert, text, select
+from sqlalchemy import delete, func, insert, text, select
 from contextlib import asynccontextmanager
 from app.db import SessionLocal, engine
 from app.dataset_state import (
@@ -19,6 +20,7 @@ from app.dataset_state import (
     ensure_dataset_columns_normalized_columns,
     ensure_dataset_index_ready_column,
     ensure_enterprise_memberships_and_last_active,
+    ensure_users_legacy_enterprise_role_nullable,
     ensure_enterprise_name_non_unique,
     ensure_folder_sort_order_column,
     ensure_folders_table,
@@ -26,6 +28,8 @@ from app.dataset_state import (
     ensure_querier_role_and_migrate_member,
     ensure_postgres_userrole_owner_enum,
     ensure_user_groups_tables,
+    ensure_users_password_hash_column,
+    ensure_users_email_verification_columns,
     promote_legacy_admin_to_owner_per_enterprise,
     set_dataset_index_ready,
 )
@@ -64,11 +68,16 @@ from app.normalization import (
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 from app.auth import (
     AuthUser,
+    exchange_google_code,
     get_active_membership,
     GOOGLE_CLIENT_ID,
+    hash_password,
+    is_valid_email_shape,
+    make_local_google_id,
     mint_token_for_user,
+    normalize_email,
     require_auth,
-    exchange_google_code,
+    verify_password,
 )
 
 
@@ -78,35 +87,31 @@ INDEX_WORKER_CONCURRENCY = max(1, int(os.getenv("INDEX_WORKER_CONCURRENCY", "4")
 
 def _delete_orphan_datasets_on_startup() -> None:
     """
-    Optional one-time cleanup: delete datasets with folder_id NULL.
+    Delete every dataset with folder_id NULL (rows, columns, dataset row).
 
-    This is destructive and is controlled by env var:
-      TABULARAG_DELETE_ORPHAN_DATASETS_ON_STARTUP=1
+    Runs on every startup for pre-production / dev: clears legacy or stray uploads
+    that never got a folder. Destructive — also removes Qdrant collections and
+    index-job state for those dataset ids when possible.
     """
-    flag = os.getenv("TABULARAG_DELETE_ORPHAN_DATASETS_ON_STARTUP", "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
-        return
-
-    # Import here to avoid circular imports at module load time.
-    from sqlalchemy import delete, select
     from app.index_jobs import clear_index_job
 
     with SessionLocal() as db:
         orphan_ids = db.execute(
-            select(Dataset.id).where(Dataset.folder_id.is_(None))
+            select(Dataset.id).where(Dataset.folder_id.is_(None)),
         ).scalars().all()
         if not orphan_ids:
-            logger.info("Startup cleanup: no orphan datasets (folder_id NULL) found.")
+            logger.info("Startup: no orphan datasets (folder_id NULL) to delete.")
             return
 
-        logger.warning("Startup cleanup: deleting %d orphan dataset(s) (folder_id NULL).", len(orphan_ids))
-        # Use direct SQL deletes to avoid expensive ORM cascade loading.
+        logger.warning(
+            "Startup: deleting %d orphan dataset(s) (folder_id NULL).",
+            len(orphan_ids),
+        )
         db.execute(delete(DatasetRow).where(DatasetRow.dataset_id.in_(orphan_ids)))
         db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id.in_(orphan_ids)))
         db.execute(delete(Dataset).where(Dataset.id.in_(orphan_ids)))
         db.commit()
 
-    # Best-effort external cleanup (index jobs + vector collections).
     for did in orphan_ids:
         try:
             clear_index_job(int(did))
@@ -128,6 +133,7 @@ async def lifespan(app: FastAPI):
     ensure_dataset_query_context_column()
     ensure_dataset_enterprise_id_column()
     ensure_enterprise_memberships_and_last_active()
+    ensure_users_legacy_enterprise_role_nullable()
     ensure_enterprise_name_non_unique()
     ensure_querier_role_and_migrate_member()
     ensure_postgres_userrole_owner_enum()
@@ -137,6 +143,8 @@ async def lifespan(app: FastAPI):
     ensure_folder_sort_order_column()
     ensure_dataset_folder_id_column()
     ensure_user_groups_tables()
+    ensure_users_password_hash_column()
+    ensure_users_email_verification_columns()
     _delete_orphan_datasets_on_startup()
     try:
         from app.embeddings import get_model
@@ -698,8 +706,110 @@ def auth_google_redirect():
     return {"client_id": GOOGLE_CLIENT_ID}
 
 
+class EmailRegisterBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=72)
+    name: str | None = Field(None, max_length=255)
+
+
+class EmailLoginBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=72)
+
+
+def _build_auth_response(
+    db,
+    user: User,
+    token: str,
+    *,
+    profile: dict | None = None,
+    display_name: str | None = None,
+) -> dict:
+    membership_count = db.execute(
+        select(func.count()).where(EnterpriseMembership.user_id == user.id),
+    ).scalar_one()
+    m = get_active_membership(db, user)
+    enterprise_id = m.enterprise_id if m else None
+    role = m.role.value if m else None
+    if profile is not None:
+        u_name = profile.get("name") or user.login
+        u_avatar = profile.get("picture", "") or ""
+    else:
+        u_name = (display_name or "").strip() or user.login
+        u_avatar = ""
+    return {
+        "token": token,
+        "user": {
+            "login": user.login,
+            "name": u_name,
+            "avatar_url": u_avatar,
+            "role": role,
+            "enterprise_id": enterprise_id,
+        },
+        "onboarding_required": membership_count == 0,
+    }
+
+
+@app.post("/auth/register", include_in_schema=False)
+def auth_register(body: EmailRegisterBody):
+    email = normalize_email(body.email)
+    if not is_valid_email_shape(email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    display_name = (body.name or "").strip() or email.split("@", 1)[0]
+
+    with SessionLocal() as db:
+        dup = db.execute(
+            select(User).where(func.lower(User.login) == email),
+        ).scalar_one_or_none()
+        if dup is not None:
+            if dup.password_hash is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This email is already registered with Google sign-in. "
+                        "Sign in with Google, or use a different email."
+                    ),
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Sign in instead.",
+            )
+        user = User(
+            google_id=make_local_google_id(),
+            login=email,
+            password_hash=hash_password(body.password),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        token = mint_token_for_user(db, user)
+        return _build_auth_response(db, user, token, display_name=display_name)
+
+
+@app.post("/auth/login", include_in_schema=False)
+def auth_login(body: EmailLoginBody):
+    email = normalize_email(body.email)
+    if not is_valid_email_shape(email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    with SessionLocal() as db:
+        user = db.execute(
+            select(User).where(func.lower(User.login) == email),
+        ).scalar_one_or_none()
+        if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
+        token = mint_token_for_user(db, user)
+        return _build_auth_response(db, user, token)
+
+
 @app.post("/auth/google/callback", include_in_schema=False)
 async def auth_google_callback(body: dict):
+    """
+    Google sign-in: find or create user by Google subject.
+
+    If the Google email matches an existing email/password account, the Google id
+    is attached to that same row (user can sign in with either method afterward).
+    """
     code = body.get("code")
     redirect_uri = body.get("redirect_uri")
     if not code or not redirect_uri:
@@ -707,36 +817,45 @@ async def auth_google_callback(body: dict):
     google_user = await exchange_google_code(code, redirect_uri)
 
     google_id = str(google_user["id"])
-    login = google_user["email"]
+    login = normalize_email(google_user["email"])
+    if not is_valid_email_shape(login):
+        raise HTTPException(status_code=400, detail="Google account email is missing or invalid")
 
     with SessionLocal() as db:
         user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
         if user is None:
-            user = User(google_id=google_id, login=login)
-            db.add(user)
+            existing = db.execute(
+                select(User).where(func.lower(User.login) == login),
+            ).scalar_one_or_none()
+            if existing is not None:
+                if existing.google_id == google_id:
+                    user = existing
+                    if existing.login != login:
+                        existing.login = login
+                        db.add(existing)
+                elif existing.password_hash is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This email is already used with Google sign-in. "
+                            "Please sign in with Google."
+                        ),
+                    )
+                else:
+                    existing.google_id = google_id
+                    existing.login = login
+                    user = existing
+                    db.add(user)
+            else:
+                user = User(google_id=google_id, login=login)
+                db.add(user)
         elif user.login != login:
             user.login = login
+            db.add(user)
         db.commit()
         db.refresh(user)
-        membership_count = db.execute(
-            select(func.count()).where(EnterpriseMembership.user_id == user.id),
-        ).scalar_one()
-        m = get_active_membership(db, user)
-        enterprise_id = m.enterprise_id if m else None
-        role = m.role.value if m else None
         token = mint_token_for_user(db, user, google_user)
-
-    return {
-        "token": token,
-        "user": {
-            "login": google_user["email"],
-            "name": google_user.get("name") or google_user["email"],
-            "avatar_url": google_user.get("picture", ""),
-            "role": role,
-            "enterprise_id": enterprise_id,
-        },
-        "onboarding_required": membership_count == 0,
-    }
+        return _build_auth_response(db, user, token, profile=google_user)
 
 
 @app.post("/ingest", include_in_schema=False)

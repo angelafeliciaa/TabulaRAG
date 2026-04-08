@@ -459,6 +459,67 @@ def ensure_user_groups_tables() -> None:
     FolderGroupAccess.__table__.create(bind=app_db.engine, checkfirst=True)
 
 
+def ensure_users_password_hash_column() -> None:
+    """Add users.password_hash for email/password sign-up (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    if "password_hash" in cols:
+        return
+    with app_db.engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL"))
+
+
+def ensure_users_email_verification_columns() -> None:
+    """Add email_verified and pending-code columns for email sign-up (existing DB volumes)."""
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    dialect = app_db.engine.dialect.name
+    with app_db.engine.begin() as conn:
+        if "email_verified" not in cols:
+            if dialect == "postgresql":
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT true")
+                )
+            else:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT 1")
+                )
+        if "verification_code_hash" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN verification_code_hash VARCHAR(128) NULL"))
+        if "verification_code_expires_at" not in cols:
+            if dialect == "postgresql":
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN verification_code_expires_at TIMESTAMPTZ NULL")
+                )
+            else:
+                conn.execute(text("ALTER TABLE users ADD COLUMN verification_code_expires_at DATETIME NULL"))
+
+
+def ensure_users_legacy_enterprise_role_nullable() -> None:
+    """
+    Older PostgreSQL volumes still have users.enterprise_id / users.role (NOT NULL) from
+    before workspace roles lived in enterprise_memberships. The ORM no longer maps those
+    columns, so new rows must be able to omit them. Drop NOT NULL if still enforced.
+    """
+    inspector = inspect(app_db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+    if app_db.engine.dialect.name != "postgresql":
+        return
+    cols = {c["name"]: c for c in inspector.get_columns("users")}
+    with app_db.engine.begin() as conn:
+        role_col = cols.get("role")
+        if role_col is not None and role_col.get("nullable") is False:
+            conn.execute(text("ALTER TABLE users ALTER COLUMN role DROP NOT NULL"))
+        ent_col = cols.get("enterprise_id")
+        if ent_col is not None and ent_col.get("nullable") is False:
+            conn.execute(text("ALTER TABLE users ALTER COLUMN enterprise_id DROP NOT NULL"))
+
+
 def set_dataset_index_ready(dataset_id: int, is_ready: bool) -> None:
     with app_db.SessionLocal() as db:
         db.execute(

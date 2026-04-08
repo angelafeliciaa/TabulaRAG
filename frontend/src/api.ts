@@ -94,20 +94,81 @@ export async function redirectToGoogleSignIn(options?: {
   window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
+export type AuthSessionResponse = {
+  token: string;
+  user: AuthUser;
+  onboarding_required: boolean;
+};
+
+async function readApiErrorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const data = JSON.parse(text) as { detail?: unknown };
+    const d = data.detail;
+    if (typeof d === "string") {
+      return d;
+    }
+    if (Array.isArray(d)) {
+      return d
+        .map((x: { msg?: string }) => (typeof x?.msg === "string" ? x.msg : JSON.stringify(x)))
+        .join("; ");
+    }
+  } catch {
+    /* ignore */
+  }
+  return text || "Request failed";
+}
+
 export async function exchangeGoogleCode(
   code: string,
   redirectUri: string,
-): Promise<{ token: string; user: AuthUser; onboarding_required: boolean }> {
+): Promise<AuthSessionResponse> {
   const res = await fetch(`${API_BASE}/auth/google/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || "Google authentication failed");
+    throw new Error((await readApiErrorMessage(res)) || "Google authentication failed");
   }
-  const data = (await res.json()) as { token: string; user: AuthUser; onboarding_required: boolean };
+  const data = (await res.json()) as AuthSessionResponse;
+  localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+  return data;
+}
+
+export async function registerWithEmail(body: {
+  email: string;
+  password: string;
+  name?: string;
+}): Promise<AuthSessionResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  const data = (await res.json()) as AuthSessionResponse;
+  localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+  return data;
+}
+
+export async function loginWithEmail(
+  email: string,
+  password: string,
+): Promise<AuthSessionResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  const data = (await res.json()) as AuthSessionResponse;
   localStorage.setItem(TOKEN_KEY, data.token);
   localStorage.setItem(USER_KEY, JSON.stringify(data.user));
   return data;

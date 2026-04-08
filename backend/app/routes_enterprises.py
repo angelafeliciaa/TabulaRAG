@@ -297,7 +297,9 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
         raise HTTPException(status_code=400, detail="Workspace name is too long")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
+        if current_user.id == 0:
+            raise HTTPException(status_code=401, detail="User not found")
+        user = db.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
 
@@ -358,7 +360,9 @@ def join_enterprise(body: JoinEnterpriseRequest, current_user: AuthUser = Depend
         raise HTTPException(status_code=400, detail="Invite code cannot be empty")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
+        if current_user.id == 0:
+            raise HTTPException(status_code=401, detail="User not found")
+        user = db.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
 
