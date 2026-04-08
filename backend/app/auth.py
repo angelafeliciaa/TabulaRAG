@@ -238,7 +238,11 @@ def user_from_jwt_sub(db, sub: str) -> User | None:
     """Resolve JWT subject to User (numeric id preferred; legacy tokens used google_id)."""
     if not sub:
         return None
-    if sub.isdigit():
+    # Guard: only treat sub as a numeric DB id if it fits in PostgreSQL INTEGER range.
+    # Legacy tokens (and Google OAuth subs) carry very large digit strings that overflow
+    # INTEGER and cause a DB error — those must fall through to the google_id lookup.
+    _PG_INT_MAX = 2_147_483_647
+    if sub.isdigit() and int(sub) <= _PG_INT_MAX:
         u = db.get(User, int(sub))
         if u is not None:
             return u
