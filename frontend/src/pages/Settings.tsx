@@ -5,7 +5,10 @@ import McpTokenPanel from "../components/McpTokenPanel";
 import UserGroupsSection from "../components/UserGroupsSection";
 import WorkspaceAdminSection from "../components/WorkspaceAdminSection";
 import {
+  avatarPlaceholderStyle,
+  deleteAccount,
   disbandEnterprise,
+  fetchAuthMe,
   getUser,
   isAdmin,
   isOwner,
@@ -13,27 +16,22 @@ import {
   listMyWorkspaces,
   logout,
   patchStoredUser,
-  redirectToGoogleSignIn,
   renameWorkspace,
   switchWorkspace,
+  updateDisplayName,
   type WorkspaceSummary,
 } from "../api";
 
 type SettingsTab = "account" | "workspace" | "groups" | "appearance" | "mcp";
 
-const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; ownerOnly?: boolean }> = [
+const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; adminOnly?: boolean }> = [
   { id: "account", label: "Account", description: "Your profile and workspaces" },
   {
     id: "workspace",
     label: "Workspace",
     description: "Active workspace, members, and invites for this organization",
   },
-  {
-    id: "groups",
-    label: "Groups",
-    description: "User groups and their access to protected folders",
-    ownerOnly: true,
-  },
+  // { id: "groups", label: "Groups", description: "User groups and their access to protected folders", adminOnly: true },
   { id: "appearance", label: "Appearance", description: "Theme and table value display" },
   { id: "mcp", label: "MCP", description: "External tool access" },
 ];
@@ -80,9 +78,43 @@ export default function Settings() {
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
 
+  const [authMe, setAuthMe] = useState<{ has_password: boolean; is_local: boolean; display_name: string } | null>(null);
+  const [authMeError, setAuthMeError] = useState<string | null>(null);
+
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => {
     document.title = "Settings | TabulaRAG";
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAuthMeError(null);
+    fetchAuthMe()
+      .then((m) => {
+        if (!cancelled) {
+          setAuthMe(m);
+          setNameDraft(m.display_name || "");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthMeError("Could not load account security settings.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRev]);
 
   useEffect(() => {
     const fromUrl = tabFromSearchParam(searchParams.get("tab"));
@@ -135,13 +167,10 @@ export default function Settings() {
   }, [sessionRev, user?.enterprise_id]);
 
   const workspacesSorted = useMemo(() => {
-    const activeId = user?.enterprise_id;
     return [...workspaces].sort((a, b) => {
-      if (a.enterprise_id === activeId) return -1;
-      if (b.enterprise_id === activeId) return 1;
       return a.enterprise_name.localeCompare(b.enterprise_name, undefined, { sensitivity: "base" });
     });
-  }, [workspaces, user?.enterprise_id]);
+  }, [workspaces]);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.enterprise_id === user?.enterprise_id) ?? null,
@@ -216,16 +245,25 @@ export default function Settings() {
     window.location.replace("/");
   }
 
-  async function handleSwitchAccount() {
-    logout();
+  async function handleConfirmDeleteAccount() {
+    setDeleteBusy(true);
+    setDeleteError(null);
     try {
-      await redirectToGoogleSignIn({ prompt: "select_account" });
-    } catch {
+      if (authMe?.has_password) {
+        await deleteAccount({ password: deletePassword });
+      } else {
+        await deleteAccount({ confirmation: deleteConfirmText });
+      }
+      logout();
       window.location.replace("/");
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Could not delete account.");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
-  const TABS = ALL_TABS.filter((t) => !t.ownerOnly || isOwner());
+  const TABS = ALL_TABS.filter((t) => !t.adminOnly || isAdmin());
   const tabMeta = TABS.find((t) => t.id === activeTab) ?? TABS[0];
   const workspaceId = user?.enterprise_id;
 
@@ -370,7 +408,15 @@ export default function Settings() {
                       width={56}
                       height={56}
                     />
-                  ) : null}
+                  ) : (
+                    <span
+                      className="settings-account-avatar settings-account-avatar--placeholder"
+                      style={user ? avatarPlaceholderStyle(user) : undefined}
+                      aria-hidden
+                    >
+                      {(user?.name || user?.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
+                    </span>
+                  )}
                   <div className="settings-account-meta">
                     <div className="settings-account-name">{user?.name || user?.login || "—"}</div>
                     <div className="small" style={{ opacity: 0.85 }}>
@@ -380,12 +426,17 @@ export default function Settings() {
                   <div className="settings-account-actions">
                     <button
                       type="button"
-                      className="surface-btn settings-switch-account-btn"
-                      onClick={() => void handleSwitchAccount()}
+                      className="surface-btn"
+                      disabled={!authMe}
+                      onClick={() => {
+                        setNameDraft(authMe?.display_name || user?.name || "");
+                        setNameError(null);
+                        setEditProfileOpen(true);
+                      }}
                     >
-                      Switch account
+                      Edit profile
                     </button>
-                    <button type="button" className="logout-btn" onClick={handleLogout}>
+                    <button type="button" className="surface-btn settings-account-logout" onClick={handleLogout}>
                       Log out
                     </button>
                   </div>
@@ -469,6 +520,28 @@ export default function Settings() {
                     </Link>
                   </div>
                 </div>
+
+                <div className="settings-account-delete-section">
+                  {authMeError ? (
+                    <p className="login-error" role="alert">
+                      {authMeError}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="settings-delete-account-open"
+                    disabled={authMe === null}
+                    title={authMe === null ? "Loading account security…" : undefined}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeletePassword("");
+                      setDeleteConfirmText("");
+                      setDeleteModalOpen(true);
+                    }}
+                  >
+                    Delete account
+                  </button>
+                </div>
               </div>
             </section>
           )}
@@ -485,7 +558,7 @@ export default function Settings() {
                       <strong>
                         {activeWorkspace ? workspaceRoleLabel(activeWorkspace.role) : "—"}
                       </strong>
-                      {activeWorkspace?.role === "querier" ? " (read-only)" : null}
+                      {activeWorkspace?.role === "querier" ? " (member access)" : null}
                     </span>
                   </div>
                 </div>
@@ -574,7 +647,7 @@ export default function Settings() {
             </section>
           )}
 
-          {activeTab === "groups" && isOwner() && (
+          {activeTab === "groups" && isAdmin() && (
             <section className="settings-pane" aria-label="Groups">
               <div className="settings-section-body">
                 <UserGroupsSection />
@@ -644,6 +717,146 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {editProfileOpen ? (
+        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+          <div
+            className="settings-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-edit-profile-title"
+          >
+            <h2 id="settings-edit-profile-title" className="settings-modal-title">
+              Edit profile
+            </h2>
+            <label className="settings-workspace-rename-label" htmlFor="settings-edit-profile-name">
+              Display name
+            </label>
+            <input
+              id="settings-edit-profile-name"
+              type="text"
+              className="input settings-modal-input"
+              maxLength={255}
+              placeholder="Your name"
+              autoComplete="name"
+              value={nameDraft}
+              onChange={(e) => {
+                setNameDraft(e.target.value);
+                setNameError(null);
+              }}
+              disabled={nameSaving}
+            />
+            {nameError ? (
+              <p className="login-error" role="alert">{nameError}</p>
+            ) : null}
+            <div className="settings-modal-actions">
+              <button
+                type="button"
+                className="surface-btn"
+                disabled={nameSaving}
+                onClick={() => {
+                  setEditProfileOpen(false);
+                  setNameError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="login-btn"
+                disabled={
+                  nameSaving
+                  || !nameDraft.trim()
+                  || nameDraft.trim() === (authMe?.display_name || "").trim()
+                }
+                onClick={async () => {
+                  setNameSaving(true);
+                  setNameError(null);
+                  try {
+                    const result = await updateDisplayName(nameDraft.trim());
+                    setAuthMe((prev) => prev ? { ...prev, display_name: result.display_name } : prev);
+                    bumpSession();
+                    setEditProfileOpen(false);
+                  } catch (err) {
+                    setNameError(err instanceof Error ? err.message : "Failed to update name");
+                  } finally {
+                    setNameSaving(false);
+                  }
+                }}
+              >
+                {nameSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteModalOpen ? (
+        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+          <div
+            className="settings-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-delete-account-title"
+          >
+            <h2 id="settings-delete-account-title" className="settings-modal-title">
+              Delete your account?
+            </h2>
+            <p className="settings-modal-body">
+              {authMe?.has_password
+                ? <>This action is permanent. Enter your <strong>password</strong> to confirm.</>
+                : <>This action is permanent. Type <strong>DELETE</strong> to confirm.</>}
+            </p>
+            {authMe?.has_password ? (
+              <input
+                type="password"
+                className="input settings-modal-input"
+                placeholder="password"
+                autoComplete="current-password"
+                value={deletePassword}
+                onChange={(ev) => setDeletePassword(ev.target.value)}
+                disabled={deleteBusy}
+              />
+            ) : (
+              <input
+                type="text"
+                className="input settings-modal-input"
+                placeholder="Type DELETE"
+                autoComplete="off"
+                value={deleteConfirmText}
+                onChange={(ev) => setDeleteConfirmText(ev.target.value)}
+                disabled={deleteBusy}
+              />
+            )}
+            {deleteError ? (
+              <p className="login-error" role="alert">
+                {deleteError}
+              </p>
+            ) : null}
+            <div className="settings-modal-actions">
+              <button
+                type="button"
+                className="surface-btn"
+                disabled={deleteBusy}
+                onClick={() => {
+                  setDeleteModalOpen(false);
+                  setDeleteError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-modal-disband-confirm"
+                disabled={deleteBusy}
+                onClick={() => void handleConfirmDeleteAccount()}
+              >
+                {deleteBusy ? "Deleting…" : "Delete account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {disbandModalOpen ? (
         <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">

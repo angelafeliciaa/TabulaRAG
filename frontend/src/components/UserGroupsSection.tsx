@@ -292,8 +292,8 @@ export default function UserGroupsSection() {
         <h2 className="settings-subsection-title">User Groups</h2>
       </div>
       <p className="settings-subsection-desc">
-        Groups control which queriers can see protected folders. A protected folder with no group
-        restrictions is visible to all queriers. Assign groups to a folder to restrict access.
+        Groups control which members can see protected folders. A protected folder with no group
+        restrictions is visible to all members. Assign groups to a folder to restrict access.
       </p>
 
       {error && <p className="login-error settings-groups-error" role="alert">{error}</p>}

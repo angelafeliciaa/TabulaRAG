@@ -32,6 +32,7 @@ from app.normalization import (
 )
 from app.name_guard import dataset_name_collision_key, normalize_dataset_name_or_raise
 from app.auth import AuthUser, require_admin, require_auth
+from app.unassigned_folder import ensure_all_datasets_have_folder
 
 router = APIRouter()
 
@@ -467,6 +468,8 @@ def _list_tables_payload(
 ) -> List[Dict[str, Any]]:
     is_admin = role in (UserRole.owner, UserRole.admin)
     with SessionLocal() as db:
+        # Datasets may have folder_id NULL (treated as "Unassigned" in the UI).
+
         query = (
             select(Dataset)
             .options(joinedload(Dataset.folder))

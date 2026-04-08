@@ -2,11 +2,13 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type InputHTMLAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { focusByIndex, focusByOffset, trapFocus } from "../accessibility";
 import {
@@ -27,22 +29,72 @@ import {
   type UploadProgress,
 } from "../api";
 import DataTable from "../components/DataTable";
-import FolderDetailPopup from "../components/FolderDetailPopup";
-import FolderPrivacyBadge from "../components/FolderPrivacyBadge";
 import FolderSidePanel from "../components/FolderSidePanel";
 import { useAppUi } from "../appUiContext";
 import { flattenRowsByValueMode } from "../valueMode";
 import { TableStatusCard } from "../components/TableStatusPage";
 import logo64 from "../images/logo-64.webp";
 import logo128 from "../images/logo-128.webp";
-import folderIcon from "../images/folder.png";
 import openIcon from "../images/open.png";
-import plusIcon from "../images/plus.png";
 import uploadLogo from "../images/upload.png";
 
 const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
 const PINNED_TABLES_STORAGE_KEY = "tabularag_pinned_table_ids";
 const SELECTED_PREVIEW_TABLE_KEY = "tabularag_selected_preview_table_id";
+/** Full preview tab strip + active tab (JSON). Legacy single-id key is still read for migration. */
+const UPLOAD_PREVIEW_SELECTION_STORAGE_KEY = "tabularag_upload_preview_selection";
+const FOLDER_PANE_WIDTH_STORAGE_KEY = "tabularag_folder_pane_width";
+const SELECTED_FOLDER_ID_STORAGE_KEY = "tabularag_selected_folder_id";
+
+function readUploadSelectionFromStorage(): {
+  ids: number[];
+  active: number | null;
+} {
+  try {
+    const raw = window.localStorage.getItem(UPLOAD_PREVIEW_SELECTION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { ids?: unknown; active?: unknown };
+      const ids = Array.isArray(parsed.ids)
+        ? parsed.ids
+            .map((x) =>
+              typeof x === "number" ? x : parseInt(String(x), 10),
+            )
+            .filter((x) => Number.isFinite(x))
+        : [];
+      const uniq = [...new Set(ids)];
+      let active: number | null = null;
+      if (parsed.active !== null && parsed.active !== undefined) {
+        const a =
+          typeof parsed.active === "number"
+            ? parsed.active
+            : parseInt(String(parsed.active), 10);
+        if (Number.isFinite(a)) active = a;
+      }
+      if (uniq.length > 0) {
+        if (active === null || !uniq.includes(active)) {
+          active = uniq[0];
+        }
+      } else {
+        active = null;
+      }
+      return { ids: uniq, active };
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const legacy = window.localStorage.getItem(SELECTED_PREVIEW_TABLE_KEY);
+    if (legacy !== null) {
+      const id = parseInt(legacy, 10);
+      if (Number.isFinite(id)) {
+        return { ids: [id], active: id };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { ids: [], active: null };
+}
 const SUCCESS_TOAST_MS = 2800;
 const INDEX_PROGRESS_DRIFT_STEP = 0.35;
 const INDEX_PROGRESS_DRIFT_CAP = 99.4;
@@ -54,7 +106,7 @@ const PREVIEW_ROWS_PER_PAGE = 100;
 type ToastState = { id: number; kind: "success"; message: string };
 type UploadQueuePhase = "idle" | UploadProgress["phase"] | "success" | "error";
 type TableSortMode = "alphabet" | "rows" | "recent";
-type UploadPickerTarget = "empty" | "queue";
+type UploadPickerTarget = "empty";
 type UploadQueueItem = {
   id: string;
   file: File;
@@ -109,38 +161,42 @@ const FOLDER_INPUT_PROPS: FolderInputProps = {
   directory: "",
 };
 
-const TABLE_SORT_OPTIONS: Array<{ value: TableSortMode; label: string }> = [
-  { value: "recent", label: "Most recent" },
-  { value: "rows", label: "Most rows" },
-  { value: "alphabet", label: "Alphabetical" },
+const TABLE_SORT_MODES: readonly TableSortMode[] = [
+  "recent",
+  "alphabet",
+  "rows",
 ];
+
+function tableCreatedTimeMs(table: TableSummary): number {
+  return Number.isFinite(Date.parse(table.created_at))
+    ? Date.parse(table.created_at)
+    : table.dataset_id;
+}
 
 function compareTablesBySortMode(
   a: TableSummary,
   b: TableSummary,
   sortMode: TableSortMode,
+  direction: "asc" | "desc",
 ): number {
+  let cmp = 0;
   if (sortMode === "alphabet") {
-    const byName = a.name.localeCompare(b.name, undefined, {
+    cmp = a.name.localeCompare(b.name, undefined, {
       sensitivity: "base",
       numeric: true,
     });
-    if (byName !== 0) {
-      return byName;
-    }
   } else if (sortMode === "rows") {
-    const byRows = b.row_count - a.row_count;
-    if (byRows !== 0) {
-      return byRows;
-    }
+    cmp = a.row_count - b.row_count;
+  } else {
+    cmp = tableCreatedTimeMs(a) - tableCreatedTimeMs(b);
   }
 
-  const aTime = Number.isFinite(Date.parse(a.created_at))
-    ? Date.parse(a.created_at)
-    : a.dataset_id;
-  const bTime = Number.isFinite(Date.parse(b.created_at))
-    ? Date.parse(b.created_at)
-    : b.dataset_id;
+  if (cmp !== 0) {
+    return direction === "asc" ? cmp : -cmp;
+  }
+
+  const aTime = tableCreatedTimeMs(a);
+  const bTime = tableCreatedTimeMs(b);
   return bTime - aTime;
 }
 
@@ -148,6 +204,7 @@ function sortTablesForDisplay(
   tables: TableSummary[],
   pinnedIds: Set<number>,
   sortMode: TableSortMode,
+  direction: "asc" | "desc",
 ): TableSummary[] {
   const next = [...tables];
   next.sort((a, b) => {
@@ -156,9 +213,26 @@ function sortTablesForDisplay(
     if (aPinned !== bPinned) {
       return aPinned ? -1 : 1;
     }
-    return compareTablesBySortMode(a, b, sortMode);
+    return compareTablesBySortMode(a, b, sortMode, direction);
   });
   return next;
+}
+
+function defaultTableSortDirection(mode: TableSortMode): "asc" | "desc" {
+  return mode === "alphabet" ? "asc" : "desc";
+}
+
+function formatTableSortDirectionHint(
+  mode: TableSortMode,
+  direction: "asc" | "desc",
+): string {
+  if (mode === "recent") {
+    return direction === "desc" ? "Newest" : "Oldest";
+  }
+  if (mode === "rows") {
+    return direction === "desc" ? "Most rows" : "Fewest rows";
+  }
+  return direction === "asc" ? "A to Z" : "Z to A";
 }
 
 function filterTablesForDisplay(
@@ -380,7 +454,7 @@ function sanitizeTableNameInput(name: string): string {
   );
   /* eslint-enable no-control-regex */
   const allowedCharsOnly = withoutControlChars.replace(/[^A-Za-z0-9 _-]/g, "");
-  const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ").trim();
+  const normalizedSpaces = allowedCharsOnly.replace(/\s+/g, " ");
   return normalizedSpaces.slice(0, SAFE_TABLE_NAME_MAX_LENGTH);
 }
 
@@ -397,14 +471,14 @@ function sanitizeTableDescriptionInput(description: string): string {
 }
 
 function getNameKey(name: string): string {
-  return sanitizeTableNameInput(name).toLocaleLowerCase();
+  return sanitizeTableNameInput(name).trim().toLocaleLowerCase();
 }
 
 function claimUniqueTableName(
   baseName: string,
   occupiedNameKeys: Set<string>,
 ): string {
-  const cleanedBaseName = sanitizeTableNameInput(baseName) || "table";
+  const cleanedBaseName = sanitizeTableNameInput(baseName).trim() || "table";
   let candidate = cleanedBaseName;
   let suffix = 2;
 
@@ -481,14 +555,26 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const userIsAdmin = isAdmin();
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [showUploadQueue, setShowUploadQueue] = useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [tables, setTables] = useState<TableSummary[]>([]);
+  const initialUploadSelection = useMemo(
+    () => readUploadSelectionFromStorage(),
+    [],
+  );
+  const [selectedTableIds, setSelectedTableIds] = useState<number[]>(
+    () => initialUploadSelection.ids,
+  );
+  const selectionAnchorIdRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [preview, setPreview] = useState<TableSlice | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [activeTableId, setActiveTableId] = useState<number | null>(null);
+  const previewRequestSeqRef = useRef(0);
+  const [activeTableId, setActiveTableId] = useState<number | null>(
+    () => initialUploadSelection.active,
+  );
   const [previewPage, setPreviewPage] = useState(1);
   const [previewRowCount, setPreviewRowCount] = useState(0);
   const [previewPageInput, setPreviewPageInput] = useState("1");
@@ -502,8 +588,15 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [deleteConfirmTable, setDeleteConfirmTable] =
     useState<TableSummary | null>(null);
-  const [showScrollHint, setShowScrollHint] = useState(false);
-  const [uploadedAtBottom, setUploadedAtBottom] = useState(false);
+  const [bulkDeleteConfirmIds, setBulkDeleteConfirmIds] = useState<number[] | null>(
+    null,
+  );
+  const [rowActionMenuOpenId, setRowActionMenuOpenId] = useState<number | null>(
+    null,
+  );
+  const [rowActionMenuPos, setRowActionMenuPos] = useState<
+    { id: number; top: number; right: number } | null
+  >(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDescription, setEditingDescription] = useState("");
@@ -511,6 +604,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const [renameHintId, setRenameHintId] = useState<number | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [tableSortMode, setTableSortMode] = useState<TableSortMode>("recent");
+  const [tableSortDirection, setTableSortDirection] = useState<"asc" | "desc">(
+    () => defaultTableSortDirection("recent"),
+  );
   const [visibleTableCount, setVisibleTableCount] = useState(
     TABLES_RENDER_BATCH_SIZE,
   );
@@ -522,9 +618,20 @@ export default function Upload({ homeControls = null }: UploadProps) {
     Record<number, boolean>
   >({});
   const [isDragActive, setIsDragActive] = useState(false);
-  const [folderPanelOpen, setFolderPanelOpen] = useState(false);
+  const [folderPaneWidth, setFolderPaneWidth] = useState<number>(() => {
+    try {
+      const raw = window.localStorage.getItem(FOLDER_PANE_WIDTH_STORAGE_KEY);
+      const parsed = raw ? Number(raw) : NaN;
+      if (!Number.isFinite(parsed)) return 340;
+      return Math.max(160, Math.min(720, Math.trunc(parsed)));
+    } catch {
+      return 340;
+    }
+  });
+  const [folderPaneCollapsed, setFolderPaneCollapsed] = useState(false);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
+  const [folderCountsRefreshKey, setFolderCountsRefreshKey] = useState(0);
   const [pinnedTableIds, setPinnedTableIds] = useState<number[]>(() => {
     try {
       const raw = window.localStorage.getItem(PINNED_TABLES_STORAGE_KEY);
@@ -554,17 +661,18 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const sortMenuId = useId();
   const tablesScrollRef = useRef<HTMLDivElement | null>(null);
   const previewAreaRef = useRef<HTMLDivElement | null>(null);
+  const previewPillsScrollRef = useRef<HTMLDivElement | null>(null);
+  const previewPillCountRef = useRef(0);
+  const [previewPillsCanScrollRight, setPreviewPillsCanScrollRight] =
+    useState(false);
+  const [previewPillsCanScrollLeft, setPreviewPillsCanScrollLeft] =
+    useState(false);
+  const [previewTabWidth, setPreviewTabWidth] = useState<number>(180);
   const uploadPanelRef = useRef<HTMLDivElement | null>(null);
   const uploadDropFileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadDropFolderInputRef = useRef<HTMLInputElement | null>(null);
-  const queueFileInputRef = useRef<HTMLInputElement | null>(null);
-  const queueFolderInputRef = useRef<HTMLInputElement | null>(null);
   const uploadPickerEmptyRef = useRef<HTMLDivElement | null>(null);
-  const uploadPickerQueueRef = useRef<HTMLDivElement | null>(null);
   const uploadPickerEmptyButtonRef = useRef<HTMLButtonElement | null>(null);
-  const uploadPickerQueueButtonRef = useRef<HTMLButtonElement | null>(null);
-  const uploadDropClickLockRef = useRef(false);
-  const uploadDropClickLockTimeoutRef = useRef<number | null>(null);
   const firstQueuedNameInputRef = useRef<HTMLInputElement | null>(null);
   const firstQueuedDescriptionInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -573,9 +681,17 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const sortMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const deleteDialogRef = useRef<HTMLDivElement | null>(null);
   const deleteCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const editDialogRef = useRef<HTMLDivElement | null>(null);
+  const editCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const uploadDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const deleteDialogReturnFocusRef = useRef<HTMLElement | null>(null);
+  const editDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const folderResizeStateRef = useRef<{
+    active: boolean;
+    startX: number;
+    startWidth: number;
+  }>({ active: false, startX: 0, startWidth: 280 });
   const isUploadDialogOpen = uploadQueue.length > 0;
   const isQueueInProgress = useMemo(() => {
     if (busy) {
@@ -598,6 +714,98 @@ export default function Upload({ homeControls = null }: UploadProps) {
       .then(setFolders)
       .catch(() => { });
   }, []);
+
+  useEffect(() => {
+    if (rowActionMenuOpenId === null) return;
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(`[data-row-action-menu-root="${rowActionMenuOpenId}"]`)) {
+        return;
+      }
+      setRowActionMenuOpenId(null);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setRowActionMenuOpenId(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rowActionMenuOpenId]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        FOLDER_PANE_WIDTH_STORAGE_KEY,
+        String(folderPaneWidth),
+      );
+    } catch {
+      // ignore
+    }
+  }, [folderPaneWidth]);
+
+  useEffect(() => {
+    if (selectedFolder !== null) return;
+    if (folders.length === 0) return;
+    try {
+      const raw = window.localStorage.getItem(SELECTED_FOLDER_ID_STORAGE_KEY);
+      const parsed = raw ? parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed)) {
+        const match = folders.find((f) => f.folder_id === parsed);
+        if (match) {
+          setSelectedFolder(match);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setSelectedFolder(folders[0]);
+  }, [folders, selectedFolder]);
+
+  useEffect(() => {
+    if (!selectedFolder) return;
+    try {
+      window.localStorage.setItem(
+        SELECTED_FOLDER_ID_STORAGE_KEY,
+        String(selectedFolder.folder_id),
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedFolder]);
+
+  useEffect(() => {
+    if (folders.length === 0 || selectedFolder === null) {
+      return;
+    }
+    const stillExists = folders.some((f) => f.folder_id === selectedFolder.folder_id);
+    if (stillExists) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(SELECTED_FOLDER_ID_STORAGE_KEY);
+      const parsed = raw ? parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed)) {
+        const match = folders.find((f) => f.folder_id === parsed);
+        if (match) {
+          setSelectedFolder(match);
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setSelectedFolder(folders[0] ?? null);
+  }, [folders, selectedFolder]);
 
   async function estimateFileStats(nextFile: File): Promise<{
     rows: number | null;
@@ -781,6 +989,41 @@ export default function Upload({ homeControls = null }: UploadProps) {
   }, [editingId, busy]);
 
   useEffect(() => {
+    if (editingId === null) {
+      editDialogReturnFocusRef.current?.focus();
+      editDialogReturnFocusRef.current = null;
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      editDialogReturnFocusRef.current = document.activeElement;
+    }
+  }, [editingId]);
+
+  useEffect(() => {
+    if (editingId === null) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        setEditingId(null);
+        setEditingName("");
+        setEditingDescription("");
+        setEditingFolderId(null);
+        setRenameHintId(null);
+        return;
+      }
+      trapFocus(event, editDialogRef.current);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [busy, editingId]);
+
+  useEffect(() => {
     if (!isUploadDialogOpen) {
       uploadDialogReturnFocusRef.current?.focus();
       uploadDialogReturnFocusRef.current = null;
@@ -851,8 +1094,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    const activeSortIndex = TABLE_SORT_OPTIONS.findIndex(
-      (option) => option.value === tableSortMode,
+    const activeSortIndex = TABLE_SORT_MODES.findIndex(
+      (mode) => mode === tableSortMode,
     );
     const rafId = window.requestAnimationFrame(() => {
       focusByIndex(
@@ -871,14 +1114,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    const activePickerRef =
-      uploadPickerOpen === "empty"
-        ? uploadPickerEmptyRef
-        : uploadPickerQueueRef;
-    const activeToggleRef =
-      uploadPickerOpen === "empty"
-        ? uploadPickerEmptyButtonRef
-        : uploadPickerQueueButtonRef;
+    const activePickerRef = uploadPickerEmptyRef;
+    const activeToggleRef = uploadPickerEmptyButtonRef;
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
@@ -934,9 +1171,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
   useEffect(() => {
     return () => {
       clearToastTimer();
-      if (uploadDropClickLockTimeoutRef.current !== null) {
-        window.clearTimeout(uploadDropClickLockTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -1016,28 +1250,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
   useEffect(() => {
     const element = tablesScrollRef.current;
-    if (!element) {
-      setShowScrollHint(false);
-      setUploadedAtBottom(false);
-      return;
-    }
-
-    const updateHint = () => {
-      const atBottom =
-        element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
-      const canScroll = element.scrollHeight > element.clientHeight + 2;
-      setShowScrollHint(canScroll);
-      setUploadedAtBottom(atBottom);
-    };
-
-    updateHint();
-    element.addEventListener("scroll", updateHint);
-    window.addEventListener("resize", updateHint);
-
-    return () => {
-      element.removeEventListener("scroll", updateHint);
-      window.removeEventListener("resize", updateHint);
-    };
+    void element;
   }, [tables.length, tableSearchQuery]);
 
   const loadPreview = useCallback(
@@ -1049,6 +1262,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         sortDirection: "asc" | "desc";
       },
     ) => {
+      const requestId = (previewRequestSeqRef.current += 1);
       setActiveTableId(datasetId);
       setPreviewPage(page);
       setPreviewPageInput(String(page));
@@ -1080,13 +1294,17 @@ export default function Upload({ homeControls = null }: UploadProps) {
           sort: sortParam ?? undefined,
           search: searchParam,
         });
+        if (requestId !== previewRequestSeqRef.current) return;
         setPreview(slice);
         setPreviewRowCount(Math.max(0, slice.row_count ?? 0));
       } catch (error: unknown) {
+        if (requestId !== previewRequestSeqRef.current) return;
         setPreviewErr(getErrorMessage(error));
         setPreview(null);
       } finally {
-        setPreviewBusy(false);
+        if (requestId === previewRequestSeqRef.current) {
+          setPreviewBusy(false);
+        }
       }
     },
     [previewSortColumn, previewSortDirection, previewSearchQuery],
@@ -1095,8 +1313,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const loadPreviewRef = useRef(loadPreview);
   loadPreviewRef.current = loadPreview;
 
-  // Clear preview and selection only when the selected table is no longer in the list.
+  // Clear preview when the active table is gone from the server list (do not run while tables are still loading).
   useEffect(() => {
+    if (tables.length === 0) return;
     if (
       activeTableId !== null &&
       !tables.some((t) => t.dataset_id === activeTableId)
@@ -1112,42 +1331,51 @@ export default function Upload({ homeControls = null }: UploadProps) {
     }
   }, [activeTableId, tables]);
 
-  // Restore selected table from localStorage when returning to the page (e.g. after closing a Edit Full Table tab).
+  // Drop removed tables from list + row selection; keep active tab on a remaining id when possible.
   useEffect(() => {
     if (tables.length === 0) return;
-    try {
-      const raw = window.localStorage.getItem(SELECTED_PREVIEW_TABLE_KEY);
-      if (raw === null) return;
-      const id = parseInt(raw, 10);
-      if (!Number.isFinite(id) || !tables.some((t) => t.dataset_id === id))
-        return;
-      setActiveTableId(id);
-    } catch {
-      /* ignore */
-    }
+    const valid = new Set(tables.map((t) => t.dataset_id));
+    setSelectedTableIds((prev) => {
+      const next = prev.filter((id) => valid.has(id));
+      return next.length === prev.length ? prev : next;
+    });
   }, [tables]);
 
   useEffect(() => {
-    if (
-      activeTableId !== null &&
-      tables.some((t) => t.dataset_id === activeTableId)
-    ) {
-      try {
-        window.localStorage.setItem(
-          SELECTED_PREVIEW_TABLE_KEY,
-          String(activeTableId),
-        );
-      } catch {
-        /* ignore */
-      }
-    } else if (activeTableId === null && tables.length > 0) {
-      try {
+    if (tables.length === 0) return;
+    if (selectedTableIds.length === 0) return;
+    if (activeTableId === null) return;
+    if (selectedTableIds.includes(activeTableId)) return;
+    setActiveTableId(selectedTableIds[0]);
+  }, [tables.length, selectedTableIds, activeTableId]);
+
+  // Persist preview tabs + list selection across refresh (ids + active tab).
+  useEffect(() => {
+    if (tables.length === 0) return;
+    try {
+      const ids =
+        selectedTableIds.length > 0
+          ? selectedTableIds
+          : activeTableId !== null
+            ? [activeTableId]
+            : [];
+      const active = activeTableId;
+      if (ids.length === 0 && active === null) {
+        window.localStorage.removeItem(UPLOAD_PREVIEW_SELECTION_STORAGE_KEY);
         window.localStorage.removeItem(SELECTED_PREVIEW_TABLE_KEY);
-      } catch {
-        /* ignore */
+        return;
       }
+      window.localStorage.setItem(
+        UPLOAD_PREVIEW_SELECTION_STORAGE_KEY,
+        JSON.stringify({ ids, active }),
+      );
+      if (active !== null) {
+        window.localStorage.setItem(SELECTED_PREVIEW_TABLE_KEY, String(active));
+      }
+    } catch {
+      /* ignore */
     }
-  }, [activeTableId, tables]);
+  }, [selectedTableIds, activeTableId, tables.length]);
 
   const previewRows = useMemo(
     () =>
@@ -1178,8 +1406,40 @@ export default function Upload({ homeControls = null }: UploadProps) {
     String(previewTotalPages).length + 1,
   );
   const normalizedTableSearchQuery = tableSearchQuery.trim().toLowerCase();
+  const bumpFolderCounts = useCallback(
+    () => setFolderCountsRefreshKey((v) => v + 1),
+    [],
+  );
+
+  /** FolderSidePanel keeps its own folder list; keep Upload folders + tables in sync after create/delete/rename. */
+  const syncFoldersAndTablesAfterPanelChange = useCallback(
+    async (detail?: { deletedFolderId?: number }) => {
+      const deletedId = detail?.deletedFolderId;
+      if (deletedId != null) {
+        setTables((prev) => prev.filter((t) => t.folder_id !== deletedId));
+      }
+      try {
+        await refresh();
+        const nextFolders = await listFolders();
+        setFolders(nextFolders);
+        bumpFolderCounts();
+        setSelectedFolder((prev) => {
+          if (prev === null) {
+            return nextFolders[0] ?? null;
+          }
+          const match = nextFolders.find((f) => f.folder_id === prev.folder_id);
+          return match ?? nextFolders[0] ?? null;
+        });
+      } catch {
+        // ignore
+      }
+    },
+    [refresh, bumpFolderCounts],
+  );
 
   const clearPreviewSelection = useCallback(() => {
+    // Invalidate any in-flight preview request so it can't set 404 after the tab is closed/deleted.
+    previewRequestSeqRef.current += 1;
     setActiveTableId(null);
     setPreview(null);
     setPreviewErr(null);
@@ -1191,6 +1451,137 @@ export default function Upload({ homeControls = null }: UploadProps) {
     setPreviewSortDirection("asc");
   }, []);
 
+  const updatePreviewPillsOverflow = useCallback(() => {
+    const el = previewPillsScrollRef.current;
+    if (!el) {
+      setPreviewPillsCanScrollRight(false);
+      setPreviewPillsCanScrollLeft(false);
+      return;
+    }
+    const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+    setPreviewPillsCanScrollRight(el.scrollLeft < maxScrollLeft - 1);
+    setPreviewPillsCanScrollLeft(el.scrollLeft > 1);
+  }, []);
+
+  /** Same IDs as rendered preview tabs (must stay in sync with the tab strip JSX). */
+  const previewStripTableIds = useMemo(() => {
+    const raw =
+      selectedTableIds.length > 0
+        ? selectedTableIds
+        : activeTableId !== null
+          ? [activeTableId]
+          : [];
+    const ids = raw.filter((id): id is number => id !== null);
+    const existing = new Set(tables.map((t) => t.dataset_id));
+    return ids.filter((id) => existing.has(id));
+  }, [selectedTableIds, activeTableId, tables]);
+
+  previewPillCountRef.current = previewStripTableIds.length;
+
+  useLayoutEffect(() => {
+    const el = previewPillsScrollRef.current;
+    if (!el) {
+      setPreviewPillsCanScrollRight(false);
+      setPreviewPillsCanScrollLeft(false);
+      setPreviewTabWidth(180);
+      return;
+    }
+    const scrollEl = el;
+
+    const MAX_TAB_WIDTH = 180;
+    const MAX_TAB_EXPAND_WIDTH = 260;
+    const MIN_TAB_WIDTH = 44; // about enough for the close (×) button
+    const TAB_GAP_PX = 2; // keep in sync with CSS gap for the tab strip
+
+    function updateTabWidth() {
+      const count = previewPillCountRef.current;
+      if (count <= 1) {
+        // Single tab can expand to use the strip width.
+        const available = scrollEl.clientWidth;
+        setPreviewTabWidth(
+          Math.max(
+            MAX_TAB_WIDTH,
+            Math.min(MAX_TAB_EXPAND_WIDTH, Math.floor(available)),
+          ),
+        );
+        return;
+      }
+      const available = scrollEl.clientWidth;
+      const totalGaps = TAB_GAP_PX * Math.max(0, count - 1);
+      const usable = Math.max(0, available - totalGaps);
+      const perTab = Math.floor(usable / count);
+
+      // Browser-like: if there's plenty of space, let tabs grow (up to a cap).
+      if (perTab >= MAX_TAB_WIDTH) {
+        setPreviewTabWidth(Math.min(MAX_TAB_EXPAND_WIDTH, perTab));
+        return;
+      }
+
+      // Otherwise shrink down toward min-width.
+      setPreviewTabWidth(Math.max(MIN_TAB_WIDTH, perTab));
+    }
+
+    updateTabWidth();
+    updatePreviewPillsOverflow();
+    const raf = requestAnimationFrame(() => {
+      updateTabWidth();
+      updatePreviewPillsOverflow();
+    });
+    function onResize() {
+      updateTabWidth();
+      updatePreviewPillsOverflow();
+    }
+    function onScroll() {
+      updatePreviewPillsOverflow();
+    }
+    window.addEventListener("resize", onResize);
+    el.addEventListener("scroll", onScroll, { passive: true });
+
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            updateTabWidth();
+            updatePreviewPillsOverflow();
+          })
+        : null;
+    resizeObserver?.observe(scrollEl);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onResize);
+      el.removeEventListener("scroll", onScroll);
+      resizeObserver?.disconnect();
+    };
+  }, [previewStripTableIds, updatePreviewPillsOverflow]);
+
+  function removeSelectedTableId(datasetId: number) {
+    const baseSelected =
+      selectedTableIds.length > 0
+        ? selectedTableIds
+        : activeTableId !== null
+          ? [activeTableId]
+          : [];
+    const nextSelected = baseSelected.filter((id) => id !== datasetId);
+    setSelectedTableIds(nextSelected);
+
+    if (selectionAnchorIdRef.current === datasetId) {
+      selectionAnchorIdRef.current = nextSelected[0] ?? null;
+    }
+
+    // Only change/clear the preview if the closed tab was the active one.
+    if (activeTableId !== datasetId) {
+      return;
+    }
+
+    const nextId = nextSelected[0] ?? null;
+    if (nextId !== null) {
+      void loadPreview(nextId, 1, { sortColumn: null, sortDirection: "asc" });
+      return;
+    }
+
+    clearPreviewSelection();
+  }
+
   const getTopDisplayedTable = useCallback(
     (
       nextTables: TableSummary[],
@@ -1201,6 +1592,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         nextTables,
         nextPinnedSet,
         tableSortMode,
+        tableSortDirection,
       );
       const nextFilteredTables = filterTablesForDisplay(
         nextSortedTables,
@@ -1208,7 +1600,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       );
       return nextFilteredTables[0] ?? nextSortedTables[0] ?? null;
     },
-    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode],
+    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode, tableSortDirection],
   );
 
   const previewTopDisplayedTable = useCallback(
@@ -1271,8 +1663,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
     );
     const preparedItems = queuedItems.map((item) => {
       const preferredName =
-        sanitizeTableNameInput(item.name) ||
-        sanitizeTableNameInput(item.file.name) ||
+        sanitizeTableNameInput(item.name).trim() ||
+        sanitizeTableNameInput(item.file.name).trim() ||
         "table";
       const normalizedDescription = sanitizeTableDescriptionInput(
         item.description,
@@ -1391,6 +1783,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
           ? "1 file uploaded successfully"
           : `${successCount} files uploaded successfully`,
       );
+      bumpFolderCounts();
     }
     if (failureCount > 0) {
       setErr(formatUploadFailureSummary(failureCount, firstFailureMessage));
@@ -1398,6 +1791,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
     if (successCount + failureCount === queuedItems.length) {
       setUploadQueue([]);
       setShowUploadQueue(false);
+      if (successCount > 0 && failureCount === 0) {
+        setUploadModalOpen(false);
+      }
     }
 
     setStatus(null);
@@ -1420,6 +1816,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
     try {
       await deleteTable(datasetId);
+      // Ensure preview tabs close immediately if this file was selected/active.
+      removeSelectedTableId(datasetId);
       const nextTables = tables.filter(
         (current) => current.dataset_id !== datasetId,
       );
@@ -1434,10 +1832,11 @@ export default function Upload({ homeControls = null }: UploadProps) {
         return next;
       });
       setDeleteConfirmTable(null);
-      await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
+      bumpFolderCounts();
       showSuccessToast(`Successfully deleted table '${table.name}'`);
     } catch (error: unknown) {
       if (isTableNotFoundError(error)) {
+        removeSelectedTableId(datasetId);
         const nextTables = tables.filter(
           (current) => current.dataset_id !== datasetId,
         );
@@ -1452,7 +1851,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
           return next;
         });
         setDeleteConfirmTable(null);
-        await previewTopDisplayedTable(nextTables, nextPinnedTableIds);
+        bumpFolderCounts();
         showSuccessToast(`Successfully deleted table '${table.name}'`);
       } else {
         setErr(getErrorMessage(error));
@@ -1466,12 +1865,82 @@ export default function Upload({ homeControls = null }: UploadProps) {
     }
   }
 
+  async function onBulkDelete(datasetIds: number[]) {
+    const ids = Array.from(new Set(datasetIds)).filter((id) =>
+      tables.some((t) => t.dataset_id === id),
+    );
+    if (ids.length === 0) {
+      setBulkDeleteConfirmIds(null);
+      return;
+    }
+    if (busy) return;
+
+    clearToastTimer();
+    setErr(null);
+    setBusy(true);
+
+    const removed = new Set<number>();
+    try {
+      for (const datasetId of ids) {
+        if (deletingTableIds[datasetId]) continue;
+        setDeletingTableIds((previous) => ({ ...previous, [datasetId]: true }));
+        try {
+          await deleteTable(datasetId);
+          removed.add(datasetId);
+        } catch (error: unknown) {
+          if (isTableNotFoundError(error)) {
+            removed.add(datasetId);
+          } else {
+            setErr(getErrorMessage(error));
+          }
+        } finally {
+          setDeletingTableIds((previous) => {
+            const next = { ...previous };
+            delete next[datasetId];
+            return next;
+          });
+        }
+      }
+
+      if (removed.size > 0) {
+        // Immediately drop any removed ids from preview tabs/active selection.
+        for (const id of removed) {
+          removeSelectedTableId(id);
+        }
+        const nextTables = tables.filter((t) => !removed.has(t.dataset_id));
+        const nextPinnedTableIds = pinnedTableIds.filter(
+          (id) => !removed.has(id),
+        );
+        setTables(nextTables);
+        setPinnedTableIds(nextPinnedTableIds);
+        setIndexStatusByTable((previous) => {
+          const next = { ...previous };
+          for (const id of removed) delete next[id];
+          return next;
+        });
+        setSelectedTableIds([]);
+        setBulkDeleteConfirmIds(null);
+        clearPreviewSelection();
+        bumpFolderCounts();
+        showSuccessToast(
+          removed.size === 1
+            ? "Successfully deleted 1 file"
+            : `Successfully deleted ${removed.size} files`,
+        );
+      } else {
+        setBulkDeleteConfirmIds(null);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onRename(datasetId: number) {
     if (busy) {
       return;
     }
 
-    const nextName = sanitizeTableNameInput(editingName);
+    const nextName = sanitizeTableNameInput(editingName).trim();
     if (!nextName) {
       setRenameHintId(datasetId);
       setEditingName("");
@@ -1509,6 +1978,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       setEditingFolderId(null);
       setRenameHintId(null);
       await refresh();
+      bumpFolderCounts();
       listFolders().then(setFolders).catch(() => { });
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
@@ -1566,7 +2036,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       }
       existingFileKeys.add(fileKey);
 
-      const withoutExt = sanitizeTableNameInput(nextFile.name) || "table";
+      const withoutExt = sanitizeTableNameInput(nextFile.name).trim() || "table";
       const uniqueName = claimUniqueTableName(withoutExt, occupiedNameKeys);
       nextItems.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -1578,7 +2048,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         estimatedCols: null,
         error: null,
         description: "",
-        folderId: null,
+        folderId: selectedFolder?.folder_id ?? null,
       });
     }
 
@@ -1639,7 +2109,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
     candidateName: string,
   ): boolean {
     const normalizedCandidate = sanitizeTableNameInput(candidateName);
-    if (!normalizedCandidate) {
+    if (!normalizedCandidate.trim()) {
       return false;
     }
     const candidateKey = getNameKey(normalizedCandidate);
@@ -1658,7 +2128,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
         return false;
       }
       const normalizedItemName = sanitizeTableNameInput(item.name);
-      if (!normalizedItemName) {
+      if (!normalizedItemName.trim()) {
         return false;
       }
       return getNameKey(normalizedItemName) === candidateKey;
@@ -1767,44 +2237,49 @@ export default function Upload({ homeControls = null }: UploadProps) {
     onSelectFiles(droppedFiles);
   }
 
-  function openUploadPicker(target: UploadPickerTarget) {
-    setUploadPickerOpen((current) => (current === target ? null : target));
-  }
-
-  function lockUploadDropClick() {
-    if (uploadDropClickLockTimeoutRef.current !== null) {
-      window.clearTimeout(uploadDropClickLockTimeoutRef.current);
-    }
-    uploadDropClickLockRef.current = true;
-    uploadDropClickLockTimeoutRef.current = window.setTimeout(() => {
-      uploadDropClickLockRef.current = false;
-      uploadDropClickLockTimeoutRef.current = null;
-    }, 250);
-  }
-
-  function onUploadFiles(target: UploadPickerTarget) {
-    setUploadPickerOpen(null);
-    if (target === "empty") {
-      lockUploadDropClick();
-      uploadDropFileInputRef.current?.click();
-      return;
-    }
-    queueFileInputRef.current?.click();
-  }
-
-  function onUploadFolder(target: UploadPickerTarget) {
-    setUploadPickerOpen(null);
-    if (target === "empty") {
-      lockUploadDropClick();
-      uploadDropFolderInputRef.current?.click();
-      return;
-    }
-    queueFolderInputRef.current?.click();
-  }
   const hasPendingUploads = uploadQueue.some(
     (item) => item.phase === "idle" || item.phase === "error",
   );
   const isUploadQueueVisible = showUploadQueue || uploadQueue.length > 0;
+  const isUploadPopupOpen = uploadModalOpen || isUploadQueueVisible;
+
+  function clampFolderPaneWidth(nextWidth: number) {
+    return Math.max(160, Math.min(720, Math.trunc(nextWidth)));
+  }
+
+  function beginFolderPaneResize(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+
+    const startX = event.clientX;
+    folderResizeStateRef.current = {
+      active: true,
+      startX,
+      startWidth: folderPaneWidth,
+    };
+
+    const target = event.currentTarget;
+    target.setPointerCapture?.(event.pointerId);
+
+    function onMove(moveEvent: PointerEvent) {
+      if (!folderResizeStateRef.current.active) return;
+      const delta = moveEvent.clientX - folderResizeStateRef.current.startX;
+      setFolderPaneWidth(
+        clampFolderPaneWidth(folderResizeStateRef.current.startWidth + delta),
+      );
+    }
+
+    function onUp() {
+      folderResizeStateRef.current.active = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
   const activeTableName =
     activeTableId !== null
       ? tables.find((table) => table.dataset_id === activeTableId)?.name ||
@@ -1841,20 +2316,54 @@ export default function Upload({ homeControls = null }: UploadProps) {
     () => new Set(pinnedTableIds),
     [pinnedTableIds],
   );
+  const selectedFolderId = selectedFolder?.folder_id ?? null;
+  const selectedFolderName = selectedFolder?.name ?? null;
+  /** Members (queriers) may upload only to public folders; owners/admins can upload anywhere. */
+  const isUploadBlockedForNonPublicFolder =
+    !userIsAdmin &&
+    selectedFolder !== null &&
+    selectedFolder.privacy !== "public";
   const sortedTables = useMemo(() => {
-    return sortTablesForDisplay(tables, pinnedTableIdSet, tableSortMode);
-  }, [tables, pinnedTableIdSet, tableSortMode]);
+    return sortTablesForDisplay(
+      tables,
+      pinnedTableIdSet,
+      tableSortMode,
+      tableSortDirection,
+    );
+  }, [tables, pinnedTableIdSet, tableSortMode, tableSortDirection]);
+  const folderScopedTables = useMemo(() => {
+    if (selectedFolderId === null) return sortedTables;
+    return sortedTables.filter((table) => table.folder_id === selectedFolderId);
+  }, [sortedTables, selectedFolderId]);
   const filteredTables = useMemo(() => {
-    return filterTablesForDisplay(sortedTables, normalizedTableSearchQuery);
-  }, [sortedTables, normalizedTableSearchQuery]);
+    return filterTablesForDisplay(folderScopedTables, normalizedTableSearchQuery);
+  }, [folderScopedTables, normalizedTableSearchQuery]);
   const visibleTables = useMemo(
     () => filteredTables.slice(0, visibleTableCount),
     [filteredTables, visibleTableCount],
   );
   const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
-  const tableSortLabel =
-    TABLE_SORT_OPTIONS.find((option) => option.value === tableSortMode)
-      ?.label || "Most recent";
+  const emptyTablesListMessage = useMemo(() => {
+    if (normalizedTableSearchQuery) {
+      if (selectedFolderName) {
+        return `No matching files in ${selectedFolderName}`;
+      }
+      const q = tableSearchQuery.trim();
+      return q ? `No files match "${q}"` : "No matching files";
+    }
+    if (selectedFolderName) {
+      return `No files in ${selectedFolderName}`;
+    }
+    return "No files uploaded yet";
+  }, [
+    normalizedTableSearchQuery,
+    selectedFolderName,
+    tableSearchQuery,
+  ]);
+  const tableSortHint = formatTableSortDirectionHint(
+    tableSortMode,
+    tableSortDirection,
+  );
 
   function onTogglePin(datasetId: number) {
     setPinnedTableIds((previous) => {
@@ -1865,15 +2374,50 @@ export default function Upload({ homeControls = null }: UploadProps) {
     });
   }
 
-  function selectTableSortMode(nextMode: TableSortMode) {
-    setTableSortMode(nextMode);
-    setSortMenuOpen(false);
-    sortToggleButtonRef.current?.focus();
+  function handleTableSortOptionClick(nextMode: TableSortMode) {
+    if (nextMode === tableSortMode) {
+      setTableSortDirection((previous) =>
+        previous === "asc" ? "desc" : "asc",
+      );
+    } else {
+      setTableSortMode(nextMode);
+      setTableSortDirection(defaultTableSortDirection(nextMode));
+    }
   }
 
   useEffect(() => {
     setVisibleTableCount(TABLES_RENDER_BATCH_SIZE);
-  }, [normalizedTableSearchQuery, tableSortMode]);
+  }, [normalizedTableSearchQuery, tableSortMode, tableSortDirection]);
+
+  function applyTableSelectionFromEvent(
+    event: React.MouseEvent,
+    datasetId: number,
+  ) {
+    const idsInView = visibleTables.map((t) => t.dataset_id);
+    const currentIndex = idsInView.indexOf(datasetId);
+    const anchorId = selectionAnchorIdRef.current;
+    const anchorIndex = anchorId !== null ? idsInView.indexOf(anchorId) : -1;
+
+    if (event.shiftKey && anchorIndex !== -1 && currentIndex !== -1) {
+      const start = Math.min(anchorIndex, currentIndex);
+      const end = Math.max(anchorIndex, currentIndex);
+      setSelectedTableIds(idsInView.slice(start, end + 1));
+      return;
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      setSelectedTableIds((prev) =>
+        prev.includes(datasetId)
+          ? prev.filter((id) => id !== datasetId)
+          : [...prev, datasetId],
+      );
+      selectionAnchorIdRef.current = datasetId;
+      return;
+    }
+
+    setSelectedTableIds([datasetId]);
+    selectionAnchorIdRef.current = datasetId;
+  }
 
   useEffect(() => {
     if (activeTableId === null) {
@@ -1926,7 +2470,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
     if (event.key === "End") {
       event.preventDefault();
-      focusByIndex(sortMenuItemRefs.current, TABLE_SORT_OPTIONS.length - 1);
+      focusByIndex(sortMenuItemRefs.current, TABLE_SORT_MODES.length - 1);
       return;
     }
 
@@ -1940,18 +2484,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
     if (event.key === "Tab") {
       setSortMenuOpen(false);
     }
-  }
-
-  function scrollUploadedTablesToBottom() {
-    const element = tablesScrollRef.current;
-    if (!element) {
-      return;
-    }
-    if (uploadedAtBottom) {
-      element.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
   if (showOfflineView) {
@@ -1991,31 +2523,6 @@ export default function Upload({ homeControls = null }: UploadProps) {
 
   return (
     <div className="upload-home-page-scroll">
-      <FolderSidePanel
-        open={folderPanelOpen}
-        onClose={() => {
-          setFolderPanelOpen(false);
-          listFolders()
-            .then(setFolders)
-            .catch(() => { });
-        }}
-        isAdmin={userIsAdmin}
-        onSelectFolder={(folder) => {
-          setSelectedFolder(folder);
-          setFolderPanelOpen(false);
-        }}
-      />
-      <FolderDetailPopup
-        folder={selectedFolder}
-        onClose={() => setSelectedFolder(null)}
-        isAdmin={userIsAdmin}
-        onAssigned={() => {
-          void refresh();
-          listFolders()
-            .then(setFolders)
-            .catch(() => { });
-        }}
-      />
       <div className="page page-stack upload-home-page">
         {toast && (
           <div
@@ -2083,30 +2590,179 @@ export default function Upload({ homeControls = null }: UploadProps) {
           </div>
         )}
 
-        {isUploadQueueVisible && (
-          <div className="upload-queue-backdrop" aria-hidden="true" />
+        {bulkDeleteConfirmIds && (
+          <div
+            className="confirm-modal-overlay"
+            onClick={() => {
+              if (!busy) {
+                setBulkDeleteConfirmIds(null);
+              }
+            }}
+          >
+            <div
+              className="confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="bulk-delete-confirm-title"
+              aria-describedby="bulk-delete-confirm-description"
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <h3 id="bulk-delete-confirm-title">Delete files permanently?</h3>
+              <p id="bulk-delete-confirm-description" className="small">
+                This will permanently delete{" "}
+                <span className="confirm-modal-table-name">
+                  {bulkDeleteConfirmIds.length}
+                </span>{" "}
+                file{bulkDeleteConfirmIds.length === 1 ? "" : "s"}. This action
+                cannot be undone.
+              </p>
+              <div className="confirm-modal-actions">
+                <button
+                  type="button"
+                  className="surface-btn"
+                  onClick={() => {
+                    setBulkDeleteConfirmIds(null);
+                  }}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="confirm-delete-button"
+                  onClick={() => {
+                    void onBulkDelete(bulkDeleteConfirmIds);
+                  }}
+                  disabled={busy}
+                >
+                  {busy ? "Deleting..." : "Permanently delete"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
-        <div className="upload-home-header" aria-hidden={isUploadDialogOpen}>
-          <div className="upload-home-header__start">
-            <button
-              type="button"
-              className={`sort-toggle-button folder-panel-toggle${folderPanelOpen ? " active" : ""}`}
-              onClick={() => setFolderPanelOpen((open) => !open)}
-              aria-label="Toggle folders panel"
-              title="Folders"
-              aria-expanded={folderPanelOpen}
+        {editingId !== null && (
+          <div className="confirm-modal-overlay">
+            <div
+              ref={editDialogRef}
+              className="confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="edit-file-title"
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
             >
-              <img
-                src={folderIcon}
-                alt=""
-                aria-hidden="true"
-                className="sort-toggle-icon folder-panel-toggle__icon"
-              />
-              <span className="sort-toggle-text">Folders</span>
-            </button>
-          </div>
+              <h3 id="edit-file-title">Edit file</h3>
 
+              <label className="upload-queue-folder-label edit-file-field" style={{ marginTop: 6 }}>
+                <span className="upload-queue-folder-label-text">Name</span>
+                <input
+                  ref={renameInputRef}
+                  value={editingName}
+                  onChange={(event) => {
+                    setEditingName(sanitizeTableNameInput(event.target.value));
+                    if (renameHintId === editingId) {
+                      setRenameHintId(null);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void onRename(editingId);
+                    }
+                  }}
+                  className={`rename-input ${renameHintId === editingId ? "invalid" : ""}`}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                  placeholder={renameHintId === editingId ? "Name cannot be empty." : "Enter file name"}
+                  disabled={busy}
+                  aria-label="File name"
+                  aria-invalid={renameHintId === editingId}
+                />
+              </label>
+
+              <label className="upload-queue-folder-label edit-file-field edit-file-field--spaced">
+                <span className="upload-queue-folder-label-text">Description</span>
+                <textarea
+                  value={editingDescription}
+                  onChange={(event) => {
+                    setEditingDescription(
+                      sanitizeTableDescriptionInput(event.target.value),
+                    );
+                  }}
+                  className="rename-input uploaded-table-description-input edit-file-description"
+                  rows={2}
+                  maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                  placeholder="Add file description"
+                  disabled={busy}
+                  aria-label="File description"
+                />
+              </label>
+
+              {selectedFolderId === null && folders.length > 0 && (
+                <label className="upload-queue-folder-label edit-file-field">
+                  <span className="upload-queue-folder-label-text">Folder</span>
+                  <select
+                    className="upload-queue-folder-select"
+                    value={editingFolderId ?? ""}
+                    disabled={busy}
+                    aria-label="Assign to folder"
+                    onChange={(e) =>
+                      setEditingFolderId(
+                        e.target.value !== "" ? Number(e.target.value) : null,
+                      )
+                    }
+                  >
+                    <option value="">No folder</option>
+                    {(userIsAdmin
+                      ? folders
+                      : folders.filter((f) => f.privacy === "public")
+                    ).map((f) => (
+                      <option key={f.folder_id} value={f.folder_id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <div className="confirm-modal-actions" style={{ marginTop: 14 }}>
+                <button
+                  ref={editCancelButtonRef}
+                  type="button"
+                  className="surface-btn"
+                  onClick={() => {
+                    setEditingId(null);
+                    setEditingName("");
+                    setEditingDescription("");
+                    setEditingFolderId(null);
+                    setRenameHintId(null);
+                  }}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="confirm-save-button"
+                  onClick={() => {
+                    void onRename(editingId);
+                  }}
+                  disabled={busy}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="upload-home-header" aria-hidden={isUploadPopupOpen}>
           <div className="upload-home-brand">
             <div className="upload-home-brand__headline">
               <img
@@ -2134,37 +2790,61 @@ export default function Upload({ homeControls = null }: UploadProps) {
           <div className="upload-home-header__end">{homeControls}</div>
         </div>
 
-        <div
-          ref={uploadPanelRef}
-          className={`panel upload-panel${isUploadQueueVisible ? " has-queue in-modal" : ""}`}
-          role={isUploadQueueVisible ? "dialog" : undefined}
-          aria-modal={isUploadQueueVisible ? "true" : undefined}
-          aria-labelledby={
-            isUploadQueueVisible ? uploadQueueTitleId : undefined
-          }
-          aria-describedby={
-            isUploadQueueVisible ? uploadQueueDescriptionId : undefined
-          }
-          aria-busy={busy}
-          onDragEnter={onUploadDragEnter}
-          onDragOver={onUploadDragOver}
-          onDragLeave={onUploadDragLeave}
-          onDrop={onUploadDrop}
-        >
-          {!isUploadQueueVisible ? (
+        {isUploadPopupOpen && (
+          <div
+            className="upload-modal-overlay"
+            role="presentation"
+            onClick={() => {
+              if (busy || isQueueInProgress) return;
+              if (uploadQueue.length > 0) {
+                onCancelAllQueuedFiles();
+              }
+              setUploadModalOpen(false);
+              setUploadPickerOpen(null);
+              setIsDragActive(false);
+            }}
+          >
+            <div
+              ref={uploadPanelRef}
+              className={`panel upload-panel upload-modal${isUploadQueueVisible ? " has-queue" : ""}`}
+              role="dialog"
+              aria-modal="true"
+              aria-busy={busy}
+              onClick={(event) => event.stopPropagation()}
+              onDragEnter={onUploadDragEnter}
+              onDragOver={onUploadDragOver}
+              onDragLeave={onUploadDragLeave}
+              onDrop={onUploadDrop}
+            >
+              <div className="upload-modal__topbar">
+                <div className="upload-modal__title">
+                  Upload CSV/TSV{selectedFolderName ? ` to ${selectedFolderName}` : ""}
+                </div>
+                <button
+                  type="button"
+                  className="icon-button upload-close-button"
+                  aria-label="Close upload dialog"
+                  onClick={() => {
+                    if (busy || isQueueInProgress) return;
+                    if (uploadQueue.length > 0) {
+                      onCancelAllQueuedFiles();
+                    }
+                    setUploadModalOpen(false);
+                    setUploadPickerOpen(null);
+                    setIsDragActive(false);
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
             <div
               className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
               role="button"
               tabIndex={0}
               aria-labelledby="upload-drop-title"
               aria-describedby={uploadDropDescriptionId}
-              onClick={(event) => {
-                const target = event.target as HTMLElement | null;
-                if (
-                  busy ||
-                  uploadDropClickLockRef.current ||
-                  target?.closest(".upload-picker-wrap")
-                ) {
+              onClick={() => {
+                if (busy) {
                   return;
                 }
                 uploadDropFileInputRef.current?.click();
@@ -2205,66 +2885,12 @@ export default function Upload({ homeControls = null }: UploadProps) {
               />
               <div className="upload-icon-row">
                 <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
-                  <button
-                    ref={uploadPickerEmptyButtonRef}
-                    type="button"
-                    className={`upload-icon icon-trigger upload-picker-trigger ${uploadPickerOpen === "empty" ? "active" : ""}`}
-                    aria-label="Upload options"
-                    title="Upload options"
-                    aria-haspopup="menu"
-                    aria-expanded={uploadPickerOpen === "empty"}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      openUploadPicker("empty");
-                    }}
-                    disabled={busy}
-                  >
-                    <img
-                      src={uploadLogo}
-                      alt=""
-                      aria-hidden="true"
-                      className="upload-plus-icon"
-                    />
-                  </button>
-                  {uploadPickerOpen === "empty" && (
-                    <div
-                      className="upload-picker-menu"
-                      role="menu"
-                      aria-label="Upload options"
-                      onMouseDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                    >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="upload-picker-item"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onUploadFiles("empty");
-                        }}
-                      >
-                        Upload files
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="upload-picker-item"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onUploadFolder("empty");
-                        }}
-                      >
-                        Upload folder
-                      </button>
-                    </div>
-                  )}
+                  <img
+                    src={uploadLogo}
+                    alt=""
+                    aria-hidden="true"
+                    className="upload-plus-icon"
+                  />
                 </div>
               </div>
               <div id="upload-drop-title" className="upload-title">
@@ -2274,99 +2900,15 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 Supported file formats: .csv, .tsv, up to 50MB.
               </div>
             </div>
-          ) : (
+          {isUploadQueueVisible && (
             <>
-              <h2 id={uploadQueueTitleId}>Upload CSV/TSV</h2>
+              <h2 id={uploadQueueTitleId} className="sr-only">
+                Upload CSV/TSV{selectedFolderName ? ` to ${selectedFolderName}` : ""}
+              </h2>
               <p id={uploadQueueDescriptionId} className="sr-only">
                 Review file names, fix any validation errors, then upload or
                 cancel the queue.
               </p>
-              <div className="row upload-queue-toolbar">
-                <input
-                  ref={queueFileInputRef}
-                  type="file"
-                  multiple
-                  accept=".csv,.tsv"
-                  onChange={(event) => {
-                    onSelectFiles(event.target.files);
-                    event.currentTarget.value = "";
-                  }}
-                  className="file-input-hidden"
-                />
-                <input
-                  ref={queueFolderInputRef}
-                  {...FOLDER_INPUT_PROPS}
-                  type="file"
-                  multiple
-                  accept=".csv,.tsv"
-                  onChange={(event) => {
-                    onSelectFiles(event.target.files);
-                    event.currentTarget.value = "";
-                  }}
-                  className="file-input-hidden"
-                />
-                <div className="upload-picker-wrap" ref={uploadPickerQueueRef}>
-                  <button
-                    ref={uploadPickerQueueButtonRef}
-                    onClick={() => openUploadPicker("queue")}
-                    type="button"
-                    className={`surface-btn upload-add-more-button ${uploadPickerOpen === "queue" ? "active" : ""}`}
-                    aria-label="Add more files"
-                    title="Add more files"
-                    aria-haspopup="menu"
-                    aria-expanded={uploadPickerOpen === "queue"}
-                    disabled={busy || isQueueInProgress}
-                  >
-                    <img
-                      src={plusIcon}
-                      alt=""
-                      aria-hidden="true"
-                      className="upload-add-more-button__icon"
-                    />
-                    <span className="upload-add-more-button__label">
-                      Add more files
-                    </span>
-                  </button>
-                  {uploadPickerOpen === "queue" && (
-                    <div
-                      className="upload-picker-menu"
-                      role="menu"
-                      aria-label="Upload options"
-                      onMouseDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                    >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="upload-picker-item"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onUploadFiles("queue");
-                        }}
-                      >
-                        Upload files
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="upload-picker-item"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onUploadFolder("queue");
-                        }}
-                      >
-                        Upload folder
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
 
               <ul
                 className="upload-queue-list"
@@ -2380,7 +2922,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   const canEditQueuedName =
                     item.phase === "idle" || item.phase === "error";
                   const queueNameIsEmpty =
-                    sanitizeTableNameInput(item.name).length === 0;
+                    sanitizeTableNameInput(item.name).trim().length === 0;
                   const queueNameIsDuplicate =
                     !queueNameIsEmpty &&
                     isQueuedNameDuplicate(item.id, item.name);
@@ -2519,7 +3061,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
                               disabled={busy || !canEditQueuedName}
                             />
                           </label>
-                          {canEditQueuedName && folders.length > 0 && (
+                          {canEditQueuedName &&
+                            folders.length > 0 &&
+                            selectedFolderId === null && (
                             <label className="upload-queue-folder-label">
                               <span className="upload-queue-folder-label-text">
                                 Folder
@@ -2568,13 +3112,19 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         {!isQueueInProgress && (
                           <button
                             type="button"
-                            className="upload-queue-remove"
+                            className="icon-button upload-queue-remove"
                             onClick={() => onRemoveQueuedFile(item.id)}
                             aria-label={`Remove ${item.file.name}`}
                             title="Remove file"
                             disabled={busy}
                           >
-                            ×
+                            <svg
+                              viewBox="0 0 24 24"
+                              aria-hidden="true"
+                              focusable="false"
+                            >
+                              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                            </svg>
                           </button>
                         )}
                       </div>
@@ -2652,7 +3202,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       onClick={onCancelAllQueuedFiles}
                       disabled={busy}
                     >
-                      Cancel all
+                      Discard all
                     </button>
                     <button
                       onClick={onUpload}
@@ -2689,114 +3239,233 @@ export default function Upload({ homeControls = null }: UploadProps) {
               </p>
             ) : null}
           </div>
-        </div>
+            </div>
+          </div>
+        )}
 
         <div
           className="panel uploaded-tables-panel"
-          aria-hidden={isUploadDialogOpen}
+          aria-hidden={isUploadPopupOpen}
         >
-          <div className="row tables-header-row">
-            <h3 style={{ marginBottom: 0 }}>Uploaded Tables</h3>
-            <div className="tables-header-controls">
-              <label
-                className="tables-search-input-wrap"
-                aria-label="Search table name"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  role="presentation"
-                  className="tables-search-icon"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
-                    fill="currentColor"
-                  />
-                </svg>
-                <input
-                  type="text"
-                  className="tables-search-input"
-                  value={tableSearchQuery}
-                  onChange={(event) => setTableSearchQuery(event.target.value)}
-                  placeholder="Search"
-                  aria-label="Search table name"
-                />
-              </label>
-              <div className="sort-menu-wrap" ref={sortMenuRef}>
-                <button
-                  ref={sortToggleButtonRef}
-                  type="button"
-                  className={`sort-toggle-button ${sortMenuOpen ? "active" : ""}`}
-                  onClick={() => setSortMenuOpen((current) => !current)}
-                  onKeyDown={onSortToggleKeyDown}
-                  aria-haspopup="menu"
-                  aria-expanded={sortMenuOpen}
-                  aria-controls={sortMenuOpen ? sortMenuId : undefined}
-                  aria-label={`Sort tables. Current order: ${tableSortLabel}`}
-                  title="Sort tables"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    role="presentation"
-                    className="sort-toggle-icon"
-                  >
-                    <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
-                  </svg>
-                  <span className="sort-toggle-text">
-                    Sort: {tableSortLabel}
-                  </span>
-                </button>
-                {sortMenuOpen && (
-                  <div
-                    id={sortMenuId}
-                    className="sort-menu"
-                    role="menu"
-                    aria-label="Sort options"
-                    onKeyDown={onSortMenuKeyDown}
-                  >
-                    {TABLE_SORT_OPTIONS.map((option, index) => (
-                      <button
-                        key={option.value}
-                        ref={(element) => {
-                          sortMenuItemRefs.current[index] = element;
-                        }}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={tableSortMode === option.value}
-                        className={`sort-menu-item ${tableSortMode === option.value ? "active" : ""}`}
-                        onClick={() => {
-                          selectTableSortMode(option.value);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+          <div
+            className="uploaded-tables-panel__content"
+            style={
+              {
+                ["--folders-pane-width" as never]: `${folderPaneCollapsed ? 56 : folderPaneWidth}px`,
+              } as React.CSSProperties
+            }
+          >
+            <div className={`uploaded-tables-panel__folders${folderPaneCollapsed ? " uploaded-tables-panel__folders--collapsed" : ""}`}>
+              <FolderSidePanel
+                variant="embedded"
+                open
+                onClose={() => {
+                  listFolders()
+                    .then(setFolders)
+                    .catch(() => { });
+                }}
+                isAdmin={userIsAdmin}
+                refreshKey={folderCountsRefreshKey}
+                selectedFolderId={selectedFolderId}
+                onTogglePane={() => setFolderPaneCollapsed((v) => !v)}
+                togglePaneLabel={folderPaneCollapsed ? "Expand folders pane" : "Collapse folders pane"}
+                onSelectFolder={(folder) => {
+                  setSelectedFolder(folder);
+                }}
+                onFolderListChange={(folderChangeDetail) => {
+                  void syncFoldersAndTablesAfterPanelChange(folderChangeDetail);
+                }}
+              />
             </div>
-          </div>
-          <p className="sr-only" role="status" aria-live="polite">
-            Showing {filteredTables.length} uploaded table
-            {filteredTables.length === 1 ? "" : "s"}
-            {normalizedTableSearchQuery
-              ? ` matching ${tableSearchQuery.trim()}`
-              : ""}
-            . Sorted by {tableSortLabel}.
-          </p>
+            {!folderPaneCollapsed && (
+              <div
+                className="uploaded-tables-panel__folders-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize folders pane"
+                onPointerDown={beginFolderPaneResize}
+              />
+            )}
 
-          {tables.length === 0 ? (
-            <div className="tables-empty-state-wrapper">
-              <p className="small">No tables uploaded yet</p>
-            </div>
-          ) : (
-            <div className="tables-scroll" ref={tablesScrollRef}>
-              <ul>
-                {visibleTables.map((table) => {
-                  const indexStatus = indexStatusByTable[table.dataset_id];
-                  const indexState = indexStatus?.state || "ready";
-                  const isPinned = pinnedTableIdSet.has(table.dataset_id);
-                  const indexProgress = Math.max(
+            <div className="uploaded-tables-panel__tables">
+              <div className="row tables-header-row">
+                <div className="tables-header-controls">
+                  <div className="sort-menu-wrap" ref={sortMenuRef}>
+                    <button
+                      ref={sortToggleButtonRef}
+                      type="button"
+                      className={`sort-toggle-button tables-header-sort-toggle${sortMenuOpen ? " active" : ""}`}
+                      onClick={() => setSortMenuOpen((current) => !current)}
+                      onKeyDown={onSortToggleKeyDown}
+                      aria-haspopup="menu"
+                      aria-expanded={sortMenuOpen}
+                      aria-controls={sortMenuOpen ? sortMenuId : undefined}
+                      title={`Sort by: ${tableSortHint}`}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                        className="sort-toggle-icon"
+                      >
+                        <path d="M8.7 3.3a1 1 0 0 1 1.4 0l3 3a1 1 0 1 1-1.4 1.4L10.4 6.4V20a1 1 0 1 1-2 0V6.4L7.1 7.7a1 1 0 1 1-1.4-1.4l3-3zm6.6 17.4a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.4l1.3 1.3V4a1 1 0 1 1 2 0v13.6l1.3-1.3a1 1 0 1 1 1.4 1.4l-3 3z" />
+                      </svg>
+                      <span className="sort-toggle-text">
+                        Sort by: {tableSortHint}
+                      </span>
+                      <svg
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                        className="sort-toggle-chevron"
+                      >
+                        <path
+                          d="M7 10l5 5 5-5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.25"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                    {sortMenuOpen && (
+                      <div
+                        id={sortMenuId}
+                        className="sort-menu"
+                        role="menu"
+                        aria-label="Sort options"
+                        onKeyDown={onSortMenuKeyDown}
+                      >
+                        {TABLE_SORT_MODES.map((mode, index) => {
+                          const isActive = tableSortMode === mode;
+                          const inactiveHint = formatTableSortDirectionHint(
+                            mode,
+                            defaultTableSortDirection(mode),
+                          );
+                          return (
+                            <button
+                              key={mode}
+                              ref={(element) => {
+                                sortMenuItemRefs.current[index] = element;
+                              }}
+                              type="button"
+                              role="menuitem"
+                              aria-current={isActive ? "true" : undefined}
+                              className={`sort-menu-item ${isActive ? "active" : ""}`}
+                              onClick={() => {
+                                handleTableSortOptionClick(mode);
+                              }}
+                              aria-label={
+                                isActive
+                                  ? `${formatTableSortDirectionHint(mode, tableSortDirection)}. Click again to reverse order.`
+                                  : `${inactiveHint}. Click to sort.`
+                              }
+                            >
+                              {isActive
+                                ? formatTableSortDirectionHint(
+                                    mode,
+                                    tableSortDirection,
+                                  )
+                                : inactiveHint}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <label
+                    className="tables-search-input-wrap"
+                    aria-label="Search table name"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      role="presentation"
+                      className="tables-search-icon"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                    <input
+                      type="text"
+                      className="tables-search-input"
+                      value={tableSearchQuery}
+                      onChange={(event) =>
+                        setTableSearchQuery(event.target.value)
+                      }
+                      placeholder="Search"
+                      aria-label="Search table name"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="tables-header-upload-btn"
+                    aria-label={
+                      isUploadBlockedForNonPublicFolder
+                        ? "Upload unavailable — only workspace admins can add files to protected or private folders"
+                        : `Upload tables${selectedFolderName ? ` to ${selectedFolderName}` : ""}`
+                    }
+                    title={
+                      isUploadBlockedForNonPublicFolder
+                        ? "Only admins can upload to protected or private folders. Select a public folder to add files."
+                        : "Upload tables"
+                    }
+                    disabled={isUploadPopupOpen || isUploadBlockedForNonPublicFolder}
+                    onClick={() => {
+                      setUploadModalOpen(true);
+                      setUploadPickerOpen(null);
+                      setShowUploadQueue(false);
+                      setIsDragActive(false);
+                      setErr(null);
+                      setStatus(null);
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      focusable="false"
+                      role="presentation"
+                    >
+                      <path
+                        d="M12 5v14M5 12h14"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <p className="sr-only" role="status" aria-live="polite">
+                Showing {filteredTables.length} uploaded file
+                {filteredTables.length === 1 ? "" : "s"}
+                {normalizedTableSearchQuery
+                  ? ` matching ${tableSearchQuery.trim()}`
+                  : ""}
+                . Sorted by {tableSortHint}.
+              </p>
+
+              <div className="uploaded-tables-panel__tables-main">
+              {filteredTables.length === 0 ? (
+                <div
+                  className={`tables-empty-state-wrapper${selectedFolderName ? " tables-empty-state-wrapper--folder-empty" : ""}`}
+                >
+                  <p className="small">
+                    {emptyTablesListMessage}
+                  </p>
+                </div>
+              ) : (
+                <div className="tables-scroll" ref={tablesScrollRef}>
+                  <ul>
+                    {visibleTables.map((table) => {
+                      const indexStatus = indexStatusByTable[table.dataset_id];
+                      const indexState = indexStatus?.state || "ready";
+                      const isPinned = pinnedTableIdSet.has(table.dataset_id);
+                      const indexProgress = Math.max(
                     0,
                     Math.min(
                       100,
@@ -2818,19 +3487,25 @@ export default function Upload({ homeControls = null }: UploadProps) {
                           ? "Index failed"
                           : "Indexed";
                   const isIndexing = indexState === "indexing";
-                  const readyPrivacyLabel = table.folder_privacy
-                    ? `${table.folder_privacy.charAt(0).toUpperCase()}${table.folder_privacy.slice(1)}`
-                    : null;
-                  const showReadyPrivacyBadge =
-                    indexState === "ready" && table.folder_privacy !== null;
-                  const readyStatusLabel =
-                    showReadyPrivacyBadge && readyPrivacyLabel
-                      ? readyPrivacyLabel
-                      : indexLabel;
+                  const readyStatusLabel = indexLabel;
 
                   return (
                     <li key={table.dataset_id}>
-                      <div className="list-row">
+                      {/*
+                        Multi-select needs to win over nested controls.
+                        Use capture so ctrl/cmd/shift clicks don't get overridden by inner button clicks.
+                      */}
+                      <div
+                        className={`list-row list-item ${selectedTableIds.includes(table.dataset_id) ? "selected" : ""
+                          }`}
+                        onClickCapture={(event) => {
+                          if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                            applyTableSelectionFromEvent(event, table.dataset_id);
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }
+                        }}
+                      >
                         <button
                           type="button"
                           className={`icon-button ${isPinned ? "pinned" : "pin"}`}
@@ -2850,256 +3525,224 @@ export default function Upload({ homeControls = null }: UploadProps) {
                           </svg>
                         </button>
 
-                        <div
-                          className={`list-item ${activeTableId === table.dataset_id ? "selected" : ""
-                            }`}
-                        >
-                          {editingId === table.dataset_id ? (
-                            <div className="uploaded-table-main">
-                              <input
-                                ref={renameInputRef}
-                                value={editingName}
-                                onChange={(event) => {
-                                  setEditingName(
-                                    sanitizeTableNameInput(event.target.value),
-                                  );
-                                  if (renameHintId === table.dataset_id) {
-                                    setRenameHintId(null);
-                                  }
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter") {
-                                    void onRename(table.dataset_id);
-                                  }
-                                }}
-                                className={`rename-input ${renameHintId === table.dataset_id
-                                  ? "invalid"
-                                  : ""
-                                  }`}
-                                autoCapitalize="none"
-                                autoCorrect="off"
-                                spellCheck={false}
-                                maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                                placeholder={
-                                  renameHintId === table.dataset_id
-                                    ? "Name cannot be empty."
-                                    : "Enter table name"
+                        <div className="uploaded-table-main">
+                          <button
+                            type="button"
+                            className="list-button"
+                            onClick={(event) => {
+                              // Double-click should be handled by onDoubleClick (add to selection),
+                              // so ignore the "second click" here to avoid toggling preview/selection.
+                              if (event.detail > 1) {
+                                return;
+                              }
+                              if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                                applyTableSelectionFromEvent(event, table.dataset_id);
+                                return;
+                              }
+                              // If the only selected item is clicked again, treat as deselect.
+                              if (
+                                selectedTableIds.length === 1 &&
+                                selectedTableIds[0] === table.dataset_id &&
+                                activeTableId === null
+                              ) {
+                                setSelectedTableIds([]);
+                                selectionAnchorIdRef.current = null;
+                                return;
+                              }
+                              setSelectedTableIds([table.dataset_id]);
+                              selectionAnchorIdRef.current = table.dataset_id;
+                              if (activeTableId === table.dataset_id) {
+                                // Toggle off when clicking the currently selected table.
+                                setActiveTableId(null);
+                                setSelectedTableIds([]);
+                                selectionAnchorIdRef.current = null;
+                                setPreview(null);
+                                setPreviewErr(null);
+                                setPreviewBusy(false);
+                                setPreviewPage(1);
+                                setPreviewRowCount(0);
+                                setPreviewSearchQuery("");
+                                setPreviewSortColumn(null);
+                                setPreviewSortDirection("asc");
+                                return;
+                              }
+                              void loadPreview(table.dataset_id, 1, {
+                                sortColumn: null,
+                                sortDirection: "asc",
+                              });
+                            }}
+                            onDoubleClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setSelectedTableIds((prev) => {
+                                if (prev.includes(table.dataset_id)) {
+                                  return prev;
                                 }
-                                disabled={busy}
-                                aria-label={`Rename ${table.name}`}
-                                aria-invalid={renameHintId === table.dataset_id}
-                              />
-                              <input
-                                value={editingDescription}
-                                onChange={(event) => {
-                                  setEditingDescription(
-                                    sanitizeTableDescriptionInput(
-                                      event.target.value,
-                                    ),
-                                  );
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter") {
-                                    void onRename(table.dataset_id);
-                                  }
-                                }}
-                                className="rename-input uploaded-table-description-input"
-                                maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
-                                placeholder="Add table description"
-                                disabled={busy}
-                                aria-label={`Edit description for ${table.name}`}
-                              />
-                              {folders.length > 0 && (userIsAdmin || table.folder_privacy === "public") && (
-                                <label className="upload-queue-folder-label">
-                                  <span className="upload-queue-folder-label-text">Folder</span>
-                                  <select
-                                    className="upload-queue-folder-select"
-                                    value={editingFolderId ?? ""}
-                                    disabled={busy}
-                                    aria-label="Assign to folder"
-                                    onChange={(e) =>
-                                      setEditingFolderId(
-                                        e.target.value !== "" ? Number(e.target.value) : null,
-                                      )
-                                    }
-                                  >
-                                    <option value="">No folder</option>
-                                    {(userIsAdmin
-                                      ? folders
-                                      : folders.filter((f) => f.privacy === "public")
-                                    ).map((f) => (
-                                      <option key={f.folder_id} value={f.folder_id}>
-                                        {f.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="uploaded-table-main">
-                              <button
-                                type="button"
-                                className="list-button"
-                                onClick={() => {
-                                  if (activeTableId === table.dataset_id) {
-                                    // Toggle off when clicking the currently selected table.
-                                    setActiveTableId(null);
-                                    setPreview(null);
-                                    setPreviewErr(null);
-                                    setPreviewBusy(false);
-                                    setPreviewPage(1);
-                                    setPreviewRowCount(0);
-                                    setPreviewSearchQuery("");
-                                    setPreviewSortColumn(null);
-                                    setPreviewSortDirection("asc");
-                                    return;
-                                  }
-                                  void loadPreview(table.dataset_id, 1, {
-                                    sortColumn: null,
-                                    sortDirection: "asc",
-                                  });
-                                }}
-                                aria-pressed={
-                                  activeTableId === table.dataset_id
-                                }
-                              >
-                                <span className="uploaded-table-head">
-                                  <span className="uploaded-table-title-line">
-                                    <span className="uploaded-table-name">
-                                      {table.name}
-                                    </span>
-                                    {table.description?.trim() ? (
-                                      <span className="small uploaded-table-description">
-                                        {table.description.trim()}
-                                      </span>
-                                    ) : null}
-                                  </span>
-                                  <span className="small uploaded-table-meta">
-                                    ({table.row_count} rows,{" "}
-                                    {table.column_count} cols)
-                                  </span>
-                                  {table.folder_name && table.folder_privacy ? (
-                                    <span className="uploaded-table-folder-row">
-                                      <img
-                                        src={folderIcon}
-                                        alt=""
-                                        aria-hidden="true"
-                                        className="uploaded-table-folder-icon"
-                                      />
-                                      <span className="uploaded-table-folder-name">
-                                        {table.folder_name}
-                                      </span>
-                                    </span>
-                                  ) : null}
+                                return [...prev, table.dataset_id];
+                              });
+                              selectionAnchorIdRef.current = table.dataset_id;
+                            }}
+                            aria-pressed={
+                              activeTableId === table.dataset_id
+                            }
+                          >
+                            <span className="uploaded-table-head">
+                              <span className="uploaded-table-title-line">
+                                <span className="uploaded-table-name">
+                                  {table.name}
                                 </span>
-                              </button>
-                            </div>
-                          )}
+                                {table.description?.trim() ? (
+                                  <span className="small uploaded-table-description">
+                                    {table.description.trim()}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="small uploaded-table-meta">
+                                ({table.row_count} rows,{" "}
+                                {table.column_count} cols)
+                              </span>
+                            </span>
+                          </button>
                         </div>
 
-                        <div
-                          className={`index-job ${indexState}${showReadyPrivacyBadge ? " index-job--privacy" : ""}`}
-                          title={indexStatus?.message || readyStatusLabel}
-                          role={isIndexing ? "progressbar" : "status"}
-                          aria-label={
-                            isIndexing
-                              ? `${table.name} index status`
-                              : `${table.name}: ${readyStatusLabel}`
-                          }
-                          aria-valuemin={isIndexing ? 0 : undefined}
-                          aria-valuemax={isIndexing ? 100 : undefined}
-                          aria-valuenow={isIndexing ? indexProgress : undefined}
-                          aria-valuetext={
-                            isIndexing
-                              ? `${indexLabel}. ${indexProgress}% complete.`
-                              : undefined
-                          }
-                        >
-                          <div className="index-job-ready">
-                            {showReadyPrivacyBadge && table.folder_privacy ? (
-                              <FolderPrivacyBadge
-                                privacy={table.folder_privacy}
-                                className="index-job-privacy-badge"
-                              />
-                            ) : (
-                              indexLabel
-                            )}
-                          </div>
-                          {isIndexing && (
-                            <div className="index-job-track" aria-hidden="true">
+                        {isIndexing && (
+                          <div
+                            className="list-row-index"
+                            title={indexStatus?.message || readyStatusLabel}
+                            role="progressbar"
+                            aria-label={`${table.name} index status`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={indexProgress}
+                            aria-valuetext={`${indexLabel}. ${indexProgress}% complete.`}
+                          >
+                            <div className="list-row-index-track" aria-hidden="true">
                               <div
-                                className="index-job-fill indexing"
+                                className="list-row-index-fill indexing"
                                 style={{
                                   width: `${Math.max(4, indexProgress)}%`,
                                 }}
                               />
                             </div>
-                          )}
-                        </div>
-
-                        {(userIsAdmin || table.folder_privacy === "public") && (
-                          <button
-                            type="button"
-                            className={`icon-button ${editingId === table.dataset_id ? "success" : "edit"}`}
-                            onClick={() => {
-                              if (editingId === table.dataset_id) {
-                                void onRename(table.dataset_id);
-                              } else {
-                                setEditingId(table.dataset_id);
-                                setEditingName(table.name);
-                                setEditingDescription(
-                                  sanitizeTableDescriptionInput(
-                                    table.description || "",
-                                  ),
-                                );
-                                setEditingFolderId(table.folder_id);
-                                setRenameHintId(null);
-                              }
-                            }}
-                            aria-label={
-                              editingId === table.dataset_id
-                                ? "Save table updates"
-                                : `Edit ${table.name}`
-                            }
-                            title={
-                              editingId === table.dataset_id ? "Save" : "Edit"
-                            }
-                            disabled={
-                              busy ||
-                              Boolean(deletingTableIds[table.dataset_id])
-                            }
-                          >
-                            {editingId === table.dataset_id ? (
-                              <svg viewBox="0 0 24 24" role="presentation">
-                                <path d="M9.2 16.6 4.8 12.2a1 1 0 1 1 1.4-1.4l3 3 8-8a1 1 0 0 1 1.4 1.4l-8.8 8.8a1 1 0 0 1-1.4 0z" />
-                              </svg>
-                            ) : (
-                              <svg viewBox="0 0 24 24" role="presentation">
-                                <path d="M15.2 4.2a2 2 0 0 1 2.8 0l1.8 1.8a2 2 0 0 1 0 2.8l-9.8 9.8a1 1 0 0 1-.5.27l-4.5 1a1 1 0 0 1-1.2-1.2l1-4.5a1 1 0 0 1 .27-.5l9.8-9.8zM6.7 15.3l-.6 2.5 2.5-.6 8.6-8.6-1.9-1.9-8.6 8.6z" />
-                              </svg>
-                            )}
-                          </button>
+                          </div>
                         )}
 
                         {(userIsAdmin || table.folder_privacy === "public") && (
-                          <button
-                            type="button"
-                            className="icon-button danger"
-                            onClick={() => {
-                              setDeleteConfirmTable(table);
-                            }}
-                            aria-label={`Delete ${table.name}`}
-                            title="Delete table"
-                            disabled={
-                              busy ||
-                              Boolean(deletingTableIds[table.dataset_id])
-                            }
+                          <div
+                            className="row-action-menu"
+                            data-row-action-menu-root={table.dataset_id}
                           >
-                            <svg viewBox="0 0 24 24" role="presentation">
-                              <path d="M9 3a1 1 0 0 0-1 1v1H5a1 1 0 0 0 0 2h1v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7h1a1 1 0 1 0 0-2h-3V4a1 1 0 0 0-1-1H9zm1 2h4v0H10zm-1 4a1 1 0 0 1 2 0v8a1 1 0 1 1-2 0V9zm6-1a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V9a1 1 0 0 1 1-1z" />
-                            </svg>
-                          </button>
+                            {/*
+                              If multiple files are selected and this row is part of the selection,
+                              only allow bulk delete from the kebab.
+                            */}
+                            <button
+                              type="button"
+                              className="icon-button row-action-menu__trigger"
+                              aria-label={`Actions for ${table.name}`}
+                              aria-haspopup="menu"
+                              aria-expanded={rowActionMenuOpenId === table.dataset_id}
+                              disabled={
+                                busy || Boolean(deletingTableIds[table.dataset_id])
+                              }
+                              onClick={(e) => {
+                                if (
+                                  selectedTableIds.length > 1 &&
+                                  !selectedTableIds.includes(table.dataset_id)
+                                ) {
+                                  setSelectedTableIds([table.dataset_id]);
+                                  selectionAnchorIdRef.current = table.dataset_id;
+                                }
+                                const nextOpen =
+                                  rowActionMenuOpenId === table.dataset_id
+                                    ? null
+                                    : table.dataset_id;
+                                if (nextOpen === null) {
+                                  setRowActionMenuOpenId(null);
+                                  setRowActionMenuPos(null);
+                                  return;
+                                }
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setRowActionMenuOpenId(nextOpen);
+                                setRowActionMenuPos({
+                                  id: nextOpen,
+                                  top: rect.bottom + 6,
+                                  right: Math.max(8, window.innerWidth - rect.right),
+                                });
+                              }}
+                            >
+                              <svg viewBox="0 0 24 24" role="presentation">
+                                <path d="M12 7.25a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5z" />
+                              </svg>
+                            </button>
+
+                            {rowActionMenuOpenId === table.dataset_id &&
+                              rowActionMenuPos?.id === table.dataset_id &&
+                              createPortal(
+                                <div
+                                  className="row-action-menu__dropdown"
+                                  role="menu"
+                                  data-row-action-menu-root={table.dataset_id}
+                                  style={{
+                                    position: "fixed",
+                                    top: rowActionMenuPos.top,
+                                    right: rowActionMenuPos.right,
+                                  }}
+                                >
+                                  {selectedTableIds.length > 1 &&
+                                  selectedTableIds.includes(table.dataset_id) ? (
+                                    <button
+                                      type="button"
+                                      className="row-action-menu__item row-action-menu__item--danger"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setRowActionMenuOpenId(null);
+                                        setRowActionMenuPos(null);
+                                        setBulkDeleteConfirmIds(selectedTableIds);
+                                      }}
+                                    >
+                                      Delete ({selectedTableIds.length})
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="row-action-menu__item"
+                                        role="menuitem"
+                                        onClick={() => {
+                                          setRowActionMenuOpenId(null);
+                                          setRowActionMenuPos(null);
+                                          setEditingId(table.dataset_id);
+                                          setEditingName(table.name);
+                                          setEditingDescription(
+                                            sanitizeTableDescriptionInput(
+                                              table.description || "",
+                                            ),
+                                          );
+                                          setEditingFolderId(table.folder_id);
+                                          setRenameHintId(null);
+                                        }}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="row-action-menu__item row-action-menu__item--danger"
+                                        role="menuitem"
+                                        onClick={() => {
+                                          setRowActionMenuOpenId(null);
+                                          setRowActionMenuPos(null);
+                                          setDeleteConfirmTable(table);
+                                        }}
+                                      >
+                                        Delete
+                                      </button>
+                                    </>
+                                  )}
+                                </div>,
+                                document.body,
+                              )}
+                          </div>
                         )}
                       </div>
                     </li>
@@ -3123,39 +3766,132 @@ export default function Upload({ homeControls = null }: UploadProps) {
               )}
             </div>
           )}
+              </div>
 
-          {showScrollHint && (
-            <button
-              type="button"
-              className="scroll-indicator uploaded-scroll-indicator"
-              onClick={scrollUploadedTablesToBottom}
-              aria-label={
-                uploadedAtBottom
-                  ? "Scroll uploaded tables to top"
-                  : "Scroll uploaded tables to bottom"
-              }
-              title={uploadedAtBottom ? "Scroll to top" : "Scroll to bottom"}
-            >
-              {uploadedAtBottom ? "▲" : "▼"}
-            </button>
-          )}
+            </div>
+          </div>
         </div>
 
-        {activeTableId !== null && (
+        {previewStripTableIds.length > 0 && (
           <div
             className="panel upload-preview"
-            aria-hidden={isUploadDialogOpen}
+            aria-hidden={isUploadPopupOpen}
           >
             <div className="preview-header">
               <div className="preview-header-left">
-                <h3 style={{ marginBottom: 0 }}>Table Preview</h3>
-                {activeTableName && (
-                  <div className="preview-table-name" aria-live="polite">
-                    <span className="preview-table-name-value">
-                      {activeTableName}
-                    </span>
+                <div className="preview-selected-pills-wrap" aria-label="Selected files">
+                  {previewTabWidth <= 44 && previewPillsCanScrollLeft && (
+                    <button
+                      type="button"
+                      className="preview-selected-pills-prev"
+                      aria-label="Previous selected table"
+                      title="Previous"
+                      onClick={() => {
+                        const el = previewPillsScrollRef.current;
+                        if (!el) return;
+                        el.scrollBy({
+                          left: -Math.max(140, el.clientWidth * 0.7),
+                          behavior: "smooth",
+                        });
+                      }}
+                    >
+                      <svg
+                        className="preview-selected-pills-nav-icon"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <path
+                          d="M14.5 6.5 9 12l5.5 5.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                  <div
+                    className="preview-selected-pills-scroll"
+                    ref={previewPillsScrollRef}
+                    style={
+                      {
+                        ["--preview-tab-width" as never]: `${previewTabWidth}px`,
+                      } as React.CSSProperties
+                    }
+                  >
+                    {previewStripTableIds
+                      .map((id) => tables.find((t) => t.dataset_id === id))
+                      .filter((t): t is TableSummary => Boolean(t))
+                      .map((t) => (
+                        <div
+                          key={t.dataset_id}
+                          className={`preview-selected-pill${activeTableId === t.dataset_id ? " is-active" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            className="preview-selected-pill__btn"
+                            onClick={() => {
+                              if (activeTableId === t.dataset_id) return;
+                              void loadPreview(t.dataset_id, 1, {
+                                sortColumn: null,
+                                sortDirection: "asc",
+                              });
+                            }}
+                            title={t.name}
+                          >
+                            {t.name}
+                          </button>
+                          <button
+                            type="button"
+                            className="preview-selected-pill__x"
+                            aria-label={`Deselect ${t.name}`}
+                            title="Deselect"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              removeSelectedTableId(t.dataset_id);
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
                   </div>
-                )}
+                  {previewTabWidth <= 44 && previewPillsCanScrollRight && (
+                    <button
+                      type="button"
+                      className="preview-selected-pills-next"
+                      aria-label="Next selected table"
+                      title="Next"
+                      onClick={() => {
+                        const el = previewPillsScrollRef.current;
+                        if (!el) return;
+                        el.scrollBy({
+                          left: Math.max(140, el.clientWidth * 0.7),
+                          behavior: "smooth",
+                        });
+                      }}
+                    >
+                      <svg
+                        className="preview-selected-pills-nav-icon"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <path
+                          d="M9.5 6.5 15 12l-5.5 5.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="preview-header-right">
                 {preview && (
@@ -3190,8 +3926,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
                     to={`/tables/${activeTableId}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    aria-label="Edit Full Table (opens in new tab)"
-                    title="Edit Full Table (new tab)"
+                    aria-label="Full Preview (opens in new tab)"
+                    title="Full Preview (new tab)"
                   >
                     <img
                       src={openIcon}
@@ -3199,7 +3935,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       className="preview-open-link-icon"
                       aria-hidden="true"
                     />
-                    <span className="sort-toggle-text">Edit Full Table</span>
+                    <span className="sort-toggle-text">Full Preview</span>
                   </Link>
                 )}
               </div>

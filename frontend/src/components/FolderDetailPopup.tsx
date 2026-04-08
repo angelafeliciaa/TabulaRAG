@@ -226,7 +226,7 @@ export default function FolderDetailPopup({ folder, onClose, isAdmin, onAssigned
               )}
             </section>
 
-            {/* Add existing datasets (admin, or querier in a public folder) */}
+            {/* Add existing datasets (admin, or member in a public folder) */}
             {canWrite && (
               <section className="folder-detail-section">
                 <h4 className="folder-detail-section-title">

@@ -2,17 +2,16 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppUiProvider, useAppUi } from "./appUiContext";
 import {
+  avatarPlaceholderStyle,
   getUser,
   isAuthenticated,
   listMyWorkspaces,
   logout,
-  redirectToGoogleSignIn,
   switchWorkspace,
   type WorkspaceSummary,
 } from "./api";
 import logo from "./images/logo-64.webp";
 import logoutIcon from "./images/logout.png";
-import switchIcon from "./images/switch.png";
 import HighlightView from "./pages/HighlightView";
 import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
@@ -20,6 +19,7 @@ import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
+import ResetPassword from "./pages/ResetPassword";
 import Settings from "./pages/Settings";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -58,7 +58,7 @@ function AppContent() {
   const onDatasetTablePage = location.pathname.startsWith("/tables/") && location.pathname !== "/tables/virtual";
   const showWorkspaceSwitcher = Boolean(onHomePage && user?.enterprise_id);
   const showInlineTableHeader = !onHomePage && onDatasetTablePage;
-  const useIconOnlyBrand = onSettingsPage || onDatasetTablePage;
+  const useIconOnlyBrand = onDatasetTablePage;
 
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuWrapRef = useRef<HTMLDivElement | null>(null);
@@ -216,16 +216,6 @@ function AppContent() {
     window.location.replace("/");
   }
 
-  async function handleSwitchAccount() {
-    setAccountMenuOpen(false);
-    logout();
-    try {
-      await redirectToGoogleSignIn({ prompt: "select_account" });
-    } catch {
-      window.location.replace("/");
-    }
-  }
-
   const topBarControls =
     isAuthenticated() && user ? (
       <div className="user-menu user-menu--compact">
@@ -278,35 +268,35 @@ function AppContent() {
                 role="menu"
                 aria-label="Workspace actions"
               >
-                {workspaces.map((w) => (
-                  <button
-                    key={w.enterprise_id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={w.enterprise_id === user.enterprise_id}
-                    className={`sort-menu-item ${w.enterprise_id === user.enterprise_id ? "active" : ""}`}
-                    onClick={() => {
-                      if (w.enterprise_id === user.enterprise_id) {
-                        setWorkspaceMenuOpen(false);
-                        return;
-                      }
-                      void switchWorkspace(w.enterprise_id).then(() => {
-                        bumpSession();
-                        setWorkspaceMenuOpen(false);
-                      });
-                    }}
-                  >
-                    <span className="top-bar-workspace-menu-item">
-                      <span className="top-bar-workspace-name">{w.enterprise_name}</span>
-                      <span className={`top-bar-workspace-role-badge top-bar-workspace-role-badge--${w.role}`}>
-                        {workspaceRoleLabel(w.role)}
+                <div className="top-bar-workspace-menu-scroll" role="presentation">
+                  {workspaces.map((w) => (
+                    <button
+                      key={w.enterprise_id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={w.enterprise_id === user.enterprise_id}
+                      className={`sort-menu-item ${w.enterprise_id === user.enterprise_id ? "active" : ""}`}
+                      onClick={() => {
+                        if (w.enterprise_id === user.enterprise_id) {
+                          setWorkspaceMenuOpen(false);
+                          return;
+                        }
+                        void switchWorkspace(w.enterprise_id).then(() => {
+                          bumpSession();
+                          setWorkspaceMenuOpen(false);
+                        });
+                      }}
+                    >
+                      <span className="top-bar-workspace-menu-item">
+                        <span className="top-bar-workspace-name">{w.enterprise_name}</span>
+                        <span className={`top-bar-workspace-role-badge top-bar-workspace-role-badge--${w.role}`}>
+                          {workspaceRoleLabel(w.role)}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                ))}
-                {workspaces.length > 0 ? (
-                  <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
-                ) : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
                 <Link
                   to="/onboarding"
                   role="menuitem"
@@ -336,7 +326,11 @@ function AppContent() {
             {user.avatar_url ? (
               <img src={user.avatar_url} alt="" className="user-avatar" />
             ) : (
-              <span className="user-avatar user-avatar--placeholder" aria-hidden>
+              <span
+                className="user-avatar user-avatar--placeholder"
+                style={avatarPlaceholderStyle(user)}
+                aria-hidden
+              >
                 {(user.name || user.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
               </span>
             )}
@@ -382,18 +376,6 @@ function AppContent() {
                   <span>Settings</span>
                 </span>
               </Link>
-              <button type="button" role="menuitem" className="sort-menu-item top-bar-account-menu-action" onClick={() => void handleSwitchAccount()}>
-                <span className="top-bar-account-menu-item-content">
-                  <img
-                    src={switchIcon}
-                    alt=""
-                    aria-hidden="true"
-                    className="top-bar-account-menu-icon top-bar-account-menu-icon-image"
-                  />
-                  <span>Switch account</span>
-                </span>
-              </button>
-              <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
               <button type="button" role="menuitem" className="sort-menu-item top-bar-account-menu-action top-bar-account-menu-logout" onClick={handleAccountLogout}>
                 <span className="top-bar-account-menu-item-content">
                   <img
@@ -421,7 +403,12 @@ function AppContent() {
         >
           <img src={logo} alt="" aria-hidden="true" />
           {!useIconOnlyBrand ? (
-            <span className="app-brand-text">TabulaRAG</span>
+            <span className="app-brand-text">
+              <span className="upload-home-brand__title-tabula">Tabula</span>
+              <span className="upload-home-brand__title-rag">
+                <span className="upload-home-brand__title-r">R</span>AG
+              </span>
+            </span>
           ) : null}
         </Link>
       )}
@@ -440,8 +427,14 @@ function AppContent() {
 
       {isAuthenticated() && user && showInlineTableHeader && (
         <div className="table-shell-top-row">
-          <Link className="app-brand app-brand--icon-only app-brand--inline" to="/" aria-label="Go to home">
+          <Link className="app-brand app-brand--inline" to="/" aria-label="Go to home">
             <img src={logo} alt="" aria-hidden="true" />
+            <span className="app-brand-text app-brand-text--table-shell">
+              <span className="upload-home-brand__title-tabula">Tabula</span>
+              <span className="upload-home-brand__title-rag">
+                <span className="upload-home-brand__title-r">R</span>AG
+              </span>
+            </span>
           </Link>
           {headerNotice ? (
             <div className="table-view-edit-mode-banner app-shell-edit-mode-banner" role="note" aria-label="Edit mode hint">
@@ -511,12 +504,15 @@ function AppContent() {
             path="/settings"
             element={
               <AuthGuard>
-                <EnterpriseGuard>
-                  <Settings />
-                </EnterpriseGuard>
+                <Settings />
               </AuthGuard>
             }
           />
+          <Route
+            path="/forgot-password"
+            element={<Navigate to="/" replace state={{ openForgotPassword: true }} />}
+          />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route
             path="/admin"
             element={

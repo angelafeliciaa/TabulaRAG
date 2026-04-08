@@ -14,9 +14,12 @@ def make_csv(content: str, filename: str = "test.csv"):
 
 def _create_user_and_token(*, google_id: str, login: str) -> str:
     with SessionLocal() as db:
-        db.add(User(google_id=google_id, login=login))
+        u = User(google_id=google_id, login=login)
+        db.add(u)
         db.commit()
-    return create_jwt({"id": google_id, "email": login, "name": login, "picture": ""})
+        db.refresh(u)
+        uid = u.id
+    return create_jwt(user_id=uid, login=login, name=login, avatar_url="")
 
 
 def test_workspace_name_not_unique():
@@ -54,9 +57,13 @@ def test_members_visible_to_any_member_and_mcp_flag_updates():
             db.flush()
             db.add(EnterpriseMembership(user_id=member.id, enterprise_id=eid, role=UserRole.querier))
             db.commit()
+            mid = member.id
 
         token_member = create_jwt(
-            {"id": "u_members_2", "email": "u_members_2@example.com", "name": "u2", "picture": ""},
+            user_id=mid,
+            login="u_members_2@example.com",
+            name="u2",
+            avatar_url="",
         )
 
         members1 = c.get("/enterprises/members", headers={"Authorization": f"Bearer {token_member}"})
@@ -89,9 +96,13 @@ def test_invite_codes_require_admin():
             db.flush()
             db.add(EnterpriseMembership(user_id=member.id, enterprise_id=eid, role=UserRole.querier))
             db.commit()
+            mid = member.id
 
         token_member = create_jwt(
-            {"id": "u_invites_2", "email": "u_invites_2@example.com", "name": "u2", "picture": ""},
+            user_id=mid,
+            login="u_invites_2@example.com",
+            name="u2",
+            avatar_url="",
         )
 
         forbidden = c.post("/enterprises/invite-codes", headers={"Authorization": f"Bearer {token_member}"})
@@ -120,9 +131,13 @@ def test_owner_cannot_leave_workspace_member_can_leave():
             db.flush()
             db.add(EnterpriseMembership(user_id=member.id, enterprise_id=eid, role=UserRole.querier))
             db.commit()
+            mid = member.id
 
         token_member = create_jwt(
-            {"id": "u_leave_2", "email": "u_leave_2@example.com", "name": "u2", "picture": ""},
+            user_id=mid,
+            login="u_leave_2@example.com",
+            name="u2",
+            avatar_url="",
         )
 
         member_leave = c.post("/enterprises/leave", headers={"Authorization": f"Bearer {token_member}"})
@@ -162,14 +177,13 @@ def test_only_owner_can_demote_admin_to_member():
                 EnterpriseMembership(user_id=admin_b_id, enterprise_id=eid, role=UserRole.admin),
             )
             db.commit()
+            admin_a_id = admin_a.id
 
         token_admin_a = create_jwt(
-            {
-                "id": "u_demote_admin_a",
-                "email": "admin_a@example.com",
-                "name": "a",
-                "picture": "",
-            },
+            user_id=admin_a_id,
+            login="admin_a@example.com",
+            name="a",
+            avatar_url="",
         )
 
         demote = c.patch(
