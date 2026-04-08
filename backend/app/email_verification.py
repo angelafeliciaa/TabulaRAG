@@ -56,14 +56,9 @@ def smtp_configured() -> bool:
 
 
 def _brevo_api_key() -> str | None:
-    """Return the Brevo API key. The SMTP password doubles as the API key."""
+    """Return the Brevo API key (xkeysib-...), set via BREVO_API_KEY env var."""
     key = os.getenv("BREVO_API_KEY", "").strip()
-    if key:
-        return key
-    smtp_pw = os.getenv("SMTP_PASSWORD", "").strip()
-    if smtp_pw and smtp_pw.startswith("xsmtpsib-"):
-        return smtp_pw
-    return None
+    return key or None
 
 
 def _send_via_brevo_api(from_addr: str, to_addr: str, subject: str, body: str) -> bool:
