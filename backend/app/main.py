@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import io
 import json
 import logging
@@ -107,7 +107,7 @@ def _delete_orphan_datasets_on_startup() -> None:
     Delete every dataset with folder_id NULL (rows, columns, dataset row).
 
     Runs on every startup for pre-production / dev: clears legacy or stray uploads
-    that never got a folder. Destructive â€” also removes Qdrant collections and
+    that never got a folder. Destructive — also removes Qdrant collections and
     index-job state for those dataset ids when possible.
     """
     from app.index_jobs import clear_index_job
@@ -835,8 +835,8 @@ def _issue_verification_email(user: User, display_name: str) -> tuple[bool, str]
         logging.getLogger(__name__).warning(
             "SMTP configured but verification email failed for %s", user.login,
         )
-
     return sent, code
+
 
 def _apply_google_profile_to_user(user: User, google_user: dict) -> None:
     """Persist Google photo and display name so email/password sessions can show them too."""
@@ -914,7 +914,7 @@ def auth_register(body: EmailRegisterBody):
                     "email": email,
                     "message": (
                         "We found an account for this email that signs in with Google. "
-                        "Use Sign in with Google to continueâ€”the password you entered will be saved for email sign-in too."
+                        "Use Sign in with Google to continue—the password you entered will be saved for email sign-in too."
                     ),
                 }
             if dup.email_verified:
@@ -1138,7 +1138,7 @@ def auth_change_password(
         if not user.password_hash:
             raise HTTPException(
                 status_code=400,
-                detail="You sign in with Google only. Use â€œSet passwordâ€ to add one first.",
+                detail="You sign in with Google only. Use “Set password” to add one first.",
             )
         if not verify_password(body.current_password, user.password_hash):
             raise HTTPException(status_code=400, detail="Current password is incorrect.")
