@@ -1180,7 +1180,8 @@ h3 {
 }
 
 :root[data-theme="dark"] .upload-queue-remove.icon-button:hover:not(:disabled),
-:root[data-theme="dark"] .upload-queue-remove.icon-button:focus-visible:not(:disabled) {
+:root[data-theme="dark"]
+  .upload-queue-remove.icon-button:focus-visible:not(:disabled) {
   border: none;
   background: rgba(198, 40, 40, 0.22);
   color: var(--danger-strong);
@@ -2048,7 +2049,11 @@ button.surface-btn.settings-account-logout {
 button.surface-btn.settings-account-logout:hover:not(:disabled) {
   color: var(--danger-strong);
   border-color: var(--danger-strong);
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface-blur-bg-strong));
+  background: color-mix(
+    in srgb,
+    var(--danger) 10%,
+    var(--surface-blur-bg-strong)
+  );
 }
 
 .settings-account-delete-section {
@@ -3375,11 +3380,15 @@ ul {
   min-width: var(--folders-pane-width, 56px);
 }
 
-.uploaded-tables-panel__folders--collapsed .folder-panel--embedded .folder-panel__title {
+.uploaded-tables-panel__folders--collapsed
+  .folder-panel--embedded
+  .folder-panel__title {
   display: none;
 }
 
-.uploaded-tables-panel__folders--collapsed .folder-panel--embedded .folder-panel__header {
+.uploaded-tables-panel__folders--collapsed
+  .folder-panel--embedded
+  .folder-panel__header {
   /* Padding matches expanded; height comes from .folder-panel--embedded .folder-panel__header min-height. */
   padding: 0.75rem 0.75rem 0.6rem;
   justify-content: flex-end;
@@ -3459,6 +3468,36 @@ ul {
   padding-right: 0;
 }
 
+.cross-folder-selection-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--surface-raised, var(--surface));
+  border-bottom: 1px solid var(--border);
+}
+
+.cross-folder-selection-banner__clear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--accent, var(--text-muted));
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cross-folder-selection-banner__clear:hover {
+  color: var(--text);
+}
+
 .uploaded-tables-panel__tables-main {
   flex: 1 1 auto;
   min-height: 0;
@@ -3534,18 +3573,22 @@ ul {
 }
 
 .tables-header-upload-btn {
-  width: 34px;
   height: 34px;
   min-width: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 0.35em;
+  padding: 0 0.65rem;
   border: 0;
   background: transparent;
   box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: inherit;
+  white-space: nowrap;
 }
 
 .tables-header-upload-btn:hover {
@@ -4589,7 +4632,11 @@ textarea.rename-input.edit-file-description {
 
 :root[data-theme="dark"] .preview-selected-pill.is-active {
   /* Active tab: clearly lighter than inactive strip. */
-  background: color-mix(in srgb, var(--surface-blur-bg-strong) 88%, #ffffff 12%);
+  background: color-mix(
+    in srgb,
+    var(--surface-blur-bg-strong) 88%,
+    #ffffff 12%
+  );
   border-color: color-mix(in srgb, var(--border-soft) 50%, var(--border) 50%);
   border-bottom-color: transparent;
   color: var(--text);
@@ -4902,8 +4949,13 @@ a.sort-toggle-button.preview-open-link {
   margin: 0 0 12px;
   padding: 9px 14px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--brand-text) 26%, var(--surface-blur-border));
-  background: color-mix(in srgb, var(--warning-soft) 52%, var(--surface-blur-bg-strong));
+  border: 1px solid
+    color-mix(in srgb, var(--brand-text) 26%, var(--surface-blur-border));
+  background: color-mix(
+    in srgb,
+    var(--warning-soft) 52%,
+    var(--surface-blur-bg-strong)
+  );
   color: var(--text);
   font-size: 0.8125rem;
   line-height: 1.35;
@@ -5057,7 +5109,9 @@ a.sort-toggle-button.preview-open-link {
   box-sizing: border-box;
 }
 
-.page-stack.full-table-page--virtual-preview .full-table-area--has-pagination .table-scroll {
+.page-stack.full-table-page--virtual-preview
+  .full-table-area--has-pagination
+  .table-scroll {
   padding-bottom: 76px;
 }
 
@@ -5121,7 +5175,8 @@ a.sort-toggle-button.preview-open-link {
 }
 
 /* Match edit-file modal `.confirm-save-button` (name / description save on home) */
-.page-stack.full-table-page .table-view-format-button.table-view-save-edits-btn {
+.page-stack.full-table-page
+  .table-view-format-button.table-view-save-edits-btn {
   min-width: 96px;
   padding: 9px 14px;
   height: auto;
@@ -5178,14 +5233,19 @@ a.sort-toggle-button.preview-open-link {
   pointer-events: none;
 }
 
-.page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-controls {
+.page-stack.full-table-page
+  .table-view-pagination--overlay
+  .table-view-pagination-controls {
   pointer-events: auto;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   background: var(--surface-blur-bg-strong);
   border-color: var(--surface-blur-border);
 }
 
-:root[data-theme="dark"] .page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-controls {
+:root[data-theme="dark"]
+  .page-stack.full-table-page
+  .table-view-pagination--overlay
+  .table-view-pagination-controls {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
 }
 
@@ -5193,7 +5253,9 @@ a.sort-toggle-button.preview-open-link {
   padding-bottom: 44px;
 }
 
-.page-stack.full-table-page .table-view-pagination--overlay .table-view-pagination-meta {
+.page-stack.full-table-page
+  .table-view-pagination--overlay
+  .table-view-pagination-meta {
   pointer-events: none;
   text-align: center;
   max-width: min(100%, 420px);
@@ -5396,12 +5458,14 @@ a.sort-toggle-button.preview-open-link {
   padding-top: calc(64px + env(safe-area-inset-top, 0px));
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide > .table-view-header-card--dataset {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  > .table-view-header-card--dataset {
   padding: 10px 14px;
   border-radius: 16px;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-main {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-header-main {
   gap: 4px;
 }
 
@@ -5411,22 +5475,26 @@ a.sort-toggle-button.preview-open-link {
   letter-spacing: 0.01em;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-status {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-header-status {
   min-height: 0;
   font-size: 12px;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-view-header-row {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-header-row {
   align-items: center;
 }
 
-.page-stack.full-table-page.full-table-page-dataset-wide .table-view-pagination:not(.table-view-pagination--overlay) {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-pagination:not(.table-view-pagination--overlay) {
   margin-top: 8px;
   gap: 4px;
 }
 
 /* Match home preview pagination sizing (avoid compact controls on full-table overlay) */
-.page-stack.full-table-page.full-table-page-dataset-wide .table-view-pagination--overlay {
+.page-stack.full-table-page.full-table-page-dataset-wide
+  .table-view-pagination--overlay {
   gap: 6px;
 }
 
@@ -6490,7 +6558,8 @@ input:focus-visible,
     font-size: 11px;
   }
 
-  .page-stack.full-table-page .table-view-format-button.table-view-save-edits-btn {
+  .page-stack.full-table-page
+    .table-view-format-button.table-view-save-edits-btn {
     min-width: 96px;
     padding: 9px 14px;
     height: auto;
@@ -6585,7 +6654,11 @@ input:focus-visible,
       color-mix(in srgb, var(--surface-blur-bg) 84%, transparent) 0%,
       transparent 46%
     ),
-    linear-gradient(180deg, var(--bg) 0%, color-mix(in srgb, var(--bg) 88%, var(--bg-elev)) 100%);
+    linear-gradient(
+      180deg,
+      var(--bg) 0%,
+      color-mix(in srgb, var(--bg) 88%, var(--bg-elev)) 100%
+    );
 }
 
 .login-page::before,
@@ -6604,13 +6677,12 @@ input:focus-visible,
   left: -10%;
   width: min(28rem, 46vw);
   height: min(28rem, 46vw);
-  background:
-    radial-gradient(
-      circle,
-      color-mix(in srgb, var(--brand-text) 24%, transparent) 0%,
-      color-mix(in srgb, var(--surface-blur-bg-strong) 34%, transparent) 42%,
-      transparent 74%
-    );
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--brand-text) 24%, transparent) 0%,
+    color-mix(in srgb, var(--surface-blur-bg-strong) 34%, transparent) 42%,
+    transparent 74%
+  );
 }
 
 .login-page::after {
@@ -6618,13 +6690,12 @@ input:focus-visible,
   bottom: 6%;
   width: min(24rem, 40vw);
   height: min(24rem, 40vw);
-  background:
-    radial-gradient(
-      circle,
-      color-mix(in srgb, var(--surface-blur-bg) 82%, transparent) 0%,
-      color-mix(in srgb, var(--brand-text) 12%, transparent) 52%,
-      transparent 78%
-    );
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--surface-blur-bg) 82%, transparent) 0%,
+    color-mix(in srgb, var(--brand-text) 12%, transparent) 52%,
+    transparent 78%
+  );
 }
 
 :root[data-theme="dark"] .login-page::before,
@@ -6707,7 +6778,11 @@ input:focus-visible,
   min-height: min(640px, calc(100dvh - 2rem));
   border-radius: 24px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--surface-blur-bg-strong) 82%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--surface-blur-bg-strong) 82%,
+    transparent
+  );
   box-shadow: 0 26px 60px rgba(15, 23, 42, 0.12);
   backdrop-filter: blur(26px) saturate(140%);
   -webkit-backdrop-filter: blur(26px) saturate(140%);
@@ -6919,12 +6994,11 @@ a.login-repo-btn:hover {
   align-items: center;
   justify-content: center;
   padding: clamp(1.5rem, 4vw, 2.5rem);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--surface-blur-bg-strong) 56%, transparent) 0%,
-      color-mix(in srgb, var(--bg-elev) 84%, transparent) 100%
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-blur-bg-strong) 56%, transparent) 0%,
+    color-mix(in srgb, var(--bg-elev) 84%, transparent) 100%
+  );
   min-width: 0;
 }
 
@@ -6942,7 +7016,8 @@ a.login-repo-btn:hover {
   /* Enough for create-account fields; sign-in shares height with footer at bottom via margin-top: auto */
   min-height: 30rem;
   border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--surface-blur-border) 88%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--surface-blur-border) 88%, transparent);
   background: color-mix(in srgb, var(--surface-blur-bg) 78%, transparent);
   box-shadow:
     0 18px 40px rgba(15, 23, 42, 0.08),
@@ -7189,8 +7264,7 @@ a.login-repo-btn:hover {
 
 @media (max-width: 560px) {
   .login-page--split {
-    padding:
-      max(0.5rem, env(safe-area-inset-top))
+    padding: max(0.5rem, env(safe-area-inset-top))
       max(0.5rem, env(safe-area-inset-right))
       max(0.5rem, env(safe-area-inset-bottom))
       max(0.5rem, env(safe-area-inset-left));
@@ -7205,7 +7279,9 @@ a.login-repo-btn:hover {
   .login-split-panel {
     border-radius: 18px;
     min-height: auto;
-    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+    max-height: calc(
+      100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem
+    );
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
@@ -7438,7 +7514,11 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active {
-  background: color-mix(in srgb, var(--surface-blur-bg-strong) 88%, #ffffff 12%);
+  background: color-mix(
+    in srgb,
+    var(--surface-blur-bg-strong) 88%,
+    #ffffff 12%
+  );
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, #ffffff 30%);
 }
@@ -7449,7 +7529,11 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .onboarding-tab--active:hover {
-  background: color-mix(in srgb, var(--surface-blur-bg-strong) 82%, #ffffff 18%);
+  background: color-mix(
+    in srgb,
+    var(--surface-blur-bg-strong) 82%,
+    #ffffff 18%
+  );
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 65%, #ffffff 35%);
 }
@@ -8432,7 +8516,11 @@ a.login-repo-btn:hover {
 }
 
 :root:not([data-theme="dark"]) .folder-panel--embedded .folder-panel__item {
-  border-bottom-color: color-mix(in srgb, var(--surface-blur-border) 82%, transparent);
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--surface-blur-border) 82%,
+    transparent
+  );
 }
 
 /* Dark mode: reduce contrast for embedded folder pane */
@@ -8446,34 +8534,51 @@ a.login-repo-btn:hover {
 }
 
 :root[data-theme="dark"] .folder-panel--embedded .folder-panel__item {
-  border-bottom-color: color-mix(in srgb, var(--surface-blur-border) 70%, transparent);
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--surface-blur-border) 70%,
+    transparent
+  );
 }
 
-:root[data-theme="dark"] .folder-panel--embedded .folder-panel__folder-name:hover {
+:root[data-theme="dark"]
+  .folder-panel--embedded
+  .folder-panel__folder-name:hover {
   color: var(--text);
   opacity: 0.92;
 }
 
 /* Upload home: folder column is inside `.panel` — match panel surface + square corners so a
    darker rounded inset (“bevel”) doesn’t reappear; light mode uses a clearer edge vs tables. */
-:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded {
+:root:not([data-theme="dark"])
+  .uploaded-tables-panel__folders
+  .folder-panel--embedded {
   background: var(--surface-blur-bg-strong);
   border-right: 1px solid var(--border);
   border-radius: 0;
   box-shadow: none;
 }
 
-:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded .folder-panel__header {
+:root:not([data-theme="dark"])
+  .uploaded-tables-panel__folders
+  .folder-panel--embedded
+  .folder-panel__header {
   border-bottom-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-:root:not([data-theme="dark"]) .uploaded-tables-panel__folders .folder-panel--embedded .folder-panel__item {
+:root:not([data-theme="dark"])
+  .uploaded-tables-panel__folders
+  .folder-panel--embedded
+  .folder-panel__item {
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
 }
 
-:root[data-theme="dark"] .uploaded-tables-panel__folders .folder-panel--embedded {
+:root[data-theme="dark"]
+  .uploaded-tables-panel__folders
+  .folder-panel--embedded {
   background: var(--surface-blur-bg-strong);
-  border-right: 1px solid color-mix(in srgb, var(--surface-blur-border) 55%, transparent);
+  border-right: 1px solid
+    color-mix(in srgb, var(--surface-blur-border) 55%, transparent);
   border-radius: 0;
   box-shadow: none;
 }
@@ -8810,7 +8915,7 @@ a.login-repo-btn:hover {
   display: flex;
   align-items: center;
   gap: 0.4em;
-  margin: 0.75rem 1rem 0;
+  margin: 0.75rem 0rem 0;
   background: none;
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -8820,7 +8925,7 @@ a.login-repo-btn:hover {
   color: var(--text-muted);
   cursor: pointer;
   font-family: inherit;
-  width: calc(100% - 2rem);
+  width: calc(100% - 0.5rem);
   transition:
     border-color 0.15s,
     color 0.15s;

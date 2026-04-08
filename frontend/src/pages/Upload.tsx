@@ -42,7 +42,8 @@ const PENDING_UPLOAD_SESSION_KEY = "tabularag_pending_upload";
 const PINNED_TABLES_STORAGE_KEY = "tabularag_pinned_table_ids";
 const SELECTED_PREVIEW_TABLE_KEY = "tabularag_selected_preview_table_id";
 /** Full preview tab strip + active tab (JSON). Legacy single-id key is still read for migration. */
-const UPLOAD_PREVIEW_SELECTION_STORAGE_KEY = "tabularag_upload_preview_selection";
+const UPLOAD_PREVIEW_SELECTION_STORAGE_KEY =
+  "tabularag_upload_preview_selection";
 const FOLDER_PANE_WIDTH_STORAGE_KEY = "tabularag_folder_pane_width";
 const SELECTED_FOLDER_ID_STORAGE_KEY = "tabularag_selected_folder_id";
 
@@ -51,14 +52,14 @@ function readUploadSelectionFromStorage(): {
   active: number | null;
 } {
   try {
-    const raw = window.localStorage.getItem(UPLOAD_PREVIEW_SELECTION_STORAGE_KEY);
+    const raw = window.localStorage.getItem(
+      UPLOAD_PREVIEW_SELECTION_STORAGE_KEY,
+    );
     if (raw) {
       const parsed = JSON.parse(raw) as { ids?: unknown; active?: unknown };
       const ids = Array.isArray(parsed.ids)
         ? parsed.ids
-            .map((x) =>
-              typeof x === "number" ? x : parseInt(String(x), 10),
-            )
+            .map((x) => (typeof x === "number" ? x : parseInt(String(x), 10)))
             .filter((x) => Number.isFinite(x))
         : [];
       const uniq = [...new Set(ids)];
@@ -588,15 +589,17 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [deleteConfirmTable, setDeleteConfirmTable] =
     useState<TableSummary | null>(null);
-  const [bulkDeleteConfirmIds, setBulkDeleteConfirmIds] = useState<number[] | null>(
-    null,
-  );
+  const [bulkDeleteConfirmIds, setBulkDeleteConfirmIds] = useState<
+    number[] | null
+  >(null);
   const [rowActionMenuOpenId, setRowActionMenuOpenId] = useState<number | null>(
     null,
   );
-  const [rowActionMenuPos, setRowActionMenuPos] = useState<
-    { id: number; top: number; right: number } | null
-  >(null);
+  const [rowActionMenuPos, setRowActionMenuPos] = useState<{
+    id: number;
+    top: number;
+    right: number;
+  } | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDescription, setEditingDescription] = useState("");
@@ -712,7 +715,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
   useEffect(() => {
     listFolders()
       .then(setFolders)
-      .catch(() => { });
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -721,7 +724,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
     function onPointerDown(event: PointerEvent) {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(`[data-row-action-menu-root="${rowActionMenuOpenId}"]`)) {
+      if (
+        target.closest(`[data-row-action-menu-root="${rowActionMenuOpenId}"]`)
+      ) {
         return;
       }
       setRowActionMenuOpenId(null);
@@ -787,7 +792,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
     if (folders.length === 0 || selectedFolder === null) {
       return;
     }
-    const stillExists = folders.some((f) => f.folder_id === selectedFolder.folder_id);
+    const stillExists = folders.some(
+      (f) => f.folder_id === selectedFolder.folder_id,
+    );
     if (stillExists) {
       return;
     }
@@ -1280,9 +1287,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
       };
       const sortParam = effectiveSort.sortColumn
         ? {
-          sortColumn: effectiveSort.sortColumn,
-          sortDirection: effectiveSort.sortDirection,
-        }
+            sortColumn: effectiveSort.sortColumn,
+            sortDirection: effectiveSort.sortDirection,
+          }
         : undefined;
       const searchParam = previewSearchQuery.trim() || undefined;
 
@@ -1600,7 +1607,12 @@ export default function Upload({ homeControls = null }: UploadProps) {
       );
       return nextFilteredTables[0] ?? nextSortedTables[0] ?? null;
     },
-    [normalizedTableSearchQuery, pinnedTableIds, tableSortMode, tableSortDirection],
+    [
+      normalizedTableSearchQuery,
+      pinnedTableIds,
+      tableSortMode,
+      tableSortDirection,
+    ],
   );
 
   const previewTopDisplayedTable = useCallback(
@@ -1697,12 +1709,12 @@ export default function Upload({ homeControls = null }: UploadProps) {
             previous.map((current) =>
               current.id === item.id
                 ? {
-                  ...current,
-                  name: normalizedName,
-                  phase: "uploading",
-                  progress: 2,
-                  error: null,
-                }
+                    ...current,
+                    name: normalizedName,
+                    phase: "uploading",
+                    progress: 2,
+                    error: null,
+                  }
                 : current,
             ),
           );
@@ -1717,13 +1729,13 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   previous.map((current) =>
                     current.id === item.id
                       ? {
-                        ...current,
-                        phase: progress.phase,
-                        progress: Math.max(
-                          current.progress,
-                          progress.percent,
-                        ),
-                      }
+                          ...current,
+                          phase: progress.phase,
+                          progress: Math.max(
+                            current.progress,
+                            progress.percent,
+                          ),
+                        }
                       : current,
                   ),
                 );
@@ -1735,11 +1747,11 @@ export default function Upload({ homeControls = null }: UploadProps) {
               previous.map((current) =>
                 current.id === item.id
                   ? {
-                    ...current,
-                    phase: "success",
-                    progress: 100,
-                    error: null,
-                  }
+                      ...current,
+                      phase: "success",
+                      progress: 100,
+                      error: null,
+                    }
                   : current,
               ),
             );
@@ -1953,7 +1965,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       (table) =>
         table.dataset_id !== datasetId &&
         getNameKey(stripSupportedFileExtension(table.name) || "table") ===
-        nextNameKey,
+          nextNameKey,
     );
     if (hasDuplicateName) {
       setErr("Name already exists, please choose a different name.");
@@ -1979,7 +1991,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
       setRenameHintId(null);
       await refresh();
       bumpFolderCounts();
-      listFolders().then(setFolders).catch(() => { });
+      listFolders()
+        .then(setFolders)
+        .catch(() => {});
     } catch (error: unknown) {
       setErr(getErrorMessage(error));
     }
@@ -2036,7 +2050,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
       }
       existingFileKeys.add(fileKey);
 
-      const withoutExt = sanitizeTableNameInput(nextFile.name).trim() || "table";
+      const withoutExt =
+        sanitizeTableNameInput(nextFile.name).trim() || "table";
       const uniqueName = claimUniqueTableName(withoutExt, occupiedNameKeys);
       nextItems.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -2057,11 +2072,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    setErr(
-      rejectedMessages.length
-        ? `${rejectedMessages[0]}${rejectedMessages.length > 1 ? ` (+${rejectedMessages.length - 1} more)` : ""}`
-        : null,
-    );
+    setErr(null);
     setUploadQueue((previous) => [...previous, ...nextItems]);
 
     for (const item of nextItems) {
@@ -2070,10 +2081,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
           previous.map((current) =>
             current.id === item.id
               ? {
-                ...current,
-                estimatedRows: stats.rows,
-                estimatedCols: stats.cols,
-              }
+                  ...current,
+                  estimatedRows: stats.rows,
+                  estimatedCols: stats.cols,
+                }
               : current,
           ),
         );
@@ -2145,9 +2156,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-            ...item,
-            name: nextName,
-          }
+              ...item,
+              name: nextName,
+            }
           : item,
       ),
     );
@@ -2163,9 +2174,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
       previous.map((item) =>
         item.id === queueItemId
           ? {
-            ...item,
-            description: nextDescription,
-          }
+              ...item,
+              description: nextDescription,
+            }
           : item,
       ),
     );
@@ -2283,7 +2294,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
   const activeTableName =
     activeTableId !== null
       ? tables.find((table) => table.dataset_id === activeTableId)?.name ||
-      "Table"
+        "Table"
       : null;
   const deleteConfirmBusy = deleteConfirmTable
     ? Boolean(deletingTableIds[deleteConfirmTable.dataset_id])
@@ -2324,7 +2335,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
     !userIsAdmin &&
     selectedFolder !== null &&
     selectedFolder.privacy !== "public";
-  const isUploadBlocked = isUploadBlockedNoFolder || isUploadBlockedForNonPublicFolder;
+  const isUploadBlocked =
+    isUploadBlockedNoFolder || isUploadBlockedForNonPublicFolder;
   const sortedTables = useMemo(() => {
     return sortTablesForDisplay(
       tables,
@@ -2338,11 +2350,22 @@ export default function Upload({ homeControls = null }: UploadProps) {
     return sortedTables.filter((table) => table.folder_id === selectedFolderId);
   }, [sortedTables, selectedFolderId]);
   const filteredTables = useMemo(() => {
-    return filterTablesForDisplay(folderScopedTables, normalizedTableSearchQuery);
+    return filterTablesForDisplay(
+      folderScopedTables,
+      normalizedTableSearchQuery,
+    );
   }, [folderScopedTables, normalizedTableSearchQuery]);
   const visibleTables = useMemo(
     () => filteredTables.slice(0, visibleTableCount),
     [filteredTables, visibleTableCount],
+  );
+  const folderScopedTableIdSet = useMemo(
+    () => new Set(folderScopedTables.map((t) => t.dataset_id)),
+    [folderScopedTables],
+  );
+  const crossFolderSelectedIds = useMemo(
+    () => selectedTableIds.filter((id) => !folderScopedTableIdSet.has(id)),
+    [selectedTableIds, folderScopedTableIdSet],
   );
   const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
   const emptyTablesListMessage = useMemo(() => {
@@ -2357,11 +2380,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return `No files in ${selectedFolderName}`;
     }
     return "No files uploaded yet";
-  }, [
-    normalizedTableSearchQuery,
-    selectedFolderName,
-    tableSearchQuery,
-  ]);
+  }, [normalizedTableSearchQuery, selectedFolderName, tableSearchQuery]);
   const tableSortHint = formatTableSortDirectionHint(
     tableSortMode,
     tableSortDirection,
@@ -2433,7 +2452,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
     }
     setVisibleTableCount(
       Math.ceil((activeIndex + 1) / TABLES_RENDER_BATCH_SIZE) *
-      TABLES_RENDER_BATCH_SIZE,
+        TABLES_RENDER_BATCH_SIZE,
     );
   }, [activeTableId, filteredTables, visibleTableCount]);
 
@@ -2660,7 +2679,10 @@ export default function Upload({ homeControls = null }: UploadProps) {
             >
               <h3 id="edit-file-title">Edit file</h3>
 
-              <label className="upload-queue-folder-label edit-file-field" style={{ marginTop: 6 }}>
+              <label
+                className="upload-queue-folder-label edit-file-field"
+                style={{ marginTop: 6 }}
+              >
                 <span className="upload-queue-folder-label-text">Name</span>
                 <input
                   ref={renameInputRef}
@@ -2681,7 +2703,11 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   autoCorrect="off"
                   spellCheck={false}
                   maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                  placeholder={renameHintId === editingId ? "Name cannot be empty." : "Enter file name"}
+                  placeholder={
+                    renameHintId === editingId
+                      ? "Name cannot be empty."
+                      : "Enter file name"
+                  }
                   disabled={busy}
                   aria-label="File name"
                   aria-invalid={renameHintId === editingId}
@@ -2689,7 +2715,9 @@ export default function Upload({ homeControls = null }: UploadProps) {
               </label>
 
               <label className="upload-queue-folder-label edit-file-field edit-file-field--spaced">
-                <span className="upload-queue-folder-label-text">Description</span>
+                <span className="upload-queue-folder-label-text">
+                  Description
+                </span>
                 <textarea
                   value={editingDescription}
                   onChange={(event) => {
@@ -2820,7 +2848,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
             >
               <div className="upload-modal__topbar">
                 <div className="upload-modal__title">
-                  Upload CSV/TSV{selectedFolderName ? ` to ${selectedFolderName}` : ""}
+                  Upload CSV/TSV
+                  {selectedFolderName ? ` to ${selectedFolderName}` : ""}
                 </div>
                 <button
                   type="button"
@@ -2839,408 +2868,431 @@ export default function Upload({ homeControls = null }: UploadProps) {
                   ✕
                 </button>
               </div>
-            <div
-              className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
-              role="button"
-              tabIndex={0}
-              aria-labelledby="upload-drop-title"
-              aria-describedby={uploadDropDescriptionId}
-              onClick={() => {
-                if (busy) {
-                  return;
-                }
-                uploadDropFileInputRef.current?.click();
-              }}
-              onDragEnter={onUploadDragEnter}
-              onDragOver={onUploadDragOver}
-              onDragLeave={onUploadDragLeave}
-              onDrop={onUploadDrop}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
+              <div
+                className={`upload-drop ${isDragActive ? "drag-active" : ""}`}
+                role="button"
+                tabIndex={0}
+                aria-labelledby="upload-drop-title"
+                aria-describedby={uploadDropDescriptionId}
+                onClick={() => {
+                  if (busy) {
+                    return;
+                  }
                   uploadDropFileInputRef.current?.click();
-                }
-              }}
-            >
-              <input
-                ref={(element) => {
-                  uploadDropFileInputRef.current = element;
                 }}
-                type="file"
-                multiple
-                accept=".csv,.tsv"
-                onChange={(event) => {
-                  onSelectFiles(event.target.files);
-                  event.currentTarget.value = "";
+                onDragEnter={onUploadDragEnter}
+                onDragOver={onUploadDragOver}
+                onDragLeave={onUploadDragLeave}
+                onDrop={onUploadDrop}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    uploadDropFileInputRef.current?.click();
+                  }
                 }}
-              />
-              <input
-                ref={uploadDropFolderInputRef}
-                {...FOLDER_INPUT_PROPS}
-                type="file"
-                multiple
-                accept=".csv,.tsv"
-                onChange={(event) => {
-                  onSelectFiles(event.target.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <div className="upload-icon-row">
-                <div className="upload-picker-wrap" ref={uploadPickerEmptyRef}>
-                  <img
-                    src={uploadLogo}
-                    alt=""
-                    aria-hidden="true"
-                    className="upload-plus-icon"
-                  />
-                </div>
-              </div>
-              <div id="upload-drop-title" className="upload-title">
-                Select or Drag &amp; Drop to Start Uploading
-              </div>
-              <div id={uploadDropDescriptionId} className="upload-subtitle">
-                Supported file formats: .csv, .tsv, up to 50MB.
-              </div>
-            </div>
-          {isUploadQueueVisible && (
-            <>
-              <h2 id={uploadQueueTitleId} className="sr-only">
-                Upload CSV/TSV{selectedFolderName ? ` to ${selectedFolderName}` : ""}
-              </h2>
-              <p id={uploadQueueDescriptionId} className="sr-only">
-                Review file names, fix any validation errors, then upload or
-                cancel the queue.
-              </p>
-
-              <ul
-                className="upload-queue-list"
-                aria-label="Selected files for upload"
               >
-                {uploadQueue.map((item, index) => {
-                  const progressValue = Math.max(
-                    0,
-                    Math.min(100, item.progress),
-                  );
-                  const canEditQueuedName =
-                    item.phase === "idle" || item.phase === "error";
-                  const queueNameIsEmpty =
-                    sanitizeTableNameInput(item.name).trim().length === 0;
-                  const queueNameIsDuplicate =
-                    !queueNameIsEmpty &&
-                    isQueuedNameDuplicate(item.id, item.name);
-                  const estimatedRowsText =
-                    item.estimatedRows === null
-                      ? "..."
-                      : item.estimatedRows.toLocaleString();
-                  const estimatedColsText =
-                    item.estimatedCols === null
-                      ? "..."
-                      : item.estimatedCols.toLocaleString();
-                  const processedRows =
-                    item.estimatedRows === null
-                      ? null
-                      : item.phase === "success"
-                        ? item.estimatedRows
-                        : Math.max(
-                          0,
-                          Math.min(
-                            item.estimatedRows,
-                            Math.round(
-                              (progressValue / 100) * item.estimatedRows,
-                            ),
-                          ),
-                        );
-                  const stateLabel =
-                    item.phase === "success"
-                      ? "Uploaded"
-                      : item.phase === "error"
-                        ? "Failed"
-                        : item.phase === "processing"
-                          ? "Processing"
-                          : item.phase === "uploading"
-                            ? "Uploading"
-                            : "In Queue";
-                  const progressLabel =
-                    item.phase === "idle"
-                      ? null
-                      : item.phase === "error"
-                        ? "Failed"
-                        : item.phase === "success"
-                          ? "100%"
-                          : item.phase === "processing"
-                            ? `${progressValue.toFixed(1)}%`
-                            : `${Math.round(progressValue)}%`;
-                  const rowsLabel =
-                    item.estimatedRows === null
-                      ? "Rows: estimating..."
-                      : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
-                  const queueItemSubtitleId = `${item.id}-subtitle`;
-                  const queueItemStateId = `${item.id}-state`;
-                  const queueItemValidationId = `${item.id}-validation`;
-                  const queueItemUploadErrorId = `${item.id}-upload-error`;
-                  const progressFillWidth =
-                    item.phase === "error" ? 100 : progressValue;
-                  const progressFillClassName = `upload-progress-fill ${item.phase === "processing" ? "processing" : ""
-                    } ${item.phase === "success" ? "success" : ""
-                    } ${item.phase === "error" ? "error" : ""}`;
-
-                  return (
-                    <li
-                      key={item.id}
-                      className={`upload-queue-item ${item.phase}`}
-                    >
-                      <div className="upload-queue-head compact">
-                        <span
-                          className="upload-queue-file-icon"
-                          aria-hidden="true"
-                        >
-                          <svg viewBox="0 0 24 24" role="presentation">
-                            <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
-                          </svg>
-                        </span>
-                        <div className="upload-queue-file-text">
-                          <input
-                            ref={
-                              index === 0 && canEditQueuedName
-                                ? firstQueuedNameInputRef
-                                : null
-                            }
-                            type="text"
-                            className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
-                            value={item.name}
-                            onChange={(event) => {
-                              onChangeQueuedName(item.id, event.target.value);
-                            }}
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            placeholder="Enter table name"
-                            maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
-                            disabled={busy || !canEditQueuedName}
-                            aria-label={`Table name for ${item.file.name}`}
-                            aria-invalid={
-                              canEditQueuedName &&
-                              (queueNameIsEmpty || queueNameIsDuplicate)
-                            }
-                            aria-describedby={`${queueItemSubtitleId} ${queueItemStateId} ${queueNameIsEmpty || queueNameIsDuplicate
-                              ? queueItemValidationId
-                              : ""
-                              } ${item.error ? queueItemUploadErrorId : ""
-                              }`.trim()}
-                          />
-                          <div
-                            id={queueItemSubtitleId}
-                            className="upload-queue-file-subtitle"
-                          >
-                            {item.file.name} - {formatFileSize(item.file.size)}{" "}
-                            ({estimatedRowsText} rows, {estimatedColsText} cols){" "}
-                            <span
-                              id={queueItemStateId}
-                              className={`upload-queue-state ${item.phase}`}
-                            >
-                              {stateLabel}
-                            </span>
-                          </div>
-                          <label className="upload-queue-description">
-                            <input
-                              ref={
-                                index === 0 && canEditQueuedName
-                                  ? firstQueuedDescriptionInputRef
-                                  : null
-                              }
-                              type="text"
-                              className={`upload-queue-description-input ${canEditQueuedName ? "" : "disabled"
-                                }`}
-                              value={item.description}
-                              onChange={(event) => {
-                                onChangeQueuedDescription(
-                                  item.id,
-                                  event.target.value,
-                                );
-                              }}
-                              placeholder="Add a short summary for better retrieval (optional)"
-                              maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
-                              disabled={busy || !canEditQueuedName}
-                            />
-                          </label>
-                          {canEditQueuedName &&
-                            folders.length > 0 &&
-                            selectedFolderId === null && (
-                            <label className="upload-queue-folder-label">
-                              <span className="upload-queue-folder-label-text">
-                                Folder
-                              </span>
-                              <select
-                                className="upload-queue-folder-select"
-                                value={item.folderId ?? ""}
-                                disabled={busy}
-                                aria-label="Assign to folder"
-                                onChange={(e) =>
-                                  onChangeQueuedFolder(
-                                    item.id,
-                                    e.target.value !== ""
-                                      ? Number(e.target.value)
-                                      : null,
-                                  )
-                                }
-                              >
-                                {userIsAdmin && (
-                                  <option value="">No folder</option>
-                                )}
-                                {(userIsAdmin
-                                  ? folders
-                                  : folders.filter(
-                                    (f) => f.privacy === "public",
-                                  )
-                                ).map((folder) => (
-                                  <option
-                                    key={folder.folder_id}
-                                    value={folder.folder_id}
-                                  >
-                                    {folder.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
-                        </div>
-                        <div className="upload-queue-right">
-                          {progressLabel && (
-                            <span className="upload-progress-percent upload-queue-percent">
-                              {progressLabel}
-                            </span>
-                          )}
-                        </div>
-                        {!isQueueInProgress && (
-                          <button
-                            type="button"
-                            className="icon-button upload-queue-remove"
-                            onClick={() => onRemoveQueuedFile(item.id)}
-                            aria-label={`Remove ${item.file.name}`}
-                            title="Remove file"
-                            disabled={busy}
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              aria-hidden="true"
-                              focusable="false"
-                            >
-                              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      {item.phase !== "idle" && (
-                        <div
-                          className="upload-progress-track upload-queue-track compact"
-                          role={
-                            item.phase === "error" ? "status" : "progressbar"
-                          }
-                          aria-label={`${item.file.name} upload progress`}
-                          aria-valuemin={item.phase === "error" ? undefined : 0}
-                          aria-valuemax={
-                            item.phase === "error" ? undefined : 100
-                          }
-                          aria-valuenow={
-                            item.phase === "error"
-                              ? undefined
-                              : Math.round(progressValue)
-                          }
-                          aria-valuetext={`${stateLabel}. ${item.phase === "error"
-                            ? item.error || "Upload failed."
-                            : rowsLabel
-                            }`}
-                        >
-                          <div
-                            className={progressFillClassName}
-                            style={{
-                              width: `${progressFillWidth}%`,
-                            }}
-                          />
-                        </div>
-                      )}
-                      {item.phase !== "idle" && (
-                        <div className="upload-queue-rows">{rowsLabel}</div>
-                      )}
-                      {queueNameIsEmpty && canEditQueuedName && (
-                        <p
-                          id={queueItemValidationId}
-                          className="small error upload-queue-error"
-                        >
-                          Table name cannot be empty.
-                        </p>
-                      )}
-                      {queueNameIsDuplicate && canEditQueuedName && (
-                        <p
-                          id={queueItemValidationId}
-                          className="small error upload-queue-error"
-                        >
-                          Name already exists, please choose a different name.
-                        </p>
-                      )}
-                      {item.error && (
-                        <p
-                          id={queueItemUploadErrorId}
-                          className="small error upload-queue-error"
-                          role="alert"
-                        >
-                          {item.error}
-                        </p>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-              <div className="upload-queue-footer">
-                <div className="small">
-                  Tip: You can rename each table before clicking 'Upload all
-                  files'.
-                </div>
-                {!isQueueInProgress && (
-                  <div className="upload-queue-footer-actions">
-                    <button
-                      type="button"
-                      className="surface-btn upload-cancel-all-button"
-                      onClick={onCancelAllQueuedFiles}
-                      disabled={busy}
-                    >
-                      Discard all
-                    </button>
-                    <button
-                      onClick={onUpload}
-                      disabled={!hasPendingUploads || busy}
-                      className="primary"
-                      type="button"
-                    >
-                      {busy ? "Uploading..." : "Upload all files"}
-                    </button>
+                <input
+                  ref={(element) => {
+                    uploadDropFileInputRef.current = element;
+                  }}
+                  type="file"
+                  multiple
+                  accept=".csv,.tsv"
+                  onChange={(event) => {
+                    onSelectFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <input
+                  ref={uploadDropFolderInputRef}
+                  {...FOLDER_INPUT_PROPS}
+                  type="file"
+                  multiple
+                  accept=".csv,.tsv"
+                  onChange={(event) => {
+                    onSelectFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <div className="upload-icon-row">
+                  <div
+                    className="upload-picker-wrap"
+                    ref={uploadPickerEmptyRef}
+                  >
+                    <img
+                      src={uploadLogo}
+                      alt=""
+                      aria-hidden="true"
+                      className="upload-plus-icon"
+                    />
                   </div>
-                )}
+                </div>
+                <div id="upload-drop-title" className="upload-title">
+                  Select or Drag &amp; Drop to Start Uploading
+                </div>
+                <div id={uploadDropDescriptionId} className="upload-subtitle">
+                  Supported file formats: .csv, .tsv, up to 50MB.
+                </div>
               </div>
-            </>
-          )}
+              {isUploadQueueVisible && (
+                <>
+                  <h2 id={uploadQueueTitleId} className="sr-only">
+                    Upload CSV/TSV
+                    {selectedFolderName ? ` to ${selectedFolderName}` : ""}
+                  </h2>
+                  <p id={uploadQueueDescriptionId} className="sr-only">
+                    Review file names, fix any validation errors, then upload or
+                    cancel the queue.
+                  </p>
 
-          <div className="upload-panel-status" aria-live="polite">
-            {err ? (
-              <p className="small error upload-panel-status__message" role="alert">
-                {err}
-              </p>
-            ) : reloadNotice ? (
-              <p
-                className="small status-info upload-panel-status__message"
-                role="status"
-              >
-                {reloadNotice}
-              </p>
-            ) : status ? (
-              <p
-                className="small status-info upload-panel-status__message"
-                role="status"
-              >
-                {status}
-              </p>
-            ) : null}
-          </div>
+                  <ul
+                    className="upload-queue-list"
+                    aria-label="Selected files for upload"
+                  >
+                    {uploadQueue.map((item, index) => {
+                      const progressValue = Math.max(
+                        0,
+                        Math.min(100, item.progress),
+                      );
+                      const canEditQueuedName =
+                        item.phase === "idle" || item.phase === "error";
+                      const queueNameIsEmpty =
+                        sanitizeTableNameInput(item.name).trim().length === 0;
+                      const queueNameIsDuplicate =
+                        !queueNameIsEmpty &&
+                        isQueuedNameDuplicate(item.id, item.name);
+                      const estimatedRowsText =
+                        item.estimatedRows === null
+                          ? "..."
+                          : item.estimatedRows.toLocaleString();
+                      const estimatedColsText =
+                        item.estimatedCols === null
+                          ? "..."
+                          : item.estimatedCols.toLocaleString();
+                      const processedRows =
+                        item.estimatedRows === null
+                          ? null
+                          : item.phase === "success"
+                            ? item.estimatedRows
+                            : Math.max(
+                                0,
+                                Math.min(
+                                  item.estimatedRows,
+                                  Math.round(
+                                    (progressValue / 100) * item.estimatedRows,
+                                  ),
+                                ),
+                              );
+                      const stateLabel =
+                        item.phase === "success"
+                          ? "Uploaded"
+                          : item.phase === "error"
+                            ? "Failed"
+                            : item.phase === "processing"
+                              ? "Processing"
+                              : item.phase === "uploading"
+                                ? "Uploading"
+                                : "In Queue";
+                      const progressLabel =
+                        item.phase === "idle"
+                          ? null
+                          : item.phase === "error"
+                            ? "Failed"
+                            : item.phase === "success"
+                              ? "100%"
+                              : item.phase === "processing"
+                                ? `${progressValue.toFixed(1)}%`
+                                : `${Math.round(progressValue)}%`;
+                      const rowsLabel =
+                        item.estimatedRows === null
+                          ? "Rows: estimating..."
+                          : `Rows: ${(processedRows ?? 0).toLocaleString()} / ${item.estimatedRows.toLocaleString()}`;
+                      const queueItemSubtitleId = `${item.id}-subtitle`;
+                      const queueItemStateId = `${item.id}-state`;
+                      const queueItemValidationId = `${item.id}-validation`;
+                      const queueItemUploadErrorId = `${item.id}-upload-error`;
+                      const progressFillWidth =
+                        item.phase === "error" ? 100 : progressValue;
+                      const progressFillClassName = `upload-progress-fill ${
+                        item.phase === "processing" ? "processing" : ""
+                      } ${
+                        item.phase === "success" ? "success" : ""
+                      } ${item.phase === "error" ? "error" : ""}`;
+
+                      return (
+                        <li
+                          key={item.id}
+                          className={`upload-queue-item ${item.phase}`}
+                        >
+                          <div className="upload-queue-head compact">
+                            <span
+                              className="upload-queue-file-icon"
+                              aria-hidden="true"
+                            >
+                              <svg viewBox="0 0 24 24" role="presentation">
+                                <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V7h3.5L13 3.5zM7.5 11a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9zm0 4a1 1 0 0 0 0 2h9a1 1 0 1 0 0-2h-9z" />
+                              </svg>
+                            </span>
+                            <div className="upload-queue-file-text">
+                              <input
+                                ref={
+                                  index === 0 && canEditQueuedName
+                                    ? firstQueuedNameInputRef
+                                    : null
+                                }
+                                type="text"
+                                className={`upload-queue-name-input ${canEditQueuedName && (queueNameIsEmpty || queueNameIsDuplicate) ? "invalid" : ""}`}
+                                value={item.name}
+                                onChange={(event) => {
+                                  onChangeQueuedName(
+                                    item.id,
+                                    event.target.value,
+                                  );
+                                }}
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                placeholder="Enter table name"
+                                maxLength={SAFE_TABLE_NAME_MAX_LENGTH}
+                                disabled={busy || !canEditQueuedName}
+                                aria-label={`Table name for ${item.file.name}`}
+                                aria-invalid={
+                                  canEditQueuedName &&
+                                  (queueNameIsEmpty || queueNameIsDuplicate)
+                                }
+                                aria-describedby={`${queueItemSubtitleId} ${queueItemStateId} ${
+                                  queueNameIsEmpty || queueNameIsDuplicate
+                                    ? queueItemValidationId
+                                    : ""
+                                } ${
+                                  item.error ? queueItemUploadErrorId : ""
+                                }`.trim()}
+                              />
+                              <div
+                                id={queueItemSubtitleId}
+                                className="upload-queue-file-subtitle"
+                              >
+                                {item.file.name} -{" "}
+                                {formatFileSize(item.file.size)} (
+                                {estimatedRowsText} rows, {estimatedColsText}{" "}
+                                cols){" "}
+                                <span
+                                  id={queueItemStateId}
+                                  className={`upload-queue-state ${item.phase}`}
+                                >
+                                  {stateLabel}
+                                </span>
+                              </div>
+                              <label className="upload-queue-description">
+                                <input
+                                  ref={
+                                    index === 0 && canEditQueuedName
+                                      ? firstQueuedDescriptionInputRef
+                                      : null
+                                  }
+                                  type="text"
+                                  className={`upload-queue-description-input ${
+                                    canEditQueuedName ? "" : "disabled"
+                                  }`}
+                                  value={item.description}
+                                  onChange={(event) => {
+                                    onChangeQueuedDescription(
+                                      item.id,
+                                      event.target.value,
+                                    );
+                                  }}
+                                  placeholder="Add a short summary for better retrieval (optional)"
+                                  maxLength={SAFE_TABLE_DESCRIPTION_MAX_LENGTH}
+                                  disabled={busy || !canEditQueuedName}
+                                />
+                              </label>
+                              {canEditQueuedName &&
+                                folders.length > 0 &&
+                                selectedFolderId === null && (
+                                  <label className="upload-queue-folder-label">
+                                    <span className="upload-queue-folder-label-text">
+                                      Folder
+                                    </span>
+                                    <select
+                                      className="upload-queue-folder-select"
+                                      value={item.folderId ?? ""}
+                                      disabled={busy}
+                                      aria-label="Assign to folder"
+                                      onChange={(e) =>
+                                        onChangeQueuedFolder(
+                                          item.id,
+                                          e.target.value !== ""
+                                            ? Number(e.target.value)
+                                            : null,
+                                        )
+                                      }
+                                    >
+                                      {userIsAdmin && (
+                                        <option value="">No folder</option>
+                                      )}
+                                      {(userIsAdmin
+                                        ? folders
+                                        : folders.filter(
+                                            (f) => f.privacy === "public",
+                                          )
+                                      ).map((folder) => (
+                                        <option
+                                          key={folder.folder_id}
+                                          value={folder.folder_id}
+                                        >
+                                          {folder.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                )}
+                            </div>
+                            <div className="upload-queue-right">
+                              {progressLabel && (
+                                <span className="upload-progress-percent upload-queue-percent">
+                                  {progressLabel}
+                                </span>
+                              )}
+                            </div>
+                            {!isQueueInProgress && (
+                              <button
+                                type="button"
+                                className="icon-button upload-queue-remove"
+                                onClick={() => onRemoveQueuedFile(item.id)}
+                                aria-label={`Remove ${item.file.name}`}
+                                title="Remove file"
+                                disabled={busy}
+                              >
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  aria-hidden="true"
+                                  focusable="false"
+                                >
+                                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                          {item.phase !== "idle" && (
+                            <div
+                              className="upload-progress-track upload-queue-track compact"
+                              role={
+                                item.phase === "error"
+                                  ? "status"
+                                  : "progressbar"
+                              }
+                              aria-label={`${item.file.name} upload progress`}
+                              aria-valuemin={
+                                item.phase === "error" ? undefined : 0
+                              }
+                              aria-valuemax={
+                                item.phase === "error" ? undefined : 100
+                              }
+                              aria-valuenow={
+                                item.phase === "error"
+                                  ? undefined
+                                  : Math.round(progressValue)
+                              }
+                              aria-valuetext={`${stateLabel}. ${
+                                item.phase === "error"
+                                  ? item.error || "Upload failed."
+                                  : rowsLabel
+                              }`}
+                            >
+                              <div
+                                className={progressFillClassName}
+                                style={{
+                                  width: `${progressFillWidth}%`,
+                                }}
+                              />
+                            </div>
+                          )}
+                          {item.phase !== "idle" && (
+                            <div className="upload-queue-rows">{rowsLabel}</div>
+                          )}
+                          {queueNameIsEmpty && canEditQueuedName && (
+                            <p
+                              id={queueItemValidationId}
+                              className="small error upload-queue-error"
+                            >
+                              Table name cannot be empty.
+                            </p>
+                          )}
+                          {queueNameIsDuplicate && canEditQueuedName && (
+                            <p
+                              id={queueItemValidationId}
+                              className="small error upload-queue-error"
+                            >
+                              Name already exists, please choose a different
+                              name.
+                            </p>
+                          )}
+                          {item.error && (
+                            <p
+                              id={queueItemUploadErrorId}
+                              className="small error upload-queue-error"
+                              role="alert"
+                            >
+                              {item.error}
+                            </p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="upload-queue-footer">
+                    <div className="small">
+                      Tip: You can rename each table before clicking 'Upload all
+                      files'.
+                    </div>
+                    {!isQueueInProgress && (
+                      <div className="upload-queue-footer-actions">
+                        <button
+                          type="button"
+                          className="surface-btn upload-cancel-all-button"
+                          onClick={onCancelAllQueuedFiles}
+                          disabled={busy}
+                        >
+                          Discard all
+                        </button>
+                        <button
+                          onClick={onUpload}
+                          disabled={!hasPendingUploads || busy}
+                          className="primary"
+                          type="button"
+                        >
+                          {busy ? "Uploading..." : "Upload all files"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <div className="upload-panel-status" aria-live="polite">
+                {err ? (
+                  <p
+                    className="small error upload-panel-status__message"
+                    role="alert"
+                  >
+                    {err}
+                  </p>
+                ) : reloadNotice ? (
+                  <p
+                    className="small status-info upload-panel-status__message"
+                    role="status"
+                  >
+                    {reloadNotice}
+                  </p>
+                ) : status ? (
+                  <p
+                    className="small status-info upload-panel-status__message"
+                    role="status"
+                  >
+                    {status}
+                  </p>
+                ) : null}
+              </div>
             </div>
           </div>
         )}
@@ -3257,20 +3309,26 @@ export default function Upload({ homeControls = null }: UploadProps) {
               } as React.CSSProperties
             }
           >
-            <div className={`uploaded-tables-panel__folders${folderPaneCollapsed ? " uploaded-tables-panel__folders--collapsed" : ""}`}>
+            <div
+              className={`uploaded-tables-panel__folders${folderPaneCollapsed ? " uploaded-tables-panel__folders--collapsed" : ""}`}
+            >
               <FolderSidePanel
                 variant="embedded"
                 open
                 onClose={() => {
                   listFolders()
                     .then(setFolders)
-                    .catch(() => { });
+                    .catch(() => {});
                 }}
                 isAdmin={userIsAdmin}
                 refreshKey={folderCountsRefreshKey}
                 selectedFolderId={selectedFolderId}
                 onTogglePane={() => setFolderPaneCollapsed((v) => !v)}
-                togglePaneLabel={folderPaneCollapsed ? "Expand folders pane" : "Collapse folders pane"}
+                togglePaneLabel={
+                  folderPaneCollapsed
+                    ? "Expand folders pane"
+                    : "Collapse folders pane"
+                }
                 onSelectFolder={(folder) => {
                   setSelectedFolder(folder);
                 }}
@@ -3442,6 +3500,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                         strokeLinecap="round"
                       />
                     </svg>
+                    Upload Table
                   </button>
                 </div>
               </div>
@@ -3455,337 +3514,406 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 . Sorted by {tableSortHint}.
               </p>
 
-              <div className="uploaded-tables-panel__tables-main">
-              {filteredTables.length === 0 ? (
-                <div
-                  className={`tables-empty-state-wrapper${selectedFolderName ? " tables-empty-state-wrapper--folder-empty" : ""}`}
-                >
-                  <p className="small">
-                    {emptyTablesListMessage}
-                  </p>
-                </div>
-              ) : (
-                <div className="tables-scroll" ref={tablesScrollRef}>
-                  <ul>
-                    {visibleTables.map((table) => {
-                      const indexStatus = indexStatusByTable[table.dataset_id];
-                      const indexState = indexStatus?.state || "ready";
-                      const isPinned = pinnedTableIdSet.has(table.dataset_id);
-                      const indexProgress = Math.max(
-                    0,
-                    Math.min(
-                      100,
-                      Math.round(
-                        typeof indexStatus?.progress === "number"
-                          ? indexStatus.progress
-                          : indexState === "ready"
-                            ? 100
-                            : 0,
-                      ),
-                    ),
-                  );
-                  const indexLabel =
-                    indexState === "queued"
-                      ? "Queued"
-                      : indexState === "indexing"
-                        ? "Indexing"
-                        : indexState === "error"
-                          ? "Index failed"
-                          : "Indexed";
-                  const isIndexing = indexState === "indexing";
-                  const readyStatusLabel = indexLabel;
-
-                  return (
-                    <li key={table.dataset_id}>
-                      {/*
-                        Multi-select needs to win over nested controls.
-                        Use capture so ctrl/cmd/shift clicks don't get overridden by inner button clicks.
-                      */}
-                      <div
-                        className={`list-row list-item ${selectedTableIds.includes(table.dataset_id) ? "selected" : ""
-                          }`}
-                        onClickCapture={(event) => {
-                          if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                            applyTableSelectionFromEvent(event, table.dataset_id);
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className={`icon-button ${isPinned ? "pinned" : "pin"}`}
-                          onClick={() => onTogglePin(table.dataset_id)}
-                          aria-label={
-                            isPinned
-                              ? `Unpin ${table.name}`
-                              : `Pin ${table.name}`
-                          }
-                          title={isPinned ? "Unpin table" : "Pin table"}
-                          disabled={
-                            busy || Boolean(deletingTableIds[table.dataset_id])
-                          }
-                        >
-                          <svg viewBox="0 0 24 24" role="presentation">
-                            <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
-                          </svg>
-                        </button>
-
-                        <div className="uploaded-table-main">
-                          <button
-                            type="button"
-                            className="list-button"
-                            onClick={(event) => {
-                              // Double-click should be handled by onDoubleClick (add to selection),
-                              // so ignore the "second click" here to avoid toggling preview/selection.
-                              if (event.detail > 1) {
-                                return;
-                              }
-                              if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                                applyTableSelectionFromEvent(event, table.dataset_id);
-                                return;
-                              }
-                              // If the only selected item is clicked again, treat as deselect.
-                              if (
-                                selectedTableIds.length === 1 &&
-                                selectedTableIds[0] === table.dataset_id &&
-                                activeTableId === null
-                              ) {
-                                setSelectedTableIds([]);
-                                selectionAnchorIdRef.current = null;
-                                return;
-                              }
-                              setSelectedTableIds([table.dataset_id]);
-                              selectionAnchorIdRef.current = table.dataset_id;
-                              if (activeTableId === table.dataset_id) {
-                                // Toggle off when clicking the currently selected table.
-                                setActiveTableId(null);
-                                setSelectedTableIds([]);
-                                selectionAnchorIdRef.current = null;
-                                setPreview(null);
-                                setPreviewErr(null);
-                                setPreviewBusy(false);
-                                setPreviewPage(1);
-                                setPreviewRowCount(0);
-                                setPreviewSearchQuery("");
-                                setPreviewSortColumn(null);
-                                setPreviewSortDirection("asc");
-                                return;
-                              }
-                              void loadPreview(table.dataset_id, 1, {
-                                sortColumn: null,
-                                sortDirection: "asc",
-                              });
-                            }}
-                            onDoubleClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setSelectedTableIds((prev) => {
-                                if (prev.includes(table.dataset_id)) {
-                                  return prev;
-                                }
-                                return [...prev, table.dataset_id];
-                              });
-                              selectionAnchorIdRef.current = table.dataset_id;
-                            }}
-                            aria-pressed={
-                              activeTableId === table.dataset_id
-                            }
-                          >
-                            <span className="uploaded-table-head">
-                              <span className="uploaded-table-title-line">
-                                <span className="uploaded-table-name">
-                                  {table.name}
-                                </span>
-                                {table.description?.trim() ? (
-                                  <span className="small uploaded-table-description">
-                                    {table.description.trim()}
-                                  </span>
-                                ) : null}
-                              </span>
-                              <span className="small uploaded-table-meta">
-                                ({table.row_count} rows,{" "}
-                                {table.column_count} cols)
-                              </span>
-                            </span>
-                          </button>
-                        </div>
-
-                        {isIndexing && (
-                          <div
-                            className="list-row-index"
-                            title={indexStatus?.message || readyStatusLabel}
-                            role="progressbar"
-                            aria-label={`${table.name} index status`}
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={indexProgress}
-                            aria-valuetext={`${indexLabel}. ${indexProgress}% complete.`}
-                          >
-                            <div className="list-row-index-track" aria-hidden="true">
-                              <div
-                                className="list-row-index-fill indexing"
-                                style={{
-                                  width: `${Math.max(4, indexProgress)}%`,
-                                }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {(userIsAdmin || table.folder_privacy === "public") && (
-                          <div
-                            className="row-action-menu"
-                            data-row-action-menu-root={table.dataset_id}
-                          >
-                            {/*
-                              If multiple files are selected and this row is part of the selection,
-                              only allow bulk delete from the kebab.
-                            */}
-                            <button
-                              type="button"
-                              className="icon-button row-action-menu__trigger"
-                              aria-label={`Actions for ${table.name}`}
-                              aria-haspopup="menu"
-                              aria-expanded={rowActionMenuOpenId === table.dataset_id}
-                              disabled={
-                                busy || Boolean(deletingTableIds[table.dataset_id])
-                              }
-                              onClick={(e) => {
-                                if (
-                                  selectedTableIds.length > 1 &&
-                                  !selectedTableIds.includes(table.dataset_id)
-                                ) {
-                                  setSelectedTableIds([table.dataset_id]);
-                                  selectionAnchorIdRef.current = table.dataset_id;
-                                }
-                                const nextOpen =
-                                  rowActionMenuOpenId === table.dataset_id
-                                    ? null
-                                    : table.dataset_id;
-                                if (nextOpen === null) {
-                                  setRowActionMenuOpenId(null);
-                                  setRowActionMenuPos(null);
-                                  return;
-                                }
-                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                setRowActionMenuOpenId(nextOpen);
-                                setRowActionMenuPos({
-                                  id: nextOpen,
-                                  top: rect.bottom + 6,
-                                  right: Math.max(8, window.innerWidth - rect.right),
-                                });
-                              }}
-                            >
-                              <svg viewBox="0 0 24 24" role="presentation">
-                                <path d="M12 7.25a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5z" />
-                              </svg>
-                            </button>
-
-                            {rowActionMenuOpenId === table.dataset_id &&
-                              rowActionMenuPos?.id === table.dataset_id &&
-                              createPortal(
-                                <div
-                                  className="row-action-menu__dropdown"
-                                  role="menu"
-                                  data-row-action-menu-root={table.dataset_id}
-                                  style={{
-                                    position: "fixed",
-                                    top: rowActionMenuPos.top,
-                                    right: rowActionMenuPos.right,
-                                  }}
-                                >
-                                  {selectedTableIds.length > 1 &&
-                                  selectedTableIds.includes(table.dataset_id) ? (
-                                    <button
-                                      type="button"
-                                      className="row-action-menu__item row-action-menu__item--danger"
-                                      role="menuitem"
-                                      onClick={() => {
-                                        setRowActionMenuOpenId(null);
-                                        setRowActionMenuPos(null);
-                                        setBulkDeleteConfirmIds(selectedTableIds);
-                                      }}
-                                    >
-                                      Delete ({selectedTableIds.length})
-                                    </button>
-                                  ) : (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="row-action-menu__item"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setRowActionMenuOpenId(null);
-                                          setRowActionMenuPos(null);
-                                          setEditingId(table.dataset_id);
-                                          setEditingName(table.name);
-                                          setEditingDescription(
-                                            sanitizeTableDescriptionInput(
-                                              table.description || "",
-                                            ),
-                                          );
-                                          setEditingFolderId(table.folder_id);
-                                          setRenameHintId(null);
-                                        }}
-                                      >
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="row-action-menu__item row-action-menu__item--danger"
-                                        role="menuitem"
-                                        onClick={() => {
-                                          setRowActionMenuOpenId(null);
-                                          setRowActionMenuPos(null);
-                                          setDeleteConfirmTable(table);
-                                        }}
-                                      >
-                                        Delete
-                                      </button>
-                                    </>
-                                  )}
-                                </div>,
-                                document.body,
-                              )}
-                          </div>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-              {hasMoreFilteredTables && (
-                <div className="tables-load-more-wrap">
+              {crossFolderSelectedIds.length > 0 && (
+                <div className="cross-folder-selection-banner">
+                  <span>
+                    {crossFolderSelectedIds.length === 1
+                      ? "1 table from another folder also selected"
+                      : `${crossFolderSelectedIds.length} tables from other folders also selected`}
+                  </span>
                   <button
                     type="button"
-                    className="tables-load-more-btn"
+                    className="cross-folder-selection-banner__clear"
                     onClick={() =>
-                      setVisibleTableCount(
-                        (current) => current + TABLES_RENDER_BATCH_SIZE,
+                      setSelectedTableIds((prev) =>
+                        prev.filter((id) => folderScopedTableIdSet.has(id)),
                       )
                     }
                   >
-                    Load more tables
+                    Clear
                   </button>
                 </div>
               )}
-            </div>
-          )}
-              </div>
+              <div className="uploaded-tables-panel__tables-main">
+                {filteredTables.length === 0 ? (
+                  <div
+                    className={`tables-empty-state-wrapper${selectedFolderName ? " tables-empty-state-wrapper--folder-empty" : ""}`}
+                  >
+                    <p className="small">{emptyTablesListMessage}</p>
+                  </div>
+                ) : (
+                  <div className="tables-scroll" ref={tablesScrollRef}>
+                    <ul>
+                      {visibleTables.map((table) => {
+                        const indexStatus =
+                          indexStatusByTable[table.dataset_id];
+                        const indexState = indexStatus?.state || "ready";
+                        const isPinned = pinnedTableIdSet.has(table.dataset_id);
+                        const indexProgress = Math.max(
+                          0,
+                          Math.min(
+                            100,
+                            Math.round(
+                              typeof indexStatus?.progress === "number"
+                                ? indexStatus.progress
+                                : indexState === "ready"
+                                  ? 100
+                                  : 0,
+                            ),
+                          ),
+                        );
+                        const indexLabel =
+                          indexState === "queued"
+                            ? "Queued"
+                            : indexState === "indexing"
+                              ? "Indexing"
+                              : indexState === "error"
+                                ? "Index failed"
+                                : "Indexed";
+                        const isIndexing = indexState === "indexing";
+                        const readyStatusLabel = indexLabel;
 
+                        return (
+                          <li key={table.dataset_id}>
+                            {/*
+                        Multi-select needs to win over nested controls.
+                        Use capture so ctrl/cmd/shift clicks don't get overridden by inner button clicks.
+                      */}
+                            <div
+                              className={`list-row list-item ${
+                                selectedTableIds.includes(table.dataset_id)
+                                  ? "selected"
+                                  : ""
+                              }`}
+                              onClickCapture={(event) => {
+                                if (
+                                  event.shiftKey ||
+                                  event.metaKey ||
+                                  event.ctrlKey
+                                ) {
+                                  applyTableSelectionFromEvent(
+                                    event,
+                                    table.dataset_id,
+                                  );
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }
+                              }}
+                            >
+                              <button
+                                type="button"
+                                className={`icon-button ${isPinned ? "pinned" : "pin"}`}
+                                onClick={() => onTogglePin(table.dataset_id)}
+                                aria-label={
+                                  isPinned
+                                    ? `Unpin ${table.name}`
+                                    : `Pin ${table.name}`
+                                }
+                                title={isPinned ? "Unpin table" : "Pin table"}
+                                disabled={
+                                  busy ||
+                                  Boolean(deletingTableIds[table.dataset_id])
+                                }
+                              >
+                                <svg viewBox="0 0 24 24" role="presentation">
+                                  <path d="M9 3h6l-1 5 3 3v1h-4v7l-1 1-1-1v-7H7v-1l3-3-1-5z" />
+                                </svg>
+                              </button>
+
+                              <div className="uploaded-table-main">
+                                <button
+                                  type="button"
+                                  className="list-button"
+                                  onClick={(event) => {
+                                    // Double-click should be handled by onDoubleClick (add to selection),
+                                    // so ignore the "second click" here to avoid toggling preview/selection.
+                                    if (event.detail > 1) {
+                                      return;
+                                    }
+                                    if (
+                                      event.shiftKey ||
+                                      event.metaKey ||
+                                      event.ctrlKey
+                                    ) {
+                                      applyTableSelectionFromEvent(
+                                        event,
+                                        table.dataset_id,
+                                      );
+                                      return;
+                                    }
+                                    // If the only selected item is clicked again, treat as deselect.
+                                    if (
+                                      selectedTableIds.length === 1 &&
+                                      selectedTableIds[0] ===
+                                        table.dataset_id &&
+                                      activeTableId === null
+                                    ) {
+                                      setSelectedTableIds([]);
+                                      selectionAnchorIdRef.current = null;
+                                      return;
+                                    }
+                                    setSelectedTableIds([table.dataset_id]);
+                                    selectionAnchorIdRef.current =
+                                      table.dataset_id;
+                                    if (activeTableId === table.dataset_id) {
+                                      // Toggle off when clicking the currently selected table.
+                                      setActiveTableId(null);
+                                      setSelectedTableIds([]);
+                                      selectionAnchorIdRef.current = null;
+                                      setPreview(null);
+                                      setPreviewErr(null);
+                                      setPreviewBusy(false);
+                                      setPreviewPage(1);
+                                      setPreviewRowCount(0);
+                                      setPreviewSearchQuery("");
+                                      setPreviewSortColumn(null);
+                                      setPreviewSortDirection("asc");
+                                      return;
+                                    }
+                                    void loadPreview(table.dataset_id, 1, {
+                                      sortColumn: null,
+                                      sortDirection: "asc",
+                                    });
+                                  }}
+                                  onDoubleClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    setSelectedTableIds((prev) => {
+                                      if (prev.includes(table.dataset_id)) {
+                                        return prev;
+                                      }
+                                      return [...prev, table.dataset_id];
+                                    });
+                                    selectionAnchorIdRef.current =
+                                      table.dataset_id;
+                                  }}
+                                  aria-pressed={
+                                    activeTableId === table.dataset_id
+                                  }
+                                >
+                                  <span className="uploaded-table-head">
+                                    <span className="uploaded-table-title-line">
+                                      <span className="uploaded-table-name">
+                                        {table.name}
+                                      </span>
+                                      {table.description?.trim() ? (
+                                        <span className="small uploaded-table-description">
+                                          {table.description.trim()}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                    <span className="small uploaded-table-meta">
+                                      ({table.row_count} rows,{" "}
+                                      {table.column_count} cols)
+                                    </span>
+                                  </span>
+                                </button>
+                              </div>
+
+                              {isIndexing && (
+                                <div
+                                  className="list-row-index"
+                                  title={
+                                    indexStatus?.message || readyStatusLabel
+                                  }
+                                  role="progressbar"
+                                  aria-label={`${table.name} index status`}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                  aria-valuenow={indexProgress}
+                                  aria-valuetext={`${indexLabel}. ${indexProgress}% complete.`}
+                                >
+                                  <div
+                                    className="list-row-index-track"
+                                    aria-hidden="true"
+                                  >
+                                    <div
+                                      className="list-row-index-fill indexing"
+                                      style={{
+                                        width: `${Math.max(4, indexProgress)}%`,
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {(userIsAdmin ||
+                                table.folder_privacy === "public") && (
+                                <div
+                                  className="row-action-menu"
+                                  data-row-action-menu-root={table.dataset_id}
+                                >
+                                  {/*
+                              If multiple files are selected and this row is part of the selection,
+                              only allow bulk delete from the kebab.
+                            */}
+                                  <button
+                                    type="button"
+                                    className="icon-button row-action-menu__trigger"
+                                    aria-label={`Actions for ${table.name}`}
+                                    aria-haspopup="menu"
+                                    aria-expanded={
+                                      rowActionMenuOpenId === table.dataset_id
+                                    }
+                                    disabled={
+                                      busy ||
+                                      Boolean(
+                                        deletingTableIds[table.dataset_id],
+                                      )
+                                    }
+                                    onClick={(e) => {
+                                      if (
+                                        selectedTableIds.length > 1 &&
+                                        !selectedTableIds.includes(
+                                          table.dataset_id,
+                                        )
+                                      ) {
+                                        setSelectedTableIds([table.dataset_id]);
+                                        selectionAnchorIdRef.current =
+                                          table.dataset_id;
+                                      }
+                                      const nextOpen =
+                                        rowActionMenuOpenId === table.dataset_id
+                                          ? null
+                                          : table.dataset_id;
+                                      if (nextOpen === null) {
+                                        setRowActionMenuOpenId(null);
+                                        setRowActionMenuPos(null);
+                                        return;
+                                      }
+                                      const rect = (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect();
+                                      setRowActionMenuOpenId(nextOpen);
+                                      setRowActionMenuPos({
+                                        id: nextOpen,
+                                        top: rect.bottom + 6,
+                                        right: Math.max(
+                                          8,
+                                          window.innerWidth - rect.right,
+                                        ),
+                                      });
+                                    }}
+                                  >
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      role="presentation"
+                                    >
+                                      <path d="M12 7.25a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5zm0 6.5a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5z" />
+                                    </svg>
+                                  </button>
+
+                                  {rowActionMenuOpenId === table.dataset_id &&
+                                    rowActionMenuPos?.id === table.dataset_id &&
+                                    createPortal(
+                                      <div
+                                        className="row-action-menu__dropdown"
+                                        role="menu"
+                                        data-row-action-menu-root={
+                                          table.dataset_id
+                                        }
+                                        style={{
+                                          position: "fixed",
+                                          top: rowActionMenuPos.top,
+                                          right: rowActionMenuPos.right,
+                                        }}
+                                      >
+                                        {selectedTableIds.length > 1 &&
+                                        selectedTableIds.includes(
+                                          table.dataset_id,
+                                        ) ? (
+                                          <button
+                                            type="button"
+                                            className="row-action-menu__item row-action-menu__item--danger"
+                                            role="menuitem"
+                                            onClick={() => {
+                                              setRowActionMenuOpenId(null);
+                                              setRowActionMenuPos(null);
+                                              setBulkDeleteConfirmIds(
+                                                selectedTableIds,
+                                              );
+                                            }}
+                                          >
+                                            Delete ({selectedTableIds.length})
+                                          </button>
+                                        ) : (
+                                          <>
+                                            <button
+                                              type="button"
+                                              className="row-action-menu__item"
+                                              role="menuitem"
+                                              onClick={() => {
+                                                setRowActionMenuOpenId(null);
+                                                setRowActionMenuPos(null);
+                                                setEditingId(table.dataset_id);
+                                                setEditingName(table.name);
+                                                setEditingDescription(
+                                                  sanitizeTableDescriptionInput(
+                                                    table.description || "",
+                                                  ),
+                                                );
+                                                setEditingFolderId(
+                                                  table.folder_id,
+                                                );
+                                                setRenameHintId(null);
+                                              }}
+                                            >
+                                              Edit
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="row-action-menu__item row-action-menu__item--danger"
+                                              role="menuitem"
+                                              onClick={() => {
+                                                setRowActionMenuOpenId(null);
+                                                setRowActionMenuPos(null);
+                                                setDeleteConfirmTable(table);
+                                              }}
+                                            >
+                                              Delete
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>,
+                                      document.body,
+                                    )}
+                                </div>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {hasMoreFilteredTables && (
+                      <div className="tables-load-more-wrap">
+                        <button
+                          type="button"
+                          className="tables-load-more-btn"
+                          onClick={() =>
+                            setVisibleTableCount(
+                              (current) => current + TABLES_RENDER_BATCH_SIZE,
+                            )
+                          }
+                        >
+                          Load more tables
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
         {previewStripTableIds.length > 0 && (
-          <div
-            className="panel upload-preview"
-            aria-hidden={isUploadPopupOpen}
-          >
+          <div className="panel upload-preview" aria-hidden={isUploadPopupOpen}>
             <div className="preview-header">
               <div className="preview-header-left">
-                <div className="preview-selected-pills-wrap" aria-label="Selected files">
+                <div
+                  className="preview-selected-pills-wrap"
+                  aria-label="Selected files"
+                >
                   {previewTabWidth <= 44 && previewPillsCanScrollLeft && (
                     <button
                       type="button"
@@ -3932,8 +4060,8 @@ export default function Upload({ homeControls = null }: UploadProps) {
                     to={`/tables/${activeTableId}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    aria-label="Full Preview (opens in new tab)"
-                    title="Full Preview (new tab)"
+                    aria-label="Edit Table (opens in new tab)"
+                    title="Edit Table (new tab)"
                   >
                     <img
                       src={openIcon}
@@ -3941,7 +4069,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
                       className="preview-open-link-icon"
                       aria-hidden="true"
                     />
-                    <span className="sort-toggle-text">Full Preview</span>
+                    <span className="sort-toggle-text">Edit Table</span>
                   </Link>
                 )}
               </div>
