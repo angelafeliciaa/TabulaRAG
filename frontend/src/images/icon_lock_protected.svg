@@ -1,0 +1,20 @@
+<svg width="80" height="80" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(40, 48)">
+    <!-- Lock: same geometry and scale as public/private icons -->
+    <rect x="-28" y="-12" width="56" height="46" rx="12" fill="#FFD966"/>
+    <rect x="-28" y="-12" width="56" height="18" rx="10" fill="#FFC933"/>
+    <path d="M-14 -12 L-14 -28 Q0 -46 14 -28 L14 -12" fill="none" stroke="#FFC933" stroke-width="8" stroke-linecap="round"/>
+    <path d="M-14 -12 L-14 -28 Q0 -46 14 -28 L14 -12" fill="none" stroke="#FFD966" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="0" cy="8" r="7" fill="#B8860B"/>
+    <rect x="-3.5" y="8" width="7" height="10" rx="2.5" fill="#B8860B"/>
+    <ellipse cx="-10" cy="-4" rx="7" ry="4" fill="rgba(255,255,255,0.25)" transform="rotate(-15,-10,-4)"/>
+    <!-- Profile badge: slightly larger; nudged up so it stays inside the 80 viewBox -->
+    <g transform="translate(0, -1)">
+      <g transform="translate(22, 24) scale(0.62) translate(-22, -24)">
+        <circle cx="22" cy="24" r="14" fill="white" stroke="#FFD966" stroke-width="2"/>
+        <circle cx="22" cy="19" r="5" fill="#FFD966"/>
+        <path d="M13 34 Q13 27 22 27 Q31 27 31 34" fill="#FFD966"/>
+      </g>
+    </g>
+  </g>
+</svg>

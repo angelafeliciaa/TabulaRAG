@@ -153,14 +153,14 @@ def test_same_dataset_name_allowed_in_different_enterprise():
             ),
         )
         db.commit()
+        db.refresh(u)
+        uid = u.id
 
     token = create_jwt(
-        {
-            "id": "multi_ent_user",
-            "email": "me@example.com",
-            "name": "Me",
-            "picture": "",
-        },
+        user_id=uid,
+        login="me@example.com",
+        name="Me",
+        avatar_url="",
     )
 
     with TestClient(app_main.app) as c:
@@ -184,11 +184,17 @@ def test_duplicate_table_name_rejected_within_enterprise():
     from app.models import User
 
     with SessionLocal() as db:
-        db.add(User(google_id="dup_in_ent_user", login="dup_in_ent_user@example.com"))
+        u = User(google_id="dup_in_ent_user", login="dup_in_ent_user@example.com")
+        db.add(u)
         db.commit()
+        db.refresh(u)
+        uid = u.id
 
     token = create_jwt(
-        {"id": "dup_in_ent_user", "email": "dup_in_ent_user@example.com", "name": "Me", "picture": ""},
+        user_id=uid,
+        login="dup_in_ent_user@example.com",
+        name="Me",
+        avatar_url="",
     )
 
     with TestClient(app_main.app) as c:

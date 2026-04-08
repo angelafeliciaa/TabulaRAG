@@ -8,3 +8,4 @@ qdrant-client[fastembed]
 fastapi-mcp
 pyjwt
 google-auth
+bcrypt

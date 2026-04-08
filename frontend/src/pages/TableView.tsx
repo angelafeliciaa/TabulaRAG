@@ -379,6 +379,10 @@ export default function TableView() {
   /** Physical dataset view (`/tables/:id`) without multi-highlight: load all rows, no pagination. */
   const isPlainDatasetView = !isMultiHighlightMode;
   const returnPath = resolveReturnPath(location.search);
+  const isVirtualTableView = useMemo(
+    () => Boolean(getVirtualTableEncodedQ(returnPath)),
+    [returnPath],
+  );
   const sourceQueryTitle = useMemo(() => buildQueryContextTitle(returnPath), [returnPath]);
   const returnQueryMode = useMemo<"filter" | "aggregate" | "semantic" | null>(() => {
     if (!returnPath || returnPath === "/") {
@@ -429,8 +433,6 @@ export default function TableView() {
   const [dateMenu, setDateMenu] = useState<DateMenuState>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
-  const [showScrollHint, setShowScrollHint] = useState(false);
-  const [tableAtBottom, setTableAtBottom] = useState(false);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [sliceEpoch, setSliceEpoch] = useState(0);
@@ -447,7 +449,8 @@ export default function TableView() {
   const [multiHighlightTruncated, setMultiHighlightTruncated] = useState(false);
   const [activeHighlightCursor, setActiveHighlightCursor] = useState(0);
   const [multiHighlightLabel, setMultiHighlightLabel] = useState("All matching rows");
-  const canEdit = userIsAdmin || tableFolderPrivacy === "public";
+  // "Virtual table view" (opened from results via `return_to` carrying `q`) is always read-only, even for admins.
+  const canEdit = (userIsAdmin || tableFolderPrivacy === "public") && !isVirtualTableView;
   const dateMenuId = useId();
   const tableAreaRef = useRef<HTMLDivElement | null>(null);
   const dateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -457,16 +460,52 @@ export default function TableView() {
   const prevPageForHighlightSyncRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isPlainDatasetView && canEdit) {
+    const showVirtualBanner =
+      isPlainDatasetView
+      && isVirtualTableView
+      && Number.isFinite(numericDatasetId)
+      && numericDatasetId > 0
+      && !serverError
+      && !tableNotFound
+      && !err
+      && !highlightErr;
+    const showEditBanner =
+      isPlainDatasetView
+      && canEdit
+      && Number.isFinite(numericDatasetId)
+      && numericDatasetId > 0
+      && !serverError
+      && !tableNotFound
+      && !err
+      && !highlightErr;
+
+    if (showVirtualBanner) {
+      setHeaderNotice({
+        label: "Virtual View",
+        text: "Read-only preview (editing is disabled in virtual views)",
+      });
+      return () => setHeaderNotice(null);
+    }
+    if (showEditBanner) {
       setHeaderNotice({
         label: "Edit Mode",
-        text: "Double tap cell values to start editing",
+        text: "Click on cell values to start editing",
       });
       return () => setHeaderNotice(null);
     }
     setHeaderNotice(null);
     return undefined;
-  }, [canEdit, isPlainDatasetView, setHeaderNotice]);
+  }, [
+    canEdit,
+    isPlainDatasetView,
+    isVirtualTableView,
+    setHeaderNotice,
+    numericDatasetId,
+    serverError,
+    tableNotFound,
+    err,
+    highlightErr,
+  ]);
 
   useEffect(() => {
     if (!Number.isFinite(numericDatasetId) || numericDatasetId <= 0) {
@@ -923,6 +962,11 @@ export default function TableView() {
 
   const totalPages = Math.max(1, Math.ceil(effectiveRowCount / ROWS_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginationRowStart = (safeCurrentPage - 1) * ROWS_PER_PAGE + 1;
+  const paginationRowEnd = Math.min(
+    safeCurrentPage * ROWS_PER_PAGE,
+    effectiveRowCount,
+  );
   const hasQueryContext = returnPath !== "/";
   const effectiveHighlightRow = isMultiHighlightMode ? activeMultiHighlightedRow : highlightedRow;
   const highlightedRows = isMultiHighlightMode
@@ -1145,31 +1189,9 @@ export default function TableView() {
   }, [dateMenu, dateViewMode]);
 
   useEffect(() => {
-    const container = tableAreaRef.current;
-    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
-    if (!element) {
-      setShowScrollHint(false);
-      setTableAtBottom(false);
-      return;
-    }
-
-    const updateHint = () => {
-      const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
-      const canScroll = element.scrollHeight > element.clientHeight + 2;
-      setShowScrollHint(canScroll);
-      setTableAtBottom(atBottom);
-    };
-
-    const rafId = window.requestAnimationFrame(updateHint);
-    element.addEventListener("scroll", updateHint);
-    window.addEventListener("resize", updateHint);
-
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      element.removeEventListener("scroll", updateHint);
-      window.removeEventListener("resize", updateHint);
-    };
-  }, [displayRows.length, data?.columns.length, data?.offset, loading, err, dateViewMode]);
+    // Removed scroll-indicator UI; keep full-table view clean.
+    return;
+  }, []);
 
   useEffect(() => {
     const container = tableAreaRef.current;
@@ -1230,19 +1252,6 @@ export default function TableView() {
       container.scrollTo({ top: Math.max(0, scrollOffset), behavior: "smooth" });
     }, 0);
   }, [data, effectiveHighlightRow, displayRows.length, dateViewMode]);
-
-  function scrollTableToEdge() {
-    const container = tableAreaRef.current;
-    const element = container?.querySelector(".table-scroll") as HTMLDivElement | null;
-    if (!element) {
-      return;
-    }
-    if (tableAtBottom) {
-      element.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }
 
   function commitPageInput() {
     const trimmed = pageInput.trim();
@@ -1431,10 +1440,16 @@ export default function TableView() {
       pendingEdits.size > 0
       || pendingColumnEdits.size > 0
     );
+  /** Same shell as filter drilldown: virtual results page for every multi-highlight (filter / semantic / aggregate). */
+  const useVirtualResultsLayout = isMultiHighlightMode;
 
   return (
     <div
-      className={`page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}`}
+      className={
+        useVirtualResultsLayout
+          ? "page-stack virtual-results-page table-view-virtual-result-preview"
+          : `page-stack full-table-page${isPlainDatasetView ? " full-table-page-dataset-wide" : ""}${isMultiHighlightMode && multiHighlightRows.length > 0 ? " has-highlight-nav" : ""}${isVirtualTableView ? " full-table-page--virtual-preview" : ""}`
+      }
     >
       {hasQueryContext && (isMultiHighlightMode || highlightedRow !== null) && (
         <div className="table-view-back-row">
@@ -1446,12 +1461,32 @@ export default function TableView() {
           </Link>
         </div>
       )}
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="row table-view-header-row" style={{ justifyContent: "space-between" }}>
-          <div className="table-view-header-main">
-            <div className="table-view-title">{headerTitle}</div>
+      <div
+        className={`card${isPlainDatasetView ? " table-view-header-card--dataset" : ""}`}
+        style={{
+          marginBottom: useVirtualResultsLayout ? 12 : isPlainDatasetView ? 6 : 8,
+        }}
+      >
+        <div
+          className={`row ${useVirtualResultsLayout ? "virtual-results-header-row" : "table-view-header-row"}`}
+          style={useVirtualResultsLayout ? undefined : { justifyContent: "space-between" }}
+        >
+          <div
+            className={
+              useVirtualResultsLayout ? "virtual-results-header-main" : "table-view-header-main"
+            }
+          >
+            <div className={useVirtualResultsLayout ? "result-title" : "table-view-title"}>
+              {headerTitle}
+            </div>
             {isMultiHighlightMode && (
-              <div className="table-view-row-meta table-view-header-status">
+              <div
+                className={
+                  useVirtualResultsLayout
+                    ? "result-subtitle"
+                    : "table-view-row-meta table-view-header-status"
+                }
+              >
                 <span>
                   {returnQueryMode === "semantic"
                     ? `${(multiHighlightLabel || parsedMultiSpec?.question || "Query").trim()}: top-${semanticMultiHighlightTopK ?? Math.max(1, multiHighlightRows.length)} results`
@@ -1487,13 +1522,19 @@ export default function TableView() {
                     : `Showing 0 of ${effectiveRowCount.toLocaleString()} rows.`}
               </div>
             )}
-            {effectiveDescription && (
+            {effectiveDescription && !isPlainDatasetView && (
               <div className="table-view-description-text" title={effectiveDescription}>
                 {effectiveDescription}
               </div>
             )}
           </div>
-          <div className="table-view-tools">
+          <div
+            className={
+              useVirtualResultsLayout
+                ? "table-view-tools virtual-results-tools"
+                : "table-view-tools"
+            }
+          >
             {isPlainDatasetView && hasUnsavedChanges && canEdit && (
               <div className="table-view-save-edits-wrap">
                 <button
@@ -1566,8 +1607,13 @@ export default function TableView() {
               </button>
             </div>
           )}
-          <div className="table-area-outer">
-            <div className="table-area full-table-area" ref={tableAreaRef}>
+          <div className="table-area-outer table-area-outer--full-table">
+            <div
+              className={`table-area full-table-area${
+                effectiveRowCount > 0 && totalPages > 1 ? " full-table-area--has-pagination" : ""
+              }${useVirtualResultsLayout ? " aggregate-results-table" : ""}`}
+              ref={tableAreaRef}
+            >
             <DataTable
               columns={data.columns}
               columnLabels={
@@ -1638,103 +1684,104 @@ export default function TableView() {
               pendingCellEditValues={isPlainDatasetView ? pendingCellEditValues : undefined}
               pendingHeaderColumns={isPlainDatasetView ? pendingHeaderColumnsSet : undefined}
             />
-            {showScrollHint && (
-              <button
-                type="button"
-                className="scroll-indicator full-table-scroll-indicator"
-                onClick={scrollTableToEdge}
-                aria-label={tableAtBottom ? "Scroll table to top" : "Scroll table to bottom"}
-                title={tableAtBottom ? "Scroll to top" : "Scroll to bottom"}
-              >
-                {tableAtBottom ? "▲" : "▼"}
-              </button>
-            )}
             </div>
-          </div>
-        </div>
-      )}
-      {data && effectiveRowCount > 0 && totalPages > 1 && (
-        <div className="table-view-pagination" aria-label="Full table pagination">
-          <div className="table-view-pagination-controls">
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(1);
-              }}
-              disabled={loading || safeCurrentPage <= 1}
-              aria-label="First page"
-              title="First page"
-            >
-              {"<<"}
-            </button>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(Math.max(1, safeCurrentPage - 1));
-              }}
-              disabled={loading || safeCurrentPage <= 1}
-              aria-label="Previous page"
-              title="Previous page"
-            >
-              {"<"}
-            </button>
-            <span className="table-view-page-count">
-              Page{" "}
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                className="table-view-page-input"
-                style={{ width: `${pageInputWidthCh}ch` }}
-                value={pageInput}
-                onChange={(event) => {
-                  const digitsOnly = event.target.value.replace(/[^\d]/g, "");
-                  setPageInput(digitsOnly);
-                }}
-                onBlur={commitPageInput}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    commitPageInput();
-                  } else if (event.key === "Escape") {
-                    setPageInput(String(safeCurrentPage));
-                  }
-                }}
-                disabled={loading}
-                aria-label="Current page number"
-                title="Enter page number"
-              />{" "}
-              of {totalPages}
-            </span>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(Math.min(totalPages, safeCurrentPage + 1));
-              }}
-              disabled={loading || safeCurrentPage >= totalPages}
-              aria-label="Next page"
-              title="Next page"
-            >
-              {">"}
-            </button>
-            <button
-              type="button"
-              className="table-view-page-btn"
-              onClick={() => {
-                pageChangeSourceRef.current = "table";
-                setCurrentPage(totalPages);
-              }}
-              disabled={loading || safeCurrentPage >= totalPages}
-              aria-label="Last page"
-              title="Last page"
-            >
-              {">>"}
-            </button>
+            {effectiveRowCount > 0 && (
+              <div
+                className={
+                  useVirtualResultsLayout
+                    ? "table-view-pagination"
+                    : "table-view-pagination table-view-pagination--overlay"
+                }
+                aria-label="Full table pagination"
+              >
+                <div className="table-view-pagination-controls">
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(1);
+                    }}
+                    disabled={loading || safeCurrentPage <= 1}
+                    aria-label="First page"
+                    title="First page"
+                  >
+                    {"<<"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(Math.max(1, safeCurrentPage - 1));
+                    }}
+                    disabled={loading || safeCurrentPage <= 1}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    {"<"}
+                  </button>
+                  <span className="table-view-page-count">
+                    Page{" "}
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      className="table-view-page-input"
+                      style={{ width: `${pageInputWidthCh}ch` }}
+                      value={pageInput}
+                      onChange={(event) => {
+                        const digitsOnly = event.target.value.replace(/[^\d]/g, "");
+                        setPageInput(digitsOnly);
+                      }}
+                      onBlur={commitPageInput}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitPageInput();
+                        } else if (event.key === "Escape") {
+                          setPageInput(String(safeCurrentPage));
+                        }
+                      }}
+                      disabled={loading}
+                      aria-label="Current page number"
+                      title="Enter page number"
+                    />{" "}
+                    of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(Math.min(totalPages, safeCurrentPage + 1));
+                    }}
+                    disabled={loading || safeCurrentPage >= totalPages}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    {">"}
+                  </button>
+                  <button
+                    type="button"
+                    className="table-view-page-btn"
+                    onClick={() => {
+                      pageChangeSourceRef.current = "table";
+                      setCurrentPage(totalPages);
+                    }}
+                    disabled={loading || safeCurrentPage >= totalPages}
+                    aria-label="Last page"
+                    title="Last page"
+                  >
+                    {">>"}
+                  </button>
+                </div>
+                <span className="table-view-pagination-meta">
+                  Showing rows {paginationRowStart.toLocaleString()}–
+                  {paginationRowEnd.toLocaleString()} of{" "}
+                  {effectiveRowCount.toLocaleString()}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

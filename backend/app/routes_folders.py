@@ -1,14 +1,25 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.auth import AuthUser, require_admin, require_auth
 from app.db import SessionLocal
-from app.models import Dataset, Folder, FolderGroupAccess, FolderPrivacy, UserGroup, UserGroupMembership, UserRole
+from app.index_jobs import clear_index_job
+from app.models import Dataset, DatasetColumn, DatasetRow, Folder, FolderGroupAccess, FolderPrivacy, UserGroup, UserGroupMembership, UserRole
+from app.qdrant_client import delete_collection
+from app.unassigned_folder import ensure_all_datasets_have_folder
 
 router = APIRouter(prefix="/folders")
+
+
+def _delete_collection_safe(dataset_id: int) -> None:
+    try:
+        delete_collection(dataset_id)
+    except Exception:
+        # Best-effort cleanup; should not block folder deletion.
+        pass
 
 
 def _scoped_enterprise_id(auth: AuthUser) -> Optional[int]:
@@ -35,6 +46,59 @@ def _get_folder_or_404(db, folder_id: int, enterprise_id: Optional[int]) -> Fold
     if folder is None:
         raise HTTPException(status_code=404, detail="Folder not found")
     return folder
+
+
+MAX_FOLDER_NAME_LEN = 255
+
+
+def _folder_name_taken(
+    db,
+    enterprise_id: int,
+    name: str,
+    exclude_folder_id: Optional[int] = None,
+) -> bool:
+    stmt = select(Folder.id).where(
+        Folder.enterprise_id == enterprise_id,
+        func.lower(Folder.name) == func.lower(name),
+    )
+    if exclude_folder_id is not None:
+        stmt = stmt.where(Folder.id != exclude_folder_id)
+    return db.execute(stmt.limit(1)).scalar_one_or_none() is not None
+
+
+def _unique_folder_name(
+    db,
+    enterprise_id: int,
+    base_name: str,
+    exclude_folder_id: Optional[int] = None,
+) -> str:
+    """
+    If the desired name is already used (case-insensitive), append _2, _3, …
+    until unique. Truncates base when needed to stay within MAX_FOLDER_NAME_LEN.
+    """
+    base = base_name.strip()
+    if not base:
+        raise HTTPException(status_code=422, detail="Folder name cannot be empty.")
+    base = base[:MAX_FOLDER_NAME_LEN]
+
+    if not _folder_name_taken(db, enterprise_id, base, exclude_folder_id):
+        return base
+
+    suffix = 2
+    while suffix <= 100_000:
+        suffix_part = f"_{suffix}"
+        room = MAX_FOLDER_NAME_LEN - len(suffix_part)
+        if room < 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Folder name cannot be made unique within length limit.",
+            )
+        truncated = base[:room]
+        candidate = f"{truncated}{suffix_part}"
+        if not _folder_name_taken(db, enterprise_id, candidate, exclude_folder_id):
+            return candidate
+        suffix += 1
+    raise HTTPException(status_code=500, detail="Could not allocate unique folder name.")
 
 
 def _querier_can_see_protected_folder(db, folder_id: int, user_id: int) -> bool:
@@ -90,6 +154,10 @@ class AssignFolderRequest(BaseModel):
     folder_id: Optional[int] = None
 
 
+class ReorderFoldersRequest(BaseModel):
+    folder_ids: list[int]
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -114,7 +182,7 @@ def list_folders(current_user: AuthUser = Depends(require_auth)):
         if not _is_admin(current_user):
             stmt = stmt.where(Folder.privacy != FolderPrivacy.private)
 
-        stmt = stmt.group_by(Folder.id).order_by(Folder.name)
+        stmt = stmt.group_by(Folder.id).order_by(Folder.sort_order, Folder.name)
 
         rows = db.execute(stmt).all()
 
@@ -143,11 +211,19 @@ def create_folder(
     enterprise_id = _scoped_enterprise_id(current_user)
 
     with SessionLocal() as db:
+        name = _unique_folder_name(db, enterprise_id, body.name)
+
+        max_so = db.execute(
+            select(func.coalesce(func.max(Folder.sort_order), -1)).where(
+                Folder.enterprise_id == enterprise_id,
+            ),
+        ).scalar_one()
         folder = Folder(
             enterprise_id=enterprise_id,
-            name=body.name.strip(),
+            name=name,
             privacy=body.privacy,
             created_by=current_user.id,
+            sort_order=int(max_so) + 1,
         )
         db.add(folder)
         db.commit()
@@ -160,6 +236,42 @@ def create_folder(
             "dataset_count": 0,
             "created_at": folder.created_at.isoformat(),
         }
+
+
+@router.put("/reorder", include_in_schema=False)
+def reorder_folders(
+    body: ReorderFoldersRequest,
+    current_user: AuthUser = Depends(require_auth),
+):
+    """Persist folder order for the workspace. Any authenticated workspace member may reorder."""
+    enterprise_id = _scoped_enterprise_id(current_user)
+    ids = body.folder_ids
+    if not ids:
+        raise HTTPException(status_code=400, detail="folder_ids must not be empty")
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=400, detail="Duplicate folder ids")
+
+    with SessionLocal() as db:
+        all_folders = db.execute(
+            select(Folder).where(Folder.enterprise_id == enterprise_id),
+        ).scalars().all()
+        by_id = {f.id: f for f in all_folders}
+        for fid in ids:
+            if fid not in by_id:
+                raise HTTPException(status_code=400, detail="Invalid folder id in folder_ids")
+
+        id_set = set(ids)
+        for i, fid in enumerate(ids):
+            by_id[fid].sort_order = i
+        extra = [f for f in all_folders if f.id not in id_set]
+        next_i = len(ids)
+        for f in sorted(extra, key=lambda x: (x.sort_order, x.name or "")):
+            f.sort_order = next_i
+            next_i += 1
+
+        db.commit()
+
+    return {"ok": True}
 
 
 @router.patch("/{folder_id}", include_in_schema=False)
@@ -175,7 +287,12 @@ def update_folder(
         folder = _get_folder_or_404(db, folder_id, enterprise_id)
 
         if body.name is not None:
-            folder.name = body.name.strip()
+            folder.name = _unique_folder_name(
+                db,
+                enterprise_id,
+                body.name,
+                exclude_folder_id=folder.id,
+            )
         if body.privacy is not None:
             folder.privacy = body.privacy
 
@@ -198,10 +315,11 @@ def update_folder(
 @router.delete("/{folder_id}", status_code=204, include_in_schema=False)
 def delete_folder(
     folder_id: int,
+    background_tasks: BackgroundTasks,
     current_user: AuthUser = Depends(require_admin),
 ):
     """
-    Delete a folder. Datasets inside become unassigned (folder_id set to NULL).
+    Delete a folder. Datasets/files inside are deleted as well.
     Admins and owners only.
     """
     enterprise_id = _scoped_enterprise_id(current_user)
@@ -209,16 +327,21 @@ def delete_folder(
     with SessionLocal() as db:
         folder = _get_folder_or_404(db, folder_id, enterprise_id)
 
-        # Unassign all datasets — the ON DELETE SET NULL FK handles this at the
-        # DB level, but we do it explicitly so SQLAlchemy's session stays consistent.
-        datasets = db.execute(
-            select(Dataset).where(Dataset.folder_id == folder.id)
+        # Delete all datasets inside this folder (and their rows/cols) without ORM cascade loading.
+        dataset_ids = db.execute(
+            select(Dataset.id).where(Dataset.folder_id == folder.id)
         ).scalars().all()
-        for dataset in datasets:
-            dataset.folder_id = None
+        if dataset_ids:
+            db.execute(delete(DatasetRow).where(DatasetRow.dataset_id.in_(dataset_ids)))
+            db.execute(delete(DatasetColumn).where(DatasetColumn.dataset_id.in_(dataset_ids)))
+            db.execute(delete(Dataset).where(Dataset.id.in_(dataset_ids)))
 
         db.delete(folder)
         db.commit()
+
+    for did in dataset_ids:
+        clear_index_job(int(did))
+        background_tasks.add_task(_delete_collection_safe, int(did))
 
 
 @router.get("/{folder_id}/groups", include_in_schema=False)
@@ -253,15 +376,22 @@ def list_folder_groups(
         ]
 
 
-@router.get("/{folder_id}/datasets")
+@router.get(
+    "/{folder_id}/datasets",
+    operation_id="list_folder_datasets",
+    summary="List datasets in a folder (MCP discovery)",
+    description=(
+        "Returns folder metadata (folder_id, name, privacy) and every dataset in that folder "
+        "with id, name, description, row_count, column_count, and created_at. "
+        "Use when navigating by folder after listing folders, or when you already have a folder_id. "
+        "This is folder-scoped discovery; GET /tables lists all datasets across the workspace. "
+        "Members (queriers) cannot access private folders (404)."
+    ),
+)
 def list_folder_datasets(
-    folder_id: int,
+    folder_id: int = Path(..., description="Folder identifier in the current workspace."),
     current_user: AuthUser = Depends(require_auth),
 ):
-    """
-    List all datasets inside a folder.
-    Queriers cannot access private folders (returns 404).
-    """
     enterprise_id = _scoped_enterprise_id(current_user)
 
     with SessionLocal() as db:
@@ -320,7 +450,7 @@ def assign_dataset_folder(
                 raise HTTPException(status_code=403, detail="You can only add datasets to a public folder.")
             dataset.folder_id = folder.id
         else:
-            # Unassigning — queriers may only remove from public folders.
+            # Unassign: clear folder_id. Queriers may only remove from public folders.
             if not _is_admin(current_user) and dataset.folder_id is not None:
                 current_folder = db.get(Folder, dataset.folder_id)
                 if current_folder is None or current_folder.privacy != FolderPrivacy.public:

@@ -11,6 +11,7 @@ from app.auth import (
     MCP_TOKEN_PREFIX,
     get_active_membership,
     hash_mcp_token,
+    is_admin_capable,
     mint_token_for_user,
     require_admin,
     require_auth,
@@ -297,7 +298,9 @@ def create_enterprise(body: CreateEnterpriseRequest, current_user: AuthUser = De
         raise HTTPException(status_code=400, detail="Workspace name is too long")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
+        if current_user.id == 0:
+            raise HTTPException(status_code=401, detail="User not found")
+        user = db.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
 
@@ -358,7 +361,9 @@ def join_enterprise(body: JoinEnterpriseRequest, current_user: AuthUser = Depend
         raise HTTPException(status_code=400, detail="Invite code cannot be empty")
 
     with SessionLocal() as db:
-        user = db.execute(select(User).where(User.google_id == current_user.google_id)).scalar_one_or_none()
+        if current_user.id == 0:
+            raise HTTPException(status_code=401, detail="User not found")
+        user = db.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
 
@@ -477,6 +482,8 @@ def list_members(current_user: AuthUser = Depends(require_auth)):
     if current_user.enterprise_id is None:
         raise HTTPException(status_code=400, detail="Not part of an enterprise")
 
+    viewer_is_admin = is_admin_capable(current_user.role)
+
     with SessionLocal() as db:
         rows = db.execute(
             select(User, EnterpriseMembership.role)
@@ -487,24 +494,29 @@ def list_members(current_user: AuthUser = Depends(require_auth)):
 
         out = []
         for u, role in rows:
-            has_mcp = (
-                db.execute(
-                    select(McpAccessToken.id).where(
-                        McpAccessToken.user_id == u.id,
-                        McpAccessToken.enterprise_id == current_user.enterprise_id,
-                    ).limit(1),
-                ).scalar_one_or_none()
-                is not None
-            )
-            out.append(
-                {
-                    "id": u.id,
-                    "login": u.login,
-                    "role": role.value,
-                    "joined_at": u.created_at.isoformat(),
-                    "mcp_token_configured": has_mcp,
-                },
-            )
+            display_name = (u.display_name or "").strip() or u.login.split("@", 1)[0]
+            is_self = u.id == current_user.id
+            entry: dict = {
+                "id": u.id,
+                "display_name": display_name,
+                "is_self": is_self,
+                "role": role.value,
+                "joined_at": u.created_at.isoformat(),
+            }
+            if viewer_is_admin:
+                entry["login"] = u.login
+            if viewer_is_admin:
+                has_mcp = (
+                    db.execute(
+                        select(McpAccessToken.id).where(
+                            McpAccessToken.user_id == u.id,
+                            McpAccessToken.enterprise_id == current_user.enterprise_id,
+                        ).limit(1),
+                    ).scalar_one_or_none()
+                    is not None
+                )
+                entry["mcp_token_configured"] = has_mcp
+            out.append(entry)
         return out
 
 
@@ -534,11 +546,8 @@ def transfer_ownership(body: TransferOwnershipRequest, current_user: AuthUser = 
         ).scalar_one_or_none()
         if target is None:
             raise HTTPException(status_code=404, detail="Member not found")
-        if target.role != UserRole.admin:
-            raise HTTPException(
-                status_code=400,
-                detail="Ownership can only be transferred to an existing admin",
-            )
+        if target.role not in (UserRole.admin, UserRole.querier):
+            raise HTTPException(status_code=400, detail="Invalid target role for ownership transfer")
 
         me.role = UserRole.admin
         target.role = UserRole.owner
