@@ -25,10 +25,10 @@ def test_health_deps(client):
     body = resp.json()
     assert "postgres" in body
     assert "qdrant" in body
-    smtp = body["smtp"]
-    assert smtp.keys() >= {
-        "host_configured",
-        "auth_configured",
+    email = body["email"]
+    assert email.keys() >= {
+        "provider",
+        "api_key_configured",
         "from_configured",
         "ready_to_send",
     }
