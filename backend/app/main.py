@@ -1284,9 +1284,8 @@ async def auth_google_callback(body: dict):
                     user = existing
                     db.add(user)
                     google_link_notice = (
-                        "Your Google account is now linked to the TabulaRAG profile for this email. "
-                        "You already had an email/password account here—we did not create a second one. "
-                        "Next time you can sign in with either Google or your password."
+                        "Your Google account has been linked. "
+                        "You can now sign in with either Google or your password."
                     )
             else:
                 user = User(google_id=google_id, login=login, email_verified=True)

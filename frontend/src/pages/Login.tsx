@@ -288,7 +288,7 @@ export default function Login() {
           setResendCooldown(30);
           if (reg.email_sent) {
             setError(null);
-            setVerifyHint(`We sent a 6-digit code to ${reg.email}.`);
+            setVerifyHint(`We sent a 6-digit code to ${reg.email}`);
           } else {
             setVerifyHint(null);
             setError(
@@ -498,8 +498,8 @@ export default function Login() {
               {authMode === "signup" && signupStep === "verify"
                 ? verifyHint ||
                   (email.trim()
-                    ? `We sent a 6-digit code to ${email.trim()}.`
-                    : "We sent a 6-digit code to your email.")
+                    ? `We sent a 6-digit code to ${email.trim()}`
+                    : "We sent a 6-digit code to your email")
                 : authMode === "signup" && signupStep === "google_found"
                   ? googleFoundMessage ||
                     "This email is already registered with Google. Sign in with Google to continue—the password you entered will be saved for email sign-in too."

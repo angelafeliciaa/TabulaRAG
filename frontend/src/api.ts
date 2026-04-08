@@ -284,7 +284,12 @@ export async function loginWithEmail(
   return data;
 }
 
-export type AuthMeResponse = { login: string; has_password: boolean };
+export type AuthMeResponse = {
+  login: string;
+  has_password: boolean;
+  is_local: boolean;
+  display_name: string;
+};
 
 export async function fetchAuthMe(): Promise<AuthMeResponse> {
   const res = await authFetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
@@ -292,6 +297,21 @@ export async function fetchAuthMe(): Promise<AuthMeResponse> {
     throw new Error(await readApiErrorMessage(res));
   }
   return (await res.json()) as AuthMeResponse;
+}
+
+export async function updateDisplayName(displayName: string): Promise<{ token: string; display_name: string }> {
+  const res = await authFetch(`${API_BASE}/auth/me`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  const data = (await res.json()) as { token: string; display_name: string };
+  localStorage.setItem(TOKEN_KEY, data.token);
+  patchStoredUser({ name: data.display_name });
+  return data;
 }
 
 export async function forgotPasswordRequest(

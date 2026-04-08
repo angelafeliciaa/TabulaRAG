@@ -18,6 +18,7 @@ import {
   patchStoredUser,
   renameWorkspace,
   switchWorkspace,
+  updateDisplayName,
   type WorkspaceSummary,
 } from "../api";
 
@@ -82,8 +83,13 @@ export default function Settings() {
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
 
-  const [authMe, setAuthMe] = useState<{ has_password: boolean } | null>(null);
+  const [authMe, setAuthMe] = useState<{ has_password: boolean; is_local: boolean; display_name: string } | null>(null);
   const [authMeError, setAuthMeError] = useState<string | null>(null);
+
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
@@ -102,6 +108,7 @@ export default function Settings() {
       .then((m) => {
         if (!cancelled) {
           setAuthMe(m);
+          setNameDraft(m.display_name || "");
         }
       })
       .catch(() => {
@@ -428,6 +435,62 @@ export default function Settings() {
                   </div>
                 </div>
 
+                {authMe?.is_local ? (
+                  <div className="settings-name-edit">
+                    <label className="settings-workspace-rename-label" htmlFor="settings-display-name-input">
+                      Display name
+                    </label>
+                    <div className="settings-workspace-rename-row">
+                      <input
+                        id="settings-display-name-input"
+                        type="text"
+                        className="input settings-workspace-rename-input"
+                        maxLength={255}
+                        placeholder="Your name"
+                        value={nameDraft}
+                        onChange={(e) => {
+                          setNameDraft(e.target.value);
+                          setNameError(null);
+                          setNameSuccess(false);
+                        }}
+                        disabled={nameSaving}
+                      />
+                      <button
+                        type="button"
+                        className="login-btn settings-workspace-rename-save"
+                        disabled={
+                          nameSaving
+                          || !nameDraft.trim()
+                          || nameDraft.trim() === (authMe.display_name || "").trim()
+                        }
+                        onClick={async () => {
+                          setNameSaving(true);
+                          setNameError(null);
+                          setNameSuccess(false);
+                          try {
+                            const result = await updateDisplayName(nameDraft.trim());
+                            setAuthMe((prev) => prev ? { ...prev, display_name: result.display_name } : prev);
+                            setNameSuccess(true);
+                            bumpSession();
+                          } catch (err) {
+                            setNameError(err instanceof Error ? err.message : "Failed to update name");
+                          } finally {
+                            setNameSaving(false);
+                          }
+                        }}
+                      >
+                        {nameSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    {nameError ? (
+                      <p className="login-error settings-workspace-rename-error" role="alert">{nameError}</p>
+                    ) : null}
+                    {nameSuccess ? (
+                      <p className="settings-name-success">Name updated.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="settings-my-workspaces">
                   <h2 className="settings-subsection-title">My Workspaces</h2>
                   <p className="settings-subsection-desc">
@@ -716,7 +779,9 @@ export default function Settings() {
               Delete your account?
             </h2>
             <p className="settings-modal-body">
-              This cannot be undone. Enter your <strong>password</strong> below, or <strong>DELETE</strong> if you use Google log in.
+              {authMe?.has_password
+                ? <>This action is permanent. Enter your <strong>password</strong> to confirm.</>
+                : <>This action is permanent. Type <strong>DELETE</strong> to confirm.</>}
             </p>
             {authMe?.has_password ? (
               <input

@@ -2335,6 +2335,16 @@ a.settings-my-workspaces-add-link:focus-visible {
   margin: 0.45rem 0 0;
 }
 
+.settings-name-edit {
+  margin-top: 1.25rem;
+}
+
+.settings-name-success {
+  margin: 0.45rem 0 0;
+  font-size: 0.82rem;
+  color: var(--color-success, #16a34a);
+}
+
 /* Workspace tab: admin (members, invites, owner) */
 .settings-workspace-admin {
   display: flex;
