@@ -2040,25 +2040,15 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   margin-left: auto;
 }
 
-.settings-account-actions .logout-btn {
-  margin-left: -0.35rem;
-  padding: 0.25rem 0.5rem;
-  border: none;
-  background: transparent;
-  box-shadow: none;
+button.surface-btn.settings-account-logout {
   color: var(--danger);
+  border-color: var(--danger);
 }
 
-.settings-account-actions .logout-btn:hover:not(:disabled) {
-  background: transparent;
-  border: none;
+button.surface-btn.settings-account-logout:hover:not(:disabled) {
   color: var(--danger-strong);
-  text-decoration: underline;
-}
-
-.settings-account-actions .logout-btn:focus-visible {
-  outline: 2px solid var(--danger);
-  outline-offset: 2px;
+  border-color: var(--danger-strong);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-blur-bg-strong));
 }
 
 .settings-account-delete-section {
@@ -2152,7 +2142,7 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
 /* Full width of settings content so the scrollbar sits on the panel edge, not beside the narrow list. */
 .settings-my-workspaces-list-scroll-outer {
   width: 100%;
-  max-height: min(38dvh, 14rem);
+  max-height: min(45dvh, 22rem);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;

@@ -4,7 +4,6 @@ import CopyClipboardButton from "./CopyClipboardButton";
 import {
   adminRevokeMemberMcpToken,
   createInviteCode,
-  getUser,
   applyEnterpriseSession,
   listInviteCodes,
   listMembers,
@@ -25,7 +24,6 @@ type WorkspaceAdminSectionProps = {
 
 export default function WorkspaceAdminSection({ workspaceId, isAdmin, viewerIsOwner }: WorkspaceAdminSectionProps) {
   const { bumpSession } = useAppUi();
-  const currentUser = getUser();
 
   const [members, setMembers] = useState<Member[]>([]);
   const [membersError, setMembersError] = useState<string | null>(null);

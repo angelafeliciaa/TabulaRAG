@@ -503,7 +503,7 @@ def list_members(current_user: AuthUser = Depends(require_auth)):
                 "role": role.value,
                 "joined_at": u.created_at.isoformat(),
             }
-            if viewer_is_admin or is_self:
+            if viewer_is_admin:
                 entry["login"] = u.login
             if viewer_is_admin:
                 has_mcp = (

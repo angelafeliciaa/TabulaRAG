@@ -31,12 +31,7 @@ const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; adm
     label: "Workspace",
     description: "Active workspace, members, and invites for this organization",
   },
-  {
-    id: "groups",
-    label: "Groups",
-    description: "User groups and their access to protected folders",
-    adminOnly: true,
-  },
+  // { id: "groups", label: "Groups", description: "User groups and their access to protected folders", adminOnly: true },
   { id: "appearance", label: "Appearance", description: "Theme and table value display" },
   { id: "mcp", label: "MCP", description: "External tool access" },
 ];
@@ -441,7 +436,7 @@ export default function Settings() {
                     >
                       Edit profile
                     </button>
-                    <button type="button" className="logout-btn" onClick={handleLogout}>
+                    <button type="button" className="surface-btn settings-account-logout" onClick={handleLogout}>
                       Log out
                     </button>
                   </div>
