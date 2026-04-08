@@ -836,6 +836,7 @@ def _issue_verification_email(user: User, display_name: str) -> tuple[bool, str]
             "SMTP configured but verification email failed for %s", user.login,
         )
 
+    return sent, code
 
 def _apply_google_profile_to_user(user: User, google_user: dict) -> None:
     """Persist Google photo and display name so email/password sessions can show them too."""
