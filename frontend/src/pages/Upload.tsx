@@ -2057,11 +2057,7 @@ export default function Upload({ homeControls = null }: UploadProps) {
       return;
     }
 
-    setErr(
-      rejectedMessages.length
-        ? `${rejectedMessages[0]}${rejectedMessages.length > 1 ? ` (+${rejectedMessages.length - 1} more)` : ""}`
-        : null,
-    );
+    setErr(null);
     setUploadQueue((previous) => [...previous, ...nextItems]);
 
     for (const item of nextItems) {
