@@ -831,9 +831,9 @@ def _issue_verification_email(user: User, display_name: str) -> tuple[bool, str]
     code = _assign_email_verification_code(user)
     sent = send_verification_email(user.login, code, display_name)
     if smtp_configured() and not sent:
-        raise HTTPException(
-            status_code=503,
-            detail="We couldn't create your account right now. Please try again later.",
+        import logging
+        logging.getLogger(__name__).warning(
+            "SMTP configured but verification email failed for %s", user.login,
         )
     return sent, code
 
