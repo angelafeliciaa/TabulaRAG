@@ -2359,6 +2359,14 @@ export default function Upload({ homeControls = null }: UploadProps) {
     () => filteredTables.slice(0, visibleTableCount),
     [filteredTables, visibleTableCount],
   );
+  const folderScopedTableIdSet = useMemo(
+    () => new Set(folderScopedTables.map((t) => t.dataset_id)),
+    [folderScopedTables],
+  );
+  const crossFolderSelectedIds = useMemo(
+    () => selectedTableIds.filter((id) => !folderScopedTableIdSet.has(id)),
+    [selectedTableIds, folderScopedTableIdSet],
+  );
   const hasMoreFilteredTables = visibleTableCount < filteredTables.length;
   const emptyTablesListMessage = useMemo(() => {
     if (normalizedTableSearchQuery) {
@@ -3506,6 +3514,26 @@ export default function Upload({ homeControls = null }: UploadProps) {
                 . Sorted by {tableSortHint}.
               </p>
 
+              {crossFolderSelectedIds.length > 0 && (
+                <div className="cross-folder-selection-banner">
+                  <span>
+                    {crossFolderSelectedIds.length === 1
+                      ? "1 table from another folder also selected"
+                      : `${crossFolderSelectedIds.length} tables from other folders also selected`}
+                  </span>
+                  <button
+                    type="button"
+                    className="cross-folder-selection-banner__clear"
+                    onClick={() =>
+                      setSelectedTableIds((prev) =>
+                        prev.filter((id) => folderScopedTableIdSet.has(id)),
+                      )
+                    }
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
               <div className="uploaded-tables-panel__tables-main">
                 {filteredTables.length === 0 ? (
                   <div
