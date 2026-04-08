@@ -2318,11 +2318,13 @@ export default function Upload({ homeControls = null }: UploadProps) {
   );
   const selectedFolderId = selectedFolder?.folder_id ?? null;
   const selectedFolderName = selectedFolder?.name ?? null;
+  const isUploadBlockedNoFolder = selectedFolder === null;
   /** Members (queriers) may upload only to public folders; owners/admins can upload anywhere. */
   const isUploadBlockedForNonPublicFolder =
     !userIsAdmin &&
     selectedFolder !== null &&
     selectedFolder.privacy !== "public";
+  const isUploadBlocked = isUploadBlockedNoFolder || isUploadBlockedForNonPublicFolder;
   const sortedTables = useMemo(() => {
     return sortTablesForDisplay(
       tables,
@@ -3404,16 +3406,20 @@ export default function Upload({ homeControls = null }: UploadProps) {
                     type="button"
                     className="tables-header-upload-btn"
                     aria-label={
-                      isUploadBlockedForNonPublicFolder
-                        ? "Upload unavailable — only workspace admins can add files to protected or private folders"
-                        : `Upload tables${selectedFolderName ? ` to ${selectedFolderName}` : ""}`
+                      isUploadBlockedNoFolder
+                        ? "Upload unavailable — select or create a folder first"
+                        : isUploadBlockedForNonPublicFolder
+                          ? "Upload unavailable — only workspace admins can add files to protected or private folders"
+                          : `Upload tables${selectedFolderName ? ` to ${selectedFolderName}` : ""}`
                     }
                     title={
-                      isUploadBlockedForNonPublicFolder
-                        ? "Only admins can upload to protected or private folders. Select a public folder to add files."
-                        : "Upload tables"
+                      isUploadBlockedNoFolder
+                        ? "Create a folder first to upload files"
+                        : isUploadBlockedForNonPublicFolder
+                          ? "Only admins can upload to protected or private folders. Select a public folder to add files."
+                          : "Upload tables"
                     }
-                    disabled={isUploadPopupOpen || isUploadBlockedForNonPublicFolder}
+                    disabled={isUploadPopupOpen || isUploadBlocked}
                     onClick={() => {
                       setUploadModalOpen(true);
                       setUploadPickerOpen(null);
