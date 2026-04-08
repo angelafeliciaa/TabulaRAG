@@ -46,6 +46,43 @@ def make_local_google_id() -> str:
     return "local_" + secrets.token_urlsafe(24).replace("-", "")[:40]
 
 
+# Letter-avatar backgrounds for email/password accounts (not Google OAuth).
+AVATAR_POP_COLORS = (
+    "#e11d48",
+    "#f97316",
+    "#ca8a04",
+    "#16a34a",
+    "#0d9488",
+    "#0284c7",
+    "#4f46e5",
+    "#7c3aed",
+    "#c026d3",
+    "#db2777",
+    "#0f766e",
+    "#b45309",
+)
+
+
+def is_local_email_account(user: User) -> bool:
+    return (user.google_id or "").startswith("local_")
+
+
+def random_avatar_color_index() -> int:
+    return secrets.randbelow(len(AVATAR_POP_COLORS))
+
+
+def resolve_avatar_hex(user: User) -> str:
+    """Solid fill for initial avatar when there is no Google photo URL."""
+    if not is_local_email_account(user):
+        return ""
+    idx = user.avatar_color_index
+    if idx is None:
+        idx = user.id % len(AVATAR_POP_COLORS)
+    else:
+        idx = idx % len(AVATAR_POP_COLORS)
+    return AVATAR_POP_COLORS[idx]
+
+
 def hash_password(raw: str) -> str:
     return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("ascii")
 
@@ -131,15 +168,18 @@ def mint_token_for_user(db, user: User, google_profile: dict | None = None) -> s
     if google_profile is not None:
         name = google_profile.get("name") or google_profile.get("email") or user.login
         avatar_url = google_profile.get("picture", "") or ""
+        avatar_hex = ""
     else:
-        name = user.login
-        avatar_url = ""
+        name = (user.display_name or "").strip() or user.login
+        avatar_url = (user.avatar_url or "").strip()
+        avatar_hex = "" if avatar_url else resolve_avatar_hex(user)
     m = get_active_membership(db, user)
     return create_jwt(
         user_id=user.id,
         login=user.login,
         name=name,
         avatar_url=avatar_url,
+        avatar_hex=avatar_hex,
         enterprise_id=m.enterprise_id if m else None,
         role=m.role.value if m else None,
     )
@@ -175,6 +215,7 @@ def create_jwt(
     login: str,
     name: str,
     avatar_url: str = "",
+    avatar_hex: str = "",
     enterprise_id: int | None = None,
     role: str | None = None,
 ) -> str:
@@ -184,6 +225,7 @@ def create_jwt(
         "login": login,
         "name": name or login,
         "avatar_url": avatar_url or "",
+        "avatar_hex": avatar_hex or "",
         "enterprise_id": enterprise_id,
         "role": role,
         "iat": now,

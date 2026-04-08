@@ -5,7 +5,10 @@ import McpTokenPanel from "../components/McpTokenPanel";
 import UserGroupsSection from "../components/UserGroupsSection";
 import WorkspaceAdminSection from "../components/WorkspaceAdminSection";
 import {
+  avatarPlaceholderStyle,
+  deleteAccount,
   disbandEnterprise,
+  fetchAuthMe,
   getUser,
   isAdmin,
   isOwner,
@@ -13,7 +16,6 @@ import {
   listMyWorkspaces,
   logout,
   patchStoredUser,
-  redirectToGoogleSignIn,
   renameWorkspace,
   switchWorkspace,
   type WorkspaceSummary,
@@ -80,9 +82,37 @@ export default function Settings() {
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
 
+  const [authMe, setAuthMe] = useState<{ has_password: boolean } | null>(null);
+  const [authMeError, setAuthMeError] = useState<string | null>(null);
+
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => {
     document.title = "Settings | TabulaRAG";
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAuthMeError(null);
+    fetchAuthMe()
+      .then((m) => {
+        if (!cancelled) {
+          setAuthMe(m);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthMeError("Could not load account security settings.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRev]);
 
   useEffect(() => {
     const fromUrl = tabFromSearchParam(searchParams.get("tab"));
@@ -213,12 +243,21 @@ export default function Settings() {
     window.location.replace("/");
   }
 
-  async function handleSwitchAccount() {
-    logout();
+  async function handleConfirmDeleteAccount() {
+    setDeleteBusy(true);
+    setDeleteError(null);
     try {
-      await redirectToGoogleSignIn({ prompt: "select_account" });
-    } catch {
+      if (authMe?.has_password) {
+        await deleteAccount({ password: deletePassword });
+      } else {
+        await deleteAccount({ confirmation: deleteConfirmText });
+      }
+      logout();
       window.location.replace("/");
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Could not delete account.");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -367,7 +406,15 @@ export default function Settings() {
                       width={56}
                       height={56}
                     />
-                  ) : null}
+                  ) : (
+                    <span
+                      className="settings-account-avatar settings-account-avatar--placeholder"
+                      style={user ? avatarPlaceholderStyle(user) : undefined}
+                      aria-hidden
+                    >
+                      {(user?.name || user?.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
+                    </span>
+                  )}
                   <div className="settings-account-meta">
                     <div className="settings-account-name">{user?.name || user?.login || "—"}</div>
                     <div className="small" style={{ opacity: 0.85 }}>
@@ -375,13 +422,6 @@ export default function Settings() {
                     </div>
                   </div>
                   <div className="settings-account-actions">
-                    <button
-                      type="button"
-                      className="surface-btn settings-switch-account-btn"
-                      onClick={() => void handleSwitchAccount()}
-                    >
-                      Switch account
-                    </button>
                     <button type="button" className="logout-btn" onClick={handleLogout}>
                       Log out
                     </button>
@@ -465,6 +505,28 @@ export default function Settings() {
                       Add or join workspace
                     </Link>
                   </div>
+                </div>
+
+                <div className="settings-account-delete-section">
+                  {authMeError ? (
+                    <p className="login-error" role="alert">
+                      {authMeError}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="settings-delete-account-open"
+                    disabled={authMe === null}
+                    title={authMe === null ? "Loading account security…" : undefined}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeletePassword("");
+                      setDeleteConfirmText("");
+                      setDeleteModalOpen(true);
+                    }}
+                  >
+                    Delete account
+                  </button>
                 </div>
               </div>
             </section>
@@ -641,6 +703,71 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {deleteModalOpen ? (
+        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+          <div
+            className="settings-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-delete-account-title"
+          >
+            <h2 id="settings-delete-account-title" className="settings-modal-title">
+              Delete your account?
+            </h2>
+            <p className="settings-modal-body">
+              This cannot be undone. Enter your <strong>password</strong> below, or <strong>DELETE</strong> if you use Google log in.
+            </p>
+            {authMe?.has_password ? (
+              <input
+                type="password"
+                className="input settings-modal-input"
+                placeholder="password"
+                autoComplete="current-password"
+                value={deletePassword}
+                onChange={(ev) => setDeletePassword(ev.target.value)}
+                disabled={deleteBusy}
+              />
+            ) : (
+              <input
+                type="text"
+                className="input settings-modal-input"
+                placeholder="Type DELETE"
+                autoComplete="off"
+                value={deleteConfirmText}
+                onChange={(ev) => setDeleteConfirmText(ev.target.value)}
+                disabled={deleteBusy}
+              />
+            )}
+            {deleteError ? (
+              <p className="login-error" role="alert">
+                {deleteError}
+              </p>
+            ) : null}
+            <div className="settings-modal-actions">
+              <button
+                type="button"
+                className="surface-btn"
+                disabled={deleteBusy}
+                onClick={() => {
+                  setDeleteModalOpen(false);
+                  setDeleteError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-modal-disband-confirm"
+                disabled={deleteBusy}
+                onClick={() => void handleConfirmDeleteAccount()}
+              >
+                {deleteBusy ? "Deleting…" : "Delete account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {disbandModalOpen ? (
         <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">

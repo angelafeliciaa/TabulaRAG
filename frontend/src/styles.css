@@ -2040,12 +2040,59 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   margin-left: auto;
 }
 
-/* Match `logout-btn` sizing for Switch account */
-.settings-switch-account-btn {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.8125rem;
+.settings-account-actions .logout-btn {
+  margin-left: -0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--danger);
+}
+
+.settings-account-actions .logout-btn:hover:not(:disabled) {
+  background: transparent;
+  border: none;
+  color: var(--danger-strong);
+  text-decoration: underline;
+}
+
+.settings-account-actions .logout-btn:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.settings-account-delete-section {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--surface-blur-border);
+}
+
+.settings-delete-account-open {
+  margin-top: 0.35rem;
+  padding: 0.5rem 1rem;
+  font: inherit;
+  font-size: 0.875rem;
   font-weight: 600;
   border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+
+.settings-delete-account-open:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.settings-delete-account-open:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-delete-account-open:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
 }
 
 .settings-account-avatar {
@@ -2054,6 +2101,18 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid var(--surface-blur-border);
+}
+
+.settings-account-avatar--placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-size: 1.25rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--surface-blur-bg-strong);
+  color: var(--text-muted);
 }
 
 .settings-account-workspace {
@@ -2093,7 +2152,7 @@ a.sort-menu-item.top-bar-workspace-menu-add:focus {
 /* Full width of settings content so the scrollbar sits on the panel edge, not beside the narrow list. */
 .settings-my-workspaces-list-scroll-outer {
   width: 100%;
-  max-height: min(50dvh, 20rem);
+  max-height: min(38dvh, 14rem);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -6682,7 +6741,9 @@ input:focus-visible,
 }
 
 .login-split-overview {
-  padding: clamp(2rem, 5vw, 3.25rem);
+  padding-block: clamp(2rem, 5vw, 3.25rem);
+  padding-inline-end: clamp(2rem, 5vw, 3.25rem);
+  padding-inline-start: clamp(1.1rem, 2.6vw, 1.85rem);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -6878,7 +6939,8 @@ a.login-repo-btn:hover {
   gap: 0.65rem;
   padding: 1.6rem 1.4rem;
   box-sizing: border-box;
-  min-height: 31rem;
+  /* Enough for create-account fields; sign-in shares height with footer at bottom via margin-top: auto */
+  min-height: 30rem;
   border-radius: 20px;
   border: 1px solid color-mix(in srgb, var(--surface-blur-border) 88%, transparent);
   background: color-mix(in srgb, var(--surface-blur-bg) 78%, transparent);
@@ -7094,7 +7156,8 @@ a.login-repo-btn:hover {
     border-bottom: 1px solid var(--surface-blur-border);
     text-align: center;
     align-items: center;
-    padding: clamp(1.75rem, 5vw, 2.5rem) clamp(1.25rem, 4vw, 2rem);
+    padding-block: clamp(1.75rem, 5vw, 2.5rem);
+    padding-inline: clamp(1rem, 3.5vw, 1.5rem) clamp(1.25rem, 4vw, 2rem);
   }
 
   .login-split-overview-brand {
@@ -7150,7 +7213,8 @@ a.login-repo-btn:hover {
 
   .login-split-overview {
     gap: 0.85rem;
-    padding: 1.2rem 1rem;
+    padding-block: 1.2rem;
+    padding-inline: 0.85rem 1rem;
   }
 
   .login-split-overview-brand {
@@ -7196,11 +7260,17 @@ a.login-repo-btn:hover {
     max-width: none;
     padding: 1rem 0.9rem;
     gap: 0.5rem;
-    min-height: auto;
+    min-height: min(28rem, calc(100dvh - 9rem));
+    max-height: calc(100dvh - 7rem);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   .login-auth-card-footer {
-    margin-top: 0.65rem;
+    margin-top: auto;
+    padding-top: 0.35rem;
+    flex-shrink: 0;
   }
 
   .login-auth-title {
@@ -7222,7 +7292,8 @@ a.login-repo-btn:hover {
 @media (max-width: 390px) and (max-height: 720px) {
   .login-split-overview {
     gap: 0.72rem;
-    padding: 1rem 0.92rem;
+    padding-block: 1rem;
+    padding-inline: 0.82rem 0.92rem;
   }
 
   .login-split-overview-logo {
@@ -7498,6 +7569,70 @@ a.login-repo-btn:hover {
   cursor: not-allowed;
 }
 
+.login-btn.login-btn-secondary {
+  margin-top: 0.5rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.login-verify-resend-hint {
+  font-size: 0.8125rem;
+  margin: 0 0 0.5rem;
+  line-height: 1.35;
+  opacity: 0.92;
+}
+
+.login-verify-code-row {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-bottom: 0.35rem;
+}
+
+.login-verify-code-digit {
+  width: 2.65rem;
+  min-width: 0;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 1.2rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+  letter-spacing: 0;
+}
+
+@media (max-width: 380px) {
+  .login-verify-code-row {
+    gap: 0.32rem;
+  }
+
+  .login-verify-code-digit {
+    width: 2.35rem;
+    font-size: 1.05rem;
+  }
+}
+
+.login-verify-back {
+  display: block;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.35rem;
+  text-align: center;
+}
+
+.login-forgot-password-row {
+  margin: -0.25rem 0 0.5rem;
+  text-align: right;
+}
+
+.login-forgot-password-row .login-auth-switch-btn {
+  font-size: 0.875rem;
+}
+
 /* Dark: --accent is a light token; #fff on that wash is illegible — invert like a solid CTA */
 :root[data-theme="dark"] .login-btn:not(.login-btn-google) {
   background: var(--text);
@@ -7508,6 +7643,11 @@ a.login-repo-btn:hover {
   .login-btn:not(.login-btn-google):hover:not(:disabled) {
   opacity: 0.92;
   filter: brightness(1.05);
+}
+
+:root[data-theme="dark"] .login-btn.login-btn-secondary {
+  color: var(--text);
+  border-color: var(--text-muted, rgba(255, 255, 255, 0.45));
 }
 
 /* ── GitHub login button ─────────────────────────────────────────────────────── */
@@ -7540,6 +7680,34 @@ a.login-repo-btn:hover {
 
 .user-menu--compact {
   gap: 10px;
+}
+
+.top-bar-theme-toggle.icon-button {
+  width: 36px;
+  height: 36px;
+  border-color: var(--surface-blur-border);
+  background: var(--surface-blur-bg);
+  color: var(--text);
+}
+
+.top-bar-theme-toggle.icon-button:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.app-theme-toggle-float {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  z-index: 20005;
+}
+
+.app-theme-toggle-float .top-bar-theme-toggle.icon-button {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="dark"] .app-theme-toggle-float .top-bar-theme-toggle.icon-button {
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
 }
 
 .user-avatar {

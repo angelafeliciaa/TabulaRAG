@@ -2,17 +2,16 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppUiProvider, useAppUi } from "./appUiContext";
 import {
+  avatarPlaceholderStyle,
   getUser,
   isAuthenticated,
   listMyWorkspaces,
   logout,
-  redirectToGoogleSignIn,
   switchWorkspace,
   type WorkspaceSummary,
 } from "./api";
 import logo from "./images/logo-64.webp";
 import logoutIcon from "./images/logout.png";
-import switchIcon from "./images/switch.png";
 import HighlightView from "./pages/HighlightView";
 import TableView from "./pages/TableView";
 import Upload from "./pages/Upload";
@@ -20,6 +19,7 @@ import AggregateTableView from "./pages/AggregateTable";
 import AuthCallback from "./pages/AuthCallback";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
+import ResetPassword from "./pages/ResetPassword";
 import Settings from "./pages/Settings";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -44,6 +44,41 @@ function workspaceRoleLabel(role: WorkspaceSummary["role"]): string {
     return "Member";
   }
   return "";
+}
+
+/** Quick dark/light toggle (same preference as Settings → Appearance). */
+function ThemeToggleButton({ className = "" }: { className?: string }) {
+  const { theme, setTheme } = useAppUi();
+  const isDark = theme === "dark";
+  return (
+    <button
+      type="button"
+      className={`top-bar-theme-toggle icon-button${className ? ` ${className}` : ""}`}
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      title={isDark ? "Light mode" : "Dark mode"}
+    >
+      {isDark ? (
+        <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth={2} />
+          <path
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"
+          />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
+          <path
+            fill="currentColor"
+            d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+          />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 function AppContent() {
@@ -216,16 +251,6 @@ function AppContent() {
     window.location.replace("/");
   }
 
-  async function handleSwitchAccount() {
-    setAccountMenuOpen(false);
-    logout();
-    try {
-      await redirectToGoogleSignIn({ prompt: "select_account" });
-    } catch {
-      window.location.replace("/");
-    }
-  }
-
   const topBarControls =
     isAuthenticated() && user ? (
       <div className="user-menu user-menu--compact">
@@ -319,6 +344,7 @@ function AppContent() {
             )}
           </div>
         )}
+        <ThemeToggleButton />
         <div className="sort-menu-wrap top-bar-account-menu-wrap" ref={accountMenuWrapRef}>
           <button
             ref={accountMenuButtonRef}
@@ -336,7 +362,11 @@ function AppContent() {
             {user.avatar_url ? (
               <img src={user.avatar_url} alt="" className="user-avatar" />
             ) : (
-              <span className="user-avatar user-avatar--placeholder" aria-hidden>
+              <span
+                className="user-avatar user-avatar--placeholder"
+                style={avatarPlaceholderStyle(user)}
+                aria-hidden
+              >
                 {(user.name || user.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
               </span>
             )}
@@ -382,18 +412,6 @@ function AppContent() {
                   <span>Settings</span>
                 </span>
               </Link>
-              <button type="button" role="menuitem" className="sort-menu-item top-bar-account-menu-action" onClick={() => void handleSwitchAccount()}>
-                <span className="top-bar-account-menu-item-content">
-                  <img
-                    src={switchIcon}
-                    alt=""
-                    aria-hidden="true"
-                    className="top-bar-account-menu-icon top-bar-account-menu-icon-image"
-                  />
-                  <span>Switch account</span>
-                </span>
-              </button>
-              <div className="top-bar-workspace-menu-sep" aria-hidden="true" />
               <button type="button" role="menuitem" className="sort-menu-item top-bar-account-menu-action top-bar-account-menu-logout" onClick={handleAccountLogout}>
                 <span className="top-bar-account-menu-item-content">
                   <img
@@ -413,6 +431,11 @@ function AppContent() {
 
   return (
     <div className="app-shell">
+      {!isAuthenticated() ? (
+        <div className="app-theme-toggle-float">
+          <ThemeToggleButton />
+        </div>
+      ) : null}
       {!onHomePage && !showInlineTableHeader && (
         <Link
           className={`app-brand${useIconOnlyBrand ? " app-brand--icon-only" : ""}`}
@@ -522,12 +545,15 @@ function AppContent() {
             path="/settings"
             element={
               <AuthGuard>
-                <EnterpriseGuard>
-                  <Settings />
-                </EnterpriseGuard>
+                <Settings />
               </AuthGuard>
             }
           />
+          <Route
+            path="/forgot-password"
+            element={<Navigate to="/" replace state={{ openForgotPassword: true }} />}
+          />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route
             path="/admin"
             element={

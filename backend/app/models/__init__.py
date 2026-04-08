@@ -11,6 +11,7 @@ from sqlalchemy import (
     JSON,
     String,
     UniqueConstraint,
+    false,
     true,
 )
 from sqlalchemy.orm import relationship
@@ -82,11 +83,18 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     google_id = Column(String(64), unique=True, nullable=False)
+    avatar_color_index = Column(Integer, nullable=True)
+    # Set when the user signs in with Google (or links Google); used for JWT when not using OAuth profile inline.
+    avatar_url = Column(String(2048), nullable=True)
+    display_name = Column(String(255), nullable=True)
     login = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=True)
+    pending_password_hash = Column(String(255), nullable=True)
     email_verified = Column(Boolean, nullable=False, server_default=true(), default=True)
     verification_code_hash = Column(String(128), nullable=True)
     verification_code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    password_reset_token_hash = Column(String(128), nullable=True)
+    password_reset_expires_at = Column(DateTime(timezone=True), nullable=True)
     last_active_enterprise_id = Column(
         Integer,
         ForeignKey("enterprises.id", ondelete="SET NULL"),

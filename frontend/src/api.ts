@@ -1,4 +1,15 @@
+import type { CSSProperties } from "react";
+
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+/** Aligned with backend `app.auth.is_valid_email_shape` for client-side checks. */
+export function isValidEmailShape(email: string): boolean {
+  const e = (email || "").trim();
+  if (!e || e.length > 255) return false;
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+}
+
+export const INVALID_EMAIL_MESSAGE = "Please enter a valid email.";
 
 const TOKEN_KEY = "tabularag_token";
 const USER_KEY = "tabularag_user";
@@ -7,8 +18,18 @@ export interface AuthUser {
   login: string;
   name: string;
   avatar_url: string;
+  /** Solid background for letter avatar (email/password accounts without a photo URL). */
+  avatar_hex?: string;
   role: "owner" | "admin" | "querier" | null;
   enterprise_id: number | null;
+}
+
+/** Inline styles for the initial-based avatar when `avatar_hex` is set. */
+export function avatarPlaceholderStyle(user: AuthUser): CSSProperties | undefined {
+  if (user.avatar_url || !user.avatar_hex) {
+    return undefined;
+  }
+  return { backgroundColor: user.avatar_hex, color: "#fff" };
 }
 
 export function getToken(): string | null {
@@ -75,7 +96,11 @@ export async function getGoogleClientId(): Promise<string> {
   return data.client_id;
 }
 
-/** Full browser redirect to Google OAuth (used by Login and “Switch account”). */
+/**
+ * Full browser redirect to Google OAuth (e.g. Login).
+ * Omit `prompt` for default Google behavior (no forced multi-account chooser).
+ * Use `prompt: "select_account"` only when you explicitly need the account picker.
+ */
 export async function redirectToGoogleSignIn(options?: {
   prompt?: "select_account" | "consent" | "none";
 }): Promise<void> {
@@ -98,7 +123,51 @@ export type AuthSessionResponse = {
   token: string;
   user: AuthUser;
   onboarding_required: boolean;
+  /** Present when Google sign-in was linked to an existing email/password account. */
+  notice?: string;
 };
+
+export type EmailRegisterPendingResponse = {
+  verification_required: true;
+  email: string;
+  email_sent: boolean;
+  /** When set, user already had Google sign-in; code confirms adding the password they chose. */
+  verification_kind?: "google_add_password";
+};
+
+/** Register hit an email that already uses Google sign-in; client should offer Google login, not email verification. */
+export type GoogleAccountExistsResponse = {
+  google_account_exists: true;
+  email: string;
+  message: string;
+};
+
+export type EmailRegisterResponse =
+  | AuthSessionResponse
+  | EmailRegisterPendingResponse
+  | GoogleAccountExistsResponse;
+
+export function isGoogleAccountExists(
+  data: EmailRegisterResponse,
+): data is GoogleAccountExistsResponse {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "google_account_exists" in data &&
+    (data as GoogleAccountExistsResponse).google_account_exists === true
+  );
+}
+
+export function isRegisterPending(
+  data: EmailRegisterResponse,
+): data is EmailRegisterPendingResponse {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "verification_required" in data &&
+    (data as EmailRegisterPendingResponse).verification_required === true
+  );
+}
 
 async function readApiErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
@@ -141,7 +210,7 @@ export async function registerWithEmail(body: {
   email: string;
   password: string;
   name?: string;
-}): Promise<AuthSessionResponse> {
+}): Promise<EmailRegisterResponse> {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -150,10 +219,51 @@ export async function registerWithEmail(body: {
   if (!res.ok) {
     throw new Error(await readApiErrorMessage(res));
   }
+  const data = (await res.json()) as EmailRegisterResponse;
+  if (isGoogleAccountExists(data)) {
+    return data;
+  }
+  if (isRegisterPending(data)) {
+    return data;
+  }
+  localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+  return data;
+}
+
+export async function verifyEmailWithCode(
+  email: string,
+  code: string,
+): Promise<AuthSessionResponse> {
+  const res = await fetch(`${API_BASE}/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
   const data = (await res.json()) as AuthSessionResponse;
   localStorage.setItem(TOKEN_KEY, data.token);
   localStorage.setItem(USER_KEY, JSON.stringify(data.user));
   return data;
+}
+
+export async function resendVerificationEmail(
+  email: string,
+  password?: string,
+): Promise<{ email: string; email_sent: boolean }> {
+  const res = await fetch(`${API_BASE}/auth/resend-verification`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(
+      password != null && password !== "" ? { email, password } : { email },
+    ),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  return (await res.json()) as { email: string; email_sent: boolean };
 }
 
 export async function loginWithEmail(
@@ -172,6 +282,87 @@ export async function loginWithEmail(
   localStorage.setItem(TOKEN_KEY, data.token);
   localStorage.setItem(USER_KEY, JSON.stringify(data.user));
   return data;
+}
+
+export type AuthMeResponse = { login: string; has_password: boolean };
+
+export async function fetchAuthMe(): Promise<AuthMeResponse> {
+  const res = await authFetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  return (await res.json()) as AuthMeResponse;
+}
+
+export async function forgotPasswordRequest(
+  email: string,
+): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  return (await res.json()) as { ok: boolean; message: string };
+}
+
+export async function resetPasswordWithToken(
+  token: string,
+  newPassword: string,
+): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+  return (await res.json()) as { ok: boolean; message: string };
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/change-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+}
+
+export async function setPassword(newPassword: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/set-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
+}
+
+export async function deleteAccount(body: {
+  password?: string;
+  confirmation?: string;
+}): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/delete-account`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await readApiErrorMessage(res));
+  }
 }
 
 function decodeJwtPayloadJson(token: string): Record<string, unknown> | null {
@@ -200,6 +391,7 @@ export function applyEnterpriseSession(
   localStorage.setItem(TOKEN_KEY, token);
   const prev = getUser();
   const nextRole = normalizeWorkspaceRole(role);
+  const decoded = decodeJwtPayloadJson(token);
   if (prev) {
     localStorage.setItem(
       USER_KEY,
@@ -207,11 +399,14 @@ export function applyEnterpriseSession(
         ...prev,
         enterprise_id: enterpriseId,
         role: nextRole,
+        ...(decoded && typeof decoded.avatar_hex === "string"
+          ? { avatar_hex: decoded.avatar_hex }
+          : {}),
       }),
     );
     return;
   }
-  const claims = decodeJwtPayloadJson(token);
+  const claims = decoded;
   if (claims) {
     const resolvedEid =
       enterpriseId !== null
@@ -228,6 +423,7 @@ export function applyEnterpriseSession(
         login: String(claims.login ?? ""),
         name: String(claims.name ?? claims.login ?? ""),
         avatar_url: String(claims.avatar_url ?? ""),
+        avatar_hex: typeof claims.avatar_hex === "string" ? claims.avatar_hex : "",
         enterprise_id: resolvedEid,
         role: nextRole ?? claimRole,
       }),

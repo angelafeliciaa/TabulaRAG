@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 os.environ.setdefault("API_KEY", "test-key")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-fixed-for-email-verification-hmac")
 
 import app.db as app_db
 import app.main as app_main

@@ -497,6 +497,21 @@ def ensure_users_email_verification_columns() -> None:
                 )
             else:
                 conn.execute(text("ALTER TABLE users ADD COLUMN verification_code_expires_at DATETIME NULL"))
+        if "password_reset_token_hash" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token_hash VARCHAR(128) NULL"))
+        if "password_reset_expires_at" not in cols:
+            if dialect == "postgresql":
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at TIMESTAMPTZ NULL"))
+            else:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_expires_at DATETIME NULL"))
+        if "pending_password_hash" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN pending_password_hash VARCHAR(255) NULL"))
+        if "avatar_color_index" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN avatar_color_index INTEGER NULL"))
+        if "avatar_url" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(2048) NULL"))
+        if "display_name" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR(255) NULL"))
 
 
 def ensure_users_legacy_enterprise_role_nullable() -> None:

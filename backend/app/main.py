@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional, Tuple
 import httpx
 from pydantic import BaseModel, Field
@@ -72,12 +73,28 @@ from app.auth import (
     get_active_membership,
     GOOGLE_CLIENT_ID,
     hash_password,
+    is_local_email_account,
     is_valid_email_shape,
     make_local_google_id,
     mint_token_for_user,
     normalize_email,
+    random_avatar_color_index,
     require_auth,
+    resolve_avatar_hex,
     verify_password,
+)
+from app.email_verification import (
+    generate_password_reset_token,
+    generate_verification_code,
+    hash_password_reset_token,
+    hash_verification_code,
+    normalize_verification_code_input,
+    password_reset_ttl_minutes,
+    send_password_reset_email,
+    send_verification_email,
+    smtp_configured,
+    verification_codes_match,
+    verification_ttl_minutes,
 )
 
 
@@ -205,10 +222,23 @@ def health_deps():
         qdrant_ok = False
 
     all_ok = postgres_ok and qdrant_ok
+
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_pw = os.getenv("SMTP_PASSWORD", "")
+    smtp_from = os.getenv("SMTP_FROM", "").strip() or smtp_user
+    smtp_ready = bool(smtp_host and smtp_user and smtp_pw and smtp_from)
+
     return {
         "status": "ok" if all_ok else "degraded",
         "postgres": "ok" if postgres_ok else "down",
         "qdrant": "ok" if qdrant_ok else "down",
+        "smtp": {
+            "host_configured": bool(smtp_host),
+            "auth_configured": bool(smtp_user and smtp_pw),
+            "from_configured": bool(smtp_from),
+            "ready_to_send": smtp_ready,
+        },
     }
 
 
@@ -699,6 +729,46 @@ def auth_verify(credentials: None = Depends(require_auth)) -> dict:
     return {"valid": True}
 
 
+@app.get("/auth/me", include_in_schema=False)
+def auth_me(current_user: AuthUser = Depends(require_auth)) -> dict:
+    if current_user.id == 0:
+        return {"login": "api_key", "has_password": False, "is_local": False, "display_name": ""}
+    with SessionLocal() as db:
+        user = db.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        return {
+            "login": user.login,
+            "has_password": user.password_hash is not None,
+            "is_local": is_local_email_account(user),
+            "display_name": (user.display_name or "").strip(),
+        }
+
+
+class UpdateProfileBody(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=255)
+
+
+@app.patch("/auth/me", include_in_schema=False)
+def auth_me_update(body: UpdateProfileBody, current_user: AuthUser = Depends(require_auth)):
+    if current_user.id == 0:
+        raise HTTPException(status_code=403, detail="Cannot update API key profile")
+    with SessionLocal() as db:
+        user = db.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        if not is_local_email_account(user):
+            raise HTTPException(status_code=403, detail="Google accounts manage their name through Google.")
+        name = body.display_name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty.")
+        user.display_name = name[:255]
+        db.add(user)
+        db.commit()
+        token = mint_token_for_user(db, user)
+        return {"token": token, "display_name": user.display_name}
+
+
 @app.get("/auth/google", include_in_schema=False)
 def auth_google_redirect():
     if not GOOGLE_CLIENT_ID:
@@ -717,6 +787,69 @@ class EmailLoginBody(BaseModel):
     password: str = Field(..., min_length=1, max_length=72)
 
 
+class VerifyEmailBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    code: str = Field(..., min_length=4, max_length=32)
+
+
+class ResendVerificationBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str | None = Field(None, max_length=72)
+
+
+class ForgotPasswordBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+
+
+class ResetPasswordBody(BaseModel):
+    token: str = Field(..., min_length=8, max_length=512)
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=72)
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+
+class SetPasswordBody(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+
+class DeleteAccountBody(BaseModel):
+    password: str | None = Field(None, max_length=72)
+    confirmation: str | None = Field(None, max_length=32)
+
+
+def _assign_email_verification_code(user: User) -> str:
+    code = generate_verification_code()
+    user.verification_code_hash = hash_verification_code(code)
+    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=verification_ttl_minutes(),
+    )
+    return code
+
+
+def _issue_verification_email(user: User, display_name: str) -> tuple[bool, str]:
+    code = _assign_email_verification_code(user)
+    sent = send_verification_email(user.login, code, display_name)
+    if smtp_configured() and not sent:
+        raise HTTPException(
+            status_code=503,
+            detail="We couldn't create your account right now. Please try again later.",
+        )
+    return sent, code
+
+
+def _apply_google_profile_to_user(user: User, google_user: dict) -> None:
+    """Persist Google photo and display name so email/password sessions can show them too."""
+    pic = (google_user.get("picture") or "").strip()
+    if pic:
+        user.avatar_url = pic[:2048]
+    nm = (google_user.get("name") or "").strip()
+    if nm:
+        user.display_name = nm[:255]
+
+
 def _build_auth_response(
     db,
     user: User,
@@ -724,6 +857,7 @@ def _build_auth_response(
     *,
     profile: dict | None = None,
     display_name: str | None = None,
+    notice: str | None = None,
 ) -> dict:
     membership_count = db.execute(
         select(func.count()).where(EnterpriseMembership.user_id == user.id),
@@ -734,27 +868,33 @@ def _build_auth_response(
     if profile is not None:
         u_name = profile.get("name") or user.login
         u_avatar = profile.get("picture", "") or ""
+        u_avatar_hex = ""
     else:
-        u_name = (display_name or "").strip() or user.login
-        u_avatar = ""
-    return {
+        u_name = (display_name or "").strip() or (user.display_name or "").strip() or user.login
+        u_avatar = (user.avatar_url or "").strip()
+        u_avatar_hex = "" if u_avatar else resolve_avatar_hex(user)
+    out: dict = {
         "token": token,
         "user": {
             "login": user.login,
             "name": u_name,
             "avatar_url": u_avatar,
+            "avatar_hex": u_avatar_hex,
             "role": role,
             "enterprise_id": enterprise_id,
         },
         "onboarding_required": membership_count == 0,
     }
+    if notice:
+        out["notice"] = notice
+    return out
 
 
 @app.post("/auth/register", include_in_schema=False)
 def auth_register(body: EmailRegisterBody):
     email = normalize_email(body.email)
     if not is_valid_email_shape(email):
-        raise HTTPException(status_code=400, detail="Invalid email address")
+        raise HTTPException(status_code=400, detail="Please enter a valid email.")
     display_name = (body.name or "").strip() or email.split("@", 1)[0]
 
     with SessionLocal() as db:
@@ -763,34 +903,321 @@ def auth_register(body: EmailRegisterBody):
         ).scalar_one_or_none()
         if dup is not None:
             if dup.password_hash is None:
+                if not dup.email_verified:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Sign in with Google first, then try again.",
+                    )
+                dup.pending_password_hash = hash_password(body.password)
+                db.add(dup)
+                db.commit()
+                return {
+                    "google_account_exists": True,
+                    "email": email,
+                    "message": (
+                        "We found an account for this email that signs in with Google. "
+                        "Use Sign in with Google to continue—the password you entered will be saved for email sign-in too."
+                    ),
+                }
+            if dup.email_verified:
+                raise HTTPException(
+                    status_code=409,
+                    detail="An account with this email already exists. Sign in instead.",
+                )
+            if not verify_password(body.password, dup.password_hash):
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "This email is already registered with Google sign-in. "
-                        "Sign in with Google, or use a different email."
+                        "This email is already registered but not verified. "
+                        "Use the same password you signed up with, then request a new code from the verify screen."
                     ),
                 )
-            raise HTTPException(
-                status_code=409,
-                detail="An account with this email already exists. Sign in instead.",
-            )
+            if not dup.display_name:
+                dup.display_name = display_name
+            db.add(dup)
+            email_sent, _code = _issue_verification_email(dup, display_name)
+            db.commit()
+            return {
+                "verification_required": True,
+                "email": email,
+                "email_sent": email_sent,
+            }
+
         user = User(
             google_id=make_local_google_id(),
             login=email,
+            display_name=display_name,
             password_hash=hash_password(body.password),
+            email_verified=False,
+            avatar_color_index=random_avatar_color_index(),
         )
+        db.add(user)
+        db.flush()
+        email_sent, _code = _issue_verification_email(user, display_name)
+        db.commit()
+        return {
+            "verification_required": True,
+            "email": email,
+            "email_sent": email_sent,
+        }
+
+
+@app.post("/auth/verify-email", include_in_schema=False)
+def auth_verify_email(body: VerifyEmailBody):
+    email = normalize_email(body.email)
+    if not is_valid_email_shape(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email.")
+    code = normalize_verification_code_input(body.code)
+    if len(code) != 6:
+        raise HTTPException(status_code=400, detail="Enter the 6-digit code from your email.")
+
+    with SessionLocal() as db:
+        user = db.execute(
+            select(User).where(func.lower(User.login) == email),
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=400, detail="Invalid verification code.")
+
+        google_add_password = (
+            user.pending_password_hash is not None
+            and user.password_hash is None
+            and bool(user.email_verified)
+        )
+        standard_unverified = user.password_hash is not None and not bool(user.email_verified)
+
+        if not google_add_password and not standard_unverified:
+            raise HTTPException(status_code=400, detail="Invalid verification code.")
+        if not google_add_password and user.email_verified:
+            raise HTTPException(status_code=400, detail="This email is already verified. Sign in.")
+        if not verification_codes_match(code, user.verification_code_hash):
+            raise HTTPException(status_code=400, detail="Invalid verification code.")
+        exp = user.verification_code_expires_at
+        if exp is not None:
+            exp_aware = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+            if exp_aware < datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Verification code has expired. Request a new code.",
+                )
+        if google_add_password:
+            user.password_hash = user.pending_password_hash
+            user.pending_password_hash = None
+        else:
+            user.email_verified = True
+        user.verification_code_hash = None
+        user.verification_code_expires_at = None
         db.add(user)
         db.commit()
         db.refresh(user)
         token = mint_token_for_user(db, user)
-        return _build_auth_response(db, user, token, display_name=display_name)
+        return _build_auth_response(db, user, token)
+
+
+@app.post("/auth/resend-verification", include_in_schema=False)
+def auth_resend_verification(body: ResendVerificationBody):
+    email = normalize_email(body.email)
+    if not is_valid_email_shape(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email.")
+
+    with SessionLocal() as db:
+        user = db.execute(
+            select(User).where(func.lower(User.login) == email),
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=400, detail="Incorrect email or password.")
+
+        google_add_password = (
+            user.pending_password_hash is not None
+            and user.password_hash is None
+            and bool(user.email_verified)
+        )
+        standard_unverified = user.password_hash is not None and not bool(user.email_verified)
+        pw = (body.password or "").strip()
+        if pw:
+            if google_add_password:
+                if not verify_password(pw, user.pending_password_hash):
+                    raise HTTPException(status_code=400, detail="Incorrect email or password.")
+            else:
+                if not user.password_hash:
+                    raise HTTPException(status_code=400, detail="Incorrect email or password.")
+                if not verify_password(pw, user.password_hash):
+                    raise HTTPException(status_code=400, detail="Incorrect email or password.")
+                if user.email_verified:
+                    raise HTTPException(status_code=400, detail="This account is already verified. Sign in.")
+        else:
+            if not google_add_password and not standard_unverified:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This email is not waiting for verification.",
+                )
+        display_name = (user.display_name or "").strip() or user.login.split("@", 1)[0]
+        db.add(user)
+        email_sent, _code = _issue_verification_email(user, display_name)
+        db.commit()
+        if email_sent:
+            logger.info("Verification email sent (resend) to %s", email)
+        else:
+            logger.warning(
+                "Verification code for %s was not emailed (SMTP_HOST empty); see server logs for the code",
+                email,
+            )
+        return {"email": email, "email_sent": email_sent}
+
+
+@app.post("/auth/forgot-password", include_in_schema=False)
+def auth_forgot_password(body: ForgotPasswordBody) -> dict:
+    """Always returns the same shape to avoid email enumeration."""
+    email = normalize_email(body.email)
+    ok = {
+        "ok": True,
+        "message": "If an account exists for that email, we sent reset instructions.",
+    }
+    if not is_valid_email_shape(email):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid email.",
+        )
+    with SessionLocal() as db:
+        user = db.execute(
+            select(User).where(func.lower(User.login) == email),
+        ).scalar_one_or_none()
+        if user is None or not user.password_hash or not user.email_verified:
+            return ok
+        raw = generate_password_reset_token()
+        user.password_reset_token_hash = hash_password_reset_token(raw)
+        user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=password_reset_ttl_minutes(),
+        )
+        db.add(user)
+        db.commit()
+        display_name = (user.display_name or "").strip() or user.login.split("@", 1)[0]
+        sent = send_password_reset_email(user.login, raw, display_name)
+        if smtp_configured() and not sent:
+            logger.warning("Password reset email failed to send for %s", email)
+    return ok
+
+
+@app.post("/auth/reset-password", include_in_schema=False)
+def auth_reset_password(body: ResetPasswordBody) -> dict:
+    token = (body.token or "").strip()
+    if len(token) < 10:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link.")
+    th = hash_password_reset_token(token)
+    with SessionLocal() as db:
+        user = db.execute(
+            select(User).where(User.password_reset_token_hash == th),
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset link.")
+        exp = user.password_reset_expires_at
+        if exp is not None:
+            exp_aware = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+            if exp_aware < datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=400,
+                    detail="This reset link has expired. Request a new one.",
+                )
+        user.password_hash = hash_password(body.new_password)
+        user.password_reset_token_hash = None
+        user.password_reset_expires_at = None
+        user.email_verified = True
+        db.add(user)
+        db.commit()
+    return {"ok": True, "message": "Password updated. You can sign in."}
+
+
+@app.post("/auth/change-password", include_in_schema=False)
+def auth_change_password(
+    body: ChangePasswordBody,
+    current_user: AuthUser = Depends(require_auth),
+) -> dict:
+    if current_user.id == 0:
+        raise HTTPException(status_code=403, detail="Not available for API key sessions.")
+    with SessionLocal() as db:
+        user = db.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        if not user.password_hash:
+            raise HTTPException(
+                status_code=400,
+                detail="You sign in with Google only. Use “Set password” to add one first.",
+            )
+        if not verify_password(body.current_password, user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password is incorrect.")
+        user.password_hash = hash_password(body.new_password)
+        user.password_reset_token_hash = None
+        user.password_reset_expires_at = None
+        db.add(user)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/auth/set-password", include_in_schema=False)
+def auth_set_password(
+    body: SetPasswordBody,
+    current_user: AuthUser = Depends(require_auth),
+) -> dict:
+    if current_user.id == 0:
+        raise HTTPException(status_code=403, detail="Not available for API key sessions.")
+    with SessionLocal() as db:
+        user = db.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        if user.password_hash is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="You already have a password. Use change password instead.",
+            )
+        user.password_hash = hash_password(body.new_password)
+        db.add(user)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/auth/delete-account", include_in_schema=False)
+def auth_delete_account(
+    body: DeleteAccountBody,
+    current_user: AuthUser = Depends(require_auth),
+) -> dict:
+    if current_user.id == 0:
+        raise HTTPException(status_code=403, detail="Not available for API key sessions.")
+    with SessionLocal() as db:
+        user = db.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        if user.password_hash:
+            if not body.password or not verify_password(body.password, user.password_hash):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Enter your current password to delete your account.",
+                )
+        else:
+            if (body.confirmation or "").strip() != "DELETE":
+                raise HTTPException(
+                    status_code=400,
+                    detail='Type DELETE in the confirmation field to delete your Google-only account.',
+                )
+        owner_row = db.execute(
+            select(EnterpriseMembership.id).where(
+                EnterpriseMembership.user_id == user.id,
+                EnterpriseMembership.role == UserRole.owner,
+            ).limit(1),
+        ).scalar_one_or_none()
+        if owner_row is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Disband any workspace where you are the owner before deleting your account.",
+            )
+        db.delete(user)
+        db.commit()
+    return {"ok": True}
 
 
 @app.post("/auth/login", include_in_schema=False)
 def auth_login(body: EmailLoginBody):
     email = normalize_email(body.email)
     if not is_valid_email_shape(email):
-        raise HTTPException(status_code=400, detail="Invalid email address")
+        raise HTTPException(status_code=400, detail="Please enter a valid email.")
 
     with SessionLocal() as db:
         user = db.execute(
@@ -798,6 +1225,11 @@ def auth_login(body: EmailLoginBody):
         ).scalar_one_or_none()
         if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Incorrect email or password")
+        if not user.email_verified:
+            raise HTTPException(
+                status_code=403,
+                detail="Please verify your email first. Use the code we sent you, or request a new code from the sign-up screen.",
+            )
         token = mint_token_for_user(db, user)
         return _build_auth_response(db, user, token)
 
@@ -819,8 +1251,12 @@ async def auth_google_callback(body: dict):
     google_id = str(google_user["id"])
     login = normalize_email(google_user["email"])
     if not is_valid_email_shape(login):
-        raise HTTPException(status_code=400, detail="Google account email is missing or invalid")
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid email.",
+        )
 
+    google_link_notice: str | None = None
     with SessionLocal() as db:
         user = db.execute(select(User).where(User.google_id == google_id)).scalar_one_or_none()
         if user is None:
@@ -844,18 +1280,41 @@ async def auth_google_callback(body: dict):
                 else:
                     existing.google_id = google_id
                     existing.login = login
+                    existing.email_verified = True
                     user = existing
                     db.add(user)
+                    google_link_notice = (
+                        "Your Google account is now linked to the TabulaRAG profile for this email. "
+                        "You already had an email/password account here—we did not create a second one. "
+                        "Next time you can sign in with either Google or your password."
+                    )
             else:
-                user = User(google_id=google_id, login=login)
+                user = User(google_id=google_id, login=login, email_verified=True)
                 db.add(user)
         elif user.login != login:
             user.login = login
             db.add(user)
+        if user.pending_password_hash is not None:
+            if user.password_hash is None:
+                user.password_hash = user.pending_password_hash
+            user.pending_password_hash = None
+            db.add(user)
+        if user.verification_code_hash is not None or user.verification_code_expires_at is not None:
+            user.verification_code_hash = None
+            user.verification_code_expires_at = None
+            db.add(user)
+        _apply_google_profile_to_user(user, google_user)
+        db.add(user)
         db.commit()
         db.refresh(user)
         token = mint_token_for_user(db, user, google_user)
-        return _build_auth_response(db, user, token, profile=google_user)
+        return _build_auth_response(
+            db,
+            user,
+            token,
+            profile=google_user,
+            notice=google_link_notice,
+        )
 
 
 @app.post("/ingest", include_in_schema=False)

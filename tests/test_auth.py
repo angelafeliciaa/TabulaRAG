@@ -40,6 +40,7 @@ def test_create_and_decode_jwt():
     assert claims["login"] == "octocat@example.com"
     assert claims["name"] == "Octo Cat"
     assert claims["avatar_url"] == "https://example.com/avatar.png"
+    assert claims.get("avatar_hex") == ""
     assert claims.get("enterprise_id") is None
     assert claims.get("role") is None
 
