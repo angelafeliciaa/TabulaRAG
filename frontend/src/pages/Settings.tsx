@@ -24,20 +24,44 @@ import {
 
 type SettingsTab = "account" | "workspace" | "groups" | "appearance" | "mcp";
 
-const ALL_TABS: Array<{ id: SettingsTab; label: string; description: string; adminOnly?: boolean }> = [
-  { id: "account", label: "Account", description: "Your profile and workspaces" },
+const ALL_TABS: Array<{
+  id: SettingsTab;
+  label: string;
+  description: string;
+  adminOnly?: boolean;
+}> = [
+  {
+    id: "account",
+    label: "Account",
+    description: "Your profile and workspaces",
+  },
   {
     id: "workspace",
     label: "Workspace",
     description: "Active workspace, members, and invites for this organization",
   },
-  // { id: "groups", label: "Groups", description: "User groups and their access to protected folders", adminOnly: true },
-  { id: "appearance", label: "Appearance", description: "Theme and table value display" },
+  {
+    id: "groups",
+    label: "Groups",
+    description: "User groups and their access to protected folders",
+    adminOnly: true,
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Theme and table value display",
+  },
   { id: "mcp", label: "MCP", description: "External tool access" },
 ];
 
 function tabFromSearchParam(tab: string | null): SettingsTab | null {
-  if (tab === "workspace" || tab === "appearance" || tab === "mcp" || tab === "account" || tab === "groups") {
+  if (
+    tab === "workspace" ||
+    tab === "appearance" ||
+    tab === "mcp" ||
+    tab === "account" ||
+    tab === "groups"
+  ) {
     return tab;
   }
   return null;
@@ -46,7 +70,8 @@ function tabFromSearchParam(tab: string | null): SettingsTab | null {
 export default function Settings() {
   const user = getUser();
   const navigate = useNavigate();
-  const { theme, setTheme, valueMode, setValueMode, bumpSession, sessionRev } = useAppUi();
+  const { theme, setTheme, valueMode, setValueMode, bumpSession, sessionRev } =
+    useAppUi();
   const disbandNameInputRef = useRef<HTMLInputElement | null>(null);
   const leaveModalCancelRef = useRef<HTMLButtonElement | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -56,17 +81,23 @@ export default function Settings() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [wsError, setWsError] = useState<string | null>(null);
   const [workspacesLoading, setWorkspacesLoading] = useState(true);
-  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<number | null>(null);
+  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<
+    number | null
+  >(null);
   const [activeEnterpriseId, setActiveEnterpriseId] = useState<number | null>(
     () => getUser()?.enterprise_id ?? null,
   );
-  const [workspaceSwitchError, setWorkspaceSwitchError] = useState<string | null>(null);
+  const [workspaceSwitchError, setWorkspaceSwitchError] = useState<
+    string | null
+  >(null);
 
   const [workspaceRenameDraft, setWorkspaceRenameDraft] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameConfirmOpen, setRenameConfirmOpen] = useState(false);
-  const [renamePendingName, setRenamePendingName] = useState<string | null>(null);
+  const [renamePendingName, setRenamePendingName] = useState<string | null>(
+    null,
+  );
   const renameConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
 
   const [disbandModalOpen, setDisbandModalOpen] = useState(false);
@@ -78,7 +109,11 @@ export default function Settings() {
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
 
-  const [authMe, setAuthMe] = useState<{ has_password: boolean; is_local: boolean; display_name: string } | null>(null);
+  const [authMe, setAuthMe] = useState<{
+    has_password: boolean;
+    is_local: boolean;
+    display_name: string;
+  } | null>(null);
   const [authMeError, setAuthMeError] = useState<string | null>(null);
 
   const [editProfileOpen, setEditProfileOpen] = useState(false);
@@ -168,12 +203,15 @@ export default function Settings() {
 
   const workspacesSorted = useMemo(() => {
     return [...workspaces].sort((a, b) => {
-      return a.enterprise_name.localeCompare(b.enterprise_name, undefined, { sensitivity: "base" });
+      return a.enterprise_name.localeCompare(b.enterprise_name, undefined, {
+        sensitivity: "base",
+      });
     });
   }, [workspaces]);
 
   const activeWorkspace = useMemo(
-    () => workspaces.find((w) => w.enterprise_id === user?.enterprise_id) ?? null,
+    () =>
+      workspaces.find((w) => w.enterprise_id === user?.enterprise_id) ?? null,
     [workspaces, user?.enterprise_id],
   );
   const activeWorkspaceName = activeWorkspace?.enterprise_name ?? "";
@@ -184,7 +222,8 @@ export default function Settings() {
   }, [activeWorkspaceName]);
 
   const disbandNameMatches =
-    activeWorkspaceName.length > 0 && disbandNameInput.trim() === activeWorkspaceName.trim();
+    activeWorkspaceName.length > 0 &&
+    disbandNameInput.trim() === activeWorkspaceName.trim();
 
   useEffect(() => {
     if (!disbandModalOpen) return;
@@ -220,7 +259,10 @@ export default function Settings() {
 
   useEffect(() => {
     if (!renameConfirmOpen) return;
-    const t = window.setTimeout(() => renameConfirmCancelRef.current?.focus(), 50);
+    const t = window.setTimeout(
+      () => renameConfirmCancelRef.current?.focus(),
+      50,
+    );
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !renameBusy) {
         setRenameConfirmOpen(false);
@@ -257,7 +299,9 @@ export default function Settings() {
       logout();
       window.location.replace("/");
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Could not delete account.");
+      setDeleteError(
+        err instanceof Error ? err.message : "Could not delete account.",
+      );
     } finally {
       setDeleteBusy(false);
     }
@@ -290,7 +334,9 @@ export default function Settings() {
       setRenameConfirmOpen(false);
       setRenamePendingName(null);
     } catch (err) {
-      setRenameError(err instanceof Error ? err.message : "Failed to rename workspace");
+      setRenameError(
+        err instanceof Error ? err.message : "Failed to rename workspace",
+      );
     } finally {
       setRenameBusy(false);
     }
@@ -306,7 +352,9 @@ export default function Settings() {
       const ws = await listMyWorkspaces();
       if (ws.length > 0) {
         const next =
-          ws.find((w) => w.is_active) ?? ws.find((w) => w.enterprise_id !== leftId) ?? ws[0];
+          ws.find((w) => w.is_active) ??
+          ws.find((w) => w.enterprise_id !== leftId) ??
+          ws[0];
         await switchWorkspace(next.enterprise_id);
         bumpSession();
         navigate("/", { replace: true });
@@ -318,7 +366,9 @@ export default function Settings() {
       setDisbandModalOpen(false);
       setDisbandNameInput("");
     } catch (err) {
-      setDisbandError(err instanceof Error ? err.message : "Failed to disband workspace");
+      setDisbandError(
+        err instanceof Error ? err.message : "Failed to disband workspace",
+      );
     } finally {
       setDisbanding(false);
     }
@@ -338,7 +388,9 @@ export default function Settings() {
         navigate("/", { replace: true });
       }
     } catch (err) {
-      setLeaveError(err instanceof Error ? err.message : "Could not leave workspace");
+      setLeaveError(
+        err instanceof Error ? err.message : "Could not leave workspace",
+      );
     } finally {
       setLeaveBusy(false);
     }
@@ -352,7 +404,13 @@ export default function Settings() {
           className="settings-close"
           aria-label="Close settings and return home"
         >
-          <svg viewBox="0 0 24 24" width={20} height={20} aria-hidden="true" focusable="false">
+          <svg
+            viewBox="0 0 24 24"
+            width={20}
+            height={20}
+            aria-hidden="true"
+            focusable="false"
+          >
             <path
               fill="currentColor"
               fillRule="evenodd"
@@ -396,340 +454,436 @@ export default function Settings() {
             </header>
 
             <div className="settings-content-scroll">
-          {activeTab === "account" && (
-            <section className="settings-pane" aria-label="Account">
-              <div className="settings-section-body">
-                <div className="settings-account-row">
-                  {user?.avatar_url ? (
-                    <img
-                      src={user.avatar_url}
-                      alt=""
-                      className="settings-account-avatar"
-                      width={56}
-                      height={56}
-                    />
-                  ) : (
-                    <span
-                      className="settings-account-avatar settings-account-avatar--placeholder"
-                      style={user ? avatarPlaceholderStyle(user) : undefined}
-                      aria-hidden
-                    >
-                      {(user?.name || user?.login || "?").trim().slice(0, 1).toUpperCase() || "?"}
-                    </span>
-                  )}
-                  <div className="settings-account-meta">
-                    <div className="settings-account-name">{user?.name || user?.login || "—"}</div>
-                    <div className="small" style={{ opacity: 0.85 }}>
-                      {user?.login}
+              {activeTab === "account" && (
+                <section className="settings-pane" aria-label="Account">
+                  <div className="settings-section-body">
+                    <div className="settings-account-row">
+                      {user?.avatar_url ? (
+                        <img
+                          src={user.avatar_url}
+                          alt=""
+                          className="settings-account-avatar"
+                          width={56}
+                          height={56}
+                        />
+                      ) : (
+                        <span
+                          className="settings-account-avatar settings-account-avatar--placeholder"
+                          style={
+                            user ? avatarPlaceholderStyle(user) : undefined
+                          }
+                          aria-hidden
+                        >
+                          {(user?.name || user?.login || "?")
+                            .trim()
+                            .slice(0, 1)
+                            .toUpperCase() || "?"}
+                        </span>
+                      )}
+                      <div className="settings-account-meta">
+                        <div className="settings-account-name">
+                          {user?.name || user?.login || "—"}
+                        </div>
+                        <div className="small" style={{ opacity: 0.85 }}>
+                          {user?.login}
+                        </div>
+                      </div>
+                      <div className="settings-account-actions">
+                        <button
+                          type="button"
+                          className="surface-btn"
+                          disabled={!authMe}
+                          onClick={() => {
+                            setNameDraft(
+                              authMe?.display_name || user?.name || "",
+                            );
+                            setNameError(null);
+                            setEditProfileOpen(true);
+                          }}
+                        >
+                          Edit profile
+                        </button>
+                        <button
+                          type="button"
+                          className="surface-btn settings-account-logout"
+                          onClick={handleLogout}
+                        >
+                          Log out
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="settings-account-actions">
-                    <button
-                      type="button"
-                      className="surface-btn"
-                      disabled={!authMe}
-                      onClick={() => {
-                        setNameDraft(authMe?.display_name || user?.name || "");
-                        setNameError(null);
-                        setEditProfileOpen(true);
-                      }}
-                    >
-                      Edit profile
-                    </button>
-                    <button type="button" className="surface-btn settings-account-logout" onClick={handleLogout}>
-                      Log out
-                    </button>
-                  </div>
-                </div>
 
-                <div className="settings-my-workspaces">
-                  <h2 className="settings-subsection-title">My Workspaces</h2>
-                  <p className="settings-subsection-desc">
-                    All workspaces associated with your account.
-                  </p>
-                  {wsError ? (
-                    <p className="login-error" role="alert">
-                      {wsError}
-                    </p>
-                  ) : null}
-                  {workspaceSwitchError ? (
-                    <p className="login-error" role="alert">
-                      {workspaceSwitchError}
-                    </p>
-                  ) : null}
-                  {workspacesLoading ? (
-                    <p className="settings-my-workspaces-muted">Loading workspaces…</p>
-                  ) : workspacesSorted.length === 0 ? (
-                    <p className="settings-my-workspaces-muted">
-                      No workspaces found. You can create or join one below.
-                    </p>
-                  ) : (
-                    <div className="settings-my-workspaces-list-scroll-outer">
-                      <ul className="settings-my-workspaces-list" aria-label="Your workspaces">
-                        {workspacesSorted.map((w) => {
-                          const isCurrent = w.enterprise_id === activeEnterpriseId;
-                          const busy = switchingWorkspaceId === w.enterprise_id;
-                          return (
-                            <li key={w.enterprise_id} className="settings-my-workspace-row">
-                              <div className="settings-my-workspace-row-main">
-                                <div className="settings-my-workspace-name">{w.enterprise_name}</div>
-                                <div className="settings-my-workspace-role">
-                                  {workspaceRoleLabel(w.role)}
-                                  <span className="settings-my-workspace-member-count">
-                                    {" · "}
-                                    {w.member_count} {w.member_count === 1 ? "member" : "members"}
-                                  </span>
-                                </div>
-                              </div>
-                              {isCurrent ? (
-                                <span className="settings-my-workspace-current-label">Current workspace</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="surface-btn settings-my-workspace-switch"
-                                  disabled={switchingWorkspaceId != null}
-                                  aria-busy={busy}
-                                  onClick={() => {
-                                    setWorkspaceSwitchError(null);
-                                    setSwitchingWorkspaceId(w.enterprise_id);
-                                    void switchWorkspace(w.enterprise_id)
-                                      .then((data) => {
-                                        setActiveEnterpriseId(data.enterprise_id);
-                                        bumpSession();
-                                      })
-                                      .catch((err) => {
-                                        setWorkspaceSwitchError(
-                                          err instanceof Error ? err.message : "Could not switch workspace",
-                                        );
-                                      })
-                                      .finally(() => setSwitchingWorkspaceId(null));
-                                  }}
+                    <div className="settings-my-workspaces">
+                      <h2 className="settings-subsection-title">
+                        My Workspaces
+                      </h2>
+                      <p className="settings-subsection-desc">
+                        All workspaces associated with your account.
+                      </p>
+                      {wsError ? (
+                        <p className="login-error" role="alert">
+                          {wsError}
+                        </p>
+                      ) : null}
+                      {workspaceSwitchError ? (
+                        <p className="login-error" role="alert">
+                          {workspaceSwitchError}
+                        </p>
+                      ) : null}
+                      {workspacesLoading ? (
+                        <p className="settings-my-workspaces-muted">
+                          Loading workspaces…
+                        </p>
+                      ) : workspacesSorted.length === 0 ? (
+                        <p className="settings-my-workspaces-muted">
+                          No workspaces found. You can create or join one below.
+                        </p>
+                      ) : (
+                        <div className="settings-my-workspaces-list-scroll-outer">
+                          <ul
+                            className="settings-my-workspaces-list"
+                            aria-label="Your workspaces"
+                          >
+                            {workspacesSorted.map((w) => {
+                              const isCurrent =
+                                w.enterprise_id === activeEnterpriseId;
+                              const busy =
+                                switchingWorkspaceId === w.enterprise_id;
+                              return (
+                                <li
+                                  key={w.enterprise_id}
+                                  className="settings-my-workspace-row"
                                 >
-                                  {busy ? "Switching…" : "Switch"}
-                                </button>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
+                                  <div className="settings-my-workspace-row-main">
+                                    <div className="settings-my-workspace-name">
+                                      {w.enterprise_name}
+                                    </div>
+                                    <div className="settings-my-workspace-role">
+                                      {workspaceRoleLabel(w.role)}
+                                      <span className="settings-my-workspace-member-count">
+                                        {" · "}
+                                        {w.member_count}{" "}
+                                        {w.member_count === 1
+                                          ? "member"
+                                          : "members"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {isCurrent ? (
+                                    <span className="settings-my-workspace-current-label">
+                                      Current workspace
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="surface-btn settings-my-workspace-switch"
+                                      disabled={switchingWorkspaceId != null}
+                                      aria-busy={busy}
+                                      onClick={() => {
+                                        setWorkspaceSwitchError(null);
+                                        setSwitchingWorkspaceId(
+                                          w.enterprise_id,
+                                        );
+                                        void switchWorkspace(w.enterprise_id)
+                                          .then((data) => {
+                                            setActiveEnterpriseId(
+                                              data.enterprise_id,
+                                            );
+                                            bumpSession();
+                                          })
+                                          .catch((err) => {
+                                            setWorkspaceSwitchError(
+                                              err instanceof Error
+                                                ? err.message
+                                                : "Could not switch workspace",
+                                            );
+                                          })
+                                          .finally(() =>
+                                            setSwitchingWorkspaceId(null),
+                                          );
+                                      }}
+                                    >
+                                      {busy ? "Switching…" : "Switch"}
+                                    </button>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      )}
+                      <div className="settings-workspace-actions settings-my-workspaces-actions">
+                        <Link
+                          className="settings-my-workspaces-add-link"
+                          to="/onboarding"
+                        >
+                          Add or join workspace
+                        </Link>
+                      </div>
                     </div>
-                  )}
-                  <div className="settings-workspace-actions settings-my-workspaces-actions">
-                    <Link className="settings-my-workspaces-add-link" to="/onboarding">
-                      Add or join workspace
-                    </Link>
-                  </div>
-                </div>
 
-                <div className="settings-account-delete-section">
-                  {authMeError ? (
-                    <p className="login-error" role="alert">
-                      {authMeError}
-                    </p>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="settings-delete-account-open"
-                    disabled={authMe === null}
-                    title={authMe === null ? "Loading account security…" : undefined}
-                    onClick={() => {
-                      setDeleteError(null);
-                      setDeletePassword("");
-                      setDeleteConfirmText("");
-                      setDeleteModalOpen(true);
-                    }}
-                  >
-                    Delete account
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {activeTab === "workspace" && (
-            <section className="settings-pane" aria-label="Workspace">
-              <div className="settings-section-body">
-                <div className="settings-account-workspace settings-account-workspace--pane">
-                  <div className="settings-workspace-active-summary small">
-                    <strong>{activeWorkspaceName || "—"}</strong>
-                    {" · "}
-                    <span className="settings-workspace-active-summary-role">
-                      Your role:{" "}
-                      <strong>
-                        {activeWorkspace ? workspaceRoleLabel(activeWorkspace.role) : "—"}
-                      </strong>
-                      {activeWorkspace?.role === "querier" ? " (member access)" : null}
-                    </span>
-                  </div>
-                </div>
-
-                {isOwner() && workspaceId != null ? (
-                  <div className="settings-workspace-rename">
-                    <label className="settings-workspace-rename-label" htmlFor="settings-workspace-rename-input">
-                      Workspace name
-                    </label>
-                    <div className="settings-workspace-rename-row">
-                      <input
-                        id="settings-workspace-rename-input"
-                        type="text"
-                        className="input settings-workspace-rename-input"
-                        maxLength={255}
-                        value={workspaceRenameDraft}
-                        onChange={(e) => setWorkspaceRenameDraft(e.target.value)}
-                        aria-invalid={renameError ? true : undefined}
-                      />
+                    <div className="settings-account-delete-section">
+                      {authMeError ? (
+                        <p className="login-error" role="alert">
+                          {authMeError}
+                        </p>
+                      ) : null}
                       <button
                         type="button"
-                        className="login-btn settings-workspace-rename-save"
-                        disabled={
-                          renameBusy
-                          || !workspaceRenameDraft.trim()
-                          || workspaceRenameDraft.trim() === activeWorkspaceName.trim()
+                        className="settings-delete-account-open"
+                        disabled={authMe === null}
+                        title={
+                          authMe === null
+                            ? "Loading account security…"
+                            : undefined
                         }
-                        onClick={() => void handleRenameWorkspace()}
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeletePassword("");
+                          setDeleteConfirmText("");
+                          setDeleteModalOpen(true);
+                        }}
                       >
-                        {renameBusy ? "Saving…" : "Save"}
+                        Delete account
                       </button>
                     </div>
-                    {renameError ? (
-                      <p className="login-error settings-workspace-rename-error" role="alert">
-                        {renameError}
-                      </p>
+                  </div>
+                </section>
+              )}
+
+              {activeTab === "workspace" && (
+                <section className="settings-pane" aria-label="Workspace">
+                  <div className="settings-section-body">
+                    <div className="settings-account-workspace settings-account-workspace--pane">
+                      <div className="settings-workspace-active-summary small">
+                        <strong>{activeWorkspaceName || "—"}</strong>
+                        {" · "}
+                        <span className="settings-workspace-active-summary-role">
+                          Your role:{" "}
+                          <strong>
+                            {activeWorkspace
+                              ? workspaceRoleLabel(activeWorkspace.role)
+                              : "—"}
+                          </strong>
+                          {activeWorkspace?.role === "querier"
+                            ? " (member access)"
+                            : null}
+                        </span>
+                      </div>
+                    </div>
+
+                    {isOwner() && workspaceId != null ? (
+                      <div className="settings-workspace-rename">
+                        <label
+                          className="settings-workspace-rename-label"
+                          htmlFor="settings-workspace-rename-input"
+                        >
+                          Workspace name
+                        </label>
+                        <div className="settings-workspace-rename-row">
+                          <input
+                            id="settings-workspace-rename-input"
+                            type="text"
+                            className="input settings-workspace-rename-input"
+                            maxLength={255}
+                            value={workspaceRenameDraft}
+                            onChange={(e) =>
+                              setWorkspaceRenameDraft(e.target.value)
+                            }
+                            aria-invalid={renameError ? true : undefined}
+                          />
+                          <button
+                            type="button"
+                            className="login-btn settings-workspace-rename-save"
+                            disabled={
+                              renameBusy ||
+                              !workspaceRenameDraft.trim() ||
+                              workspaceRenameDraft.trim() ===
+                                activeWorkspaceName.trim()
+                            }
+                            onClick={() => void handleRenameWorkspace()}
+                          >
+                            {renameBusy ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                        {renameError ? (
+                          <p
+                            className="login-error settings-workspace-rename-error"
+                            role="alert"
+                          >
+                            {renameError}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {workspaceId != null ? (
+                      <WorkspaceAdminSection
+                        workspaceId={workspaceId}
+                        isAdmin={isAdmin()}
+                        viewerIsOwner={isOwner()}
+                      />
+                    ) : null}
+
+                    {!isOwner() &&
+                    workspaceId != null &&
+                    activeWorkspaceName ? (
+                      <footer className="settings-leave-footer">
+                        {leaveError && !leaveModalOpen ? (
+                          <p
+                            className="login-error settings-leave-footer-error"
+                            role="alert"
+                          >
+                            {leaveError}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="settings-leave-footer-btn"
+                          disabled={leaveBusy}
+                          onClick={() => {
+                            setLeaveError(null);
+                            setLeaveModalOpen(true);
+                          }}
+                        >
+                          Leave workspace
+                        </button>
+                      </footer>
+                    ) : null}
+
+                    {isOwner() && activeWorkspaceName ? (
+                      <footer className="settings-disband-footer">
+                        <button
+                          type="button"
+                          className="settings-disband-footer-btn"
+                          onClick={() => {
+                            setDisbandError(null);
+                            setDisbandNameInput("");
+                            setDisbandModalOpen(true);
+                          }}
+                        >
+                          Disband workspace
+                        </button>
+                      </footer>
                     ) : null}
                   </div>
-                ) : null}
+                </section>
+              )}
 
-                {workspaceId != null ? (
-                  <WorkspaceAdminSection
-                    workspaceId={workspaceId}
-                    isAdmin={isAdmin()}
-                    viewerIsOwner={isOwner()}
-                  />
-                ) : null}
-
-                {!isOwner() && workspaceId != null && activeWorkspaceName ? (
-                  <footer className="settings-leave-footer">
-                    {leaveError && !leaveModalOpen ? (
-                      <p className="login-error settings-leave-footer-error" role="alert">
-                        {leaveError}
-                      </p>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="settings-leave-footer-btn"
-                      disabled={leaveBusy}
-                      onClick={() => {
-                        setLeaveError(null);
-                        setLeaveModalOpen(true);
-                      }}
-                    >
-                      Leave workspace
-                    </button>
-                  </footer>
-                ) : null}
-
-                {isOwner() && activeWorkspaceName ? (
-                  <footer className="settings-disband-footer">
-                    <button
-                      type="button"
-                      className="settings-disband-footer-btn"
-                      onClick={() => {
-                        setDisbandError(null);
-                        setDisbandNameInput("");
-                        setDisbandModalOpen(true);
-                      }}
-                    >
-                      Disband workspace
-                    </button>
-                  </footer>
-                ) : null}
-              </div>
-            </section>
-          )}
-
-          {activeTab === "groups" && isAdmin() && (
-            <section className="settings-pane" aria-label="Groups">
-              <div className="settings-section-body">
-                <UserGroupsSection />
-              </div>
-            </section>
-          )}
-
-          {activeTab === "appearance" && (
-            <section className="settings-pane" aria-label="Appearance">
-              <div className="settings-section-body">
-                <div className="settings-toggle-list">
-                  <div className="settings-toggle-row">
-                    <div className="settings-toggle-row-text">
-                      <div className="settings-toggle-title" id="settings-appearance-dark-label">
-                        Dark mode
-                      </div>
-                      <p className="settings-toggle-desc" id="settings-appearance-dark-desc">
-                        Use dark backgrounds and light text across the app.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      className="settings-switch"
-                      aria-checked={theme === "dark"}
-                      aria-labelledby="settings-appearance-dark-label"
-                      aria-describedby="settings-appearance-dark-desc"
-                      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                    >
-                      <span className="settings-switch-thumb" aria-hidden />
-                    </button>
+              {activeTab === "groups" && isAdmin() && (
+                <section className="settings-pane" aria-label="Groups">
+                  <div className="settings-section-body">
+                    <UserGroupsSection />
                   </div>
-                  <div className="settings-toggle-row">
-                    <div className="settings-toggle-row-text">
-                      <div className="settings-toggle-title" id="settings-appearance-values-label">
-                        Show original table values
-                      </div>
-                      <p className="settings-toggle-desc" id="settings-appearance-values-desc">
-                        When off, tables display normalized values.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      className="settings-switch"
-                      aria-checked={valueMode === "original"}
-                      aria-labelledby="settings-appearance-values-label"
-                      aria-describedby="settings-appearance-values-desc"
-                      onClick={() =>
-                        setValueMode(valueMode === "original" ? "normalized" : "original")
-                      }
-                    >
-                      <span className="settings-switch-thumb" aria-hidden />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
+                </section>
+              )}
 
-          {activeTab === "mcp" && (
-            <section className="settings-pane settings-pane--mcp" aria-label="MCP">
-              <McpTokenPanel embedded />
-            </section>
-          )}
+              {activeTab === "appearance" && (
+                <section className="settings-pane" aria-label="Appearance">
+                  <div className="settings-section-body">
+                    <div className="settings-toggle-list">
+                      <div className="settings-toggle-row">
+                        <div className="settings-toggle-row-text">
+                          <div
+                            className="settings-toggle-title"
+                            id="settings-appearance-dark-label"
+                          >
+                            Dark mode
+                          </div>
+                          <p
+                            className="settings-toggle-desc"
+                            id="settings-appearance-dark-desc"
+                          >
+                            Use dark backgrounds and light text across the app.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          className="settings-switch"
+                          aria-checked={theme === "dark"}
+                          aria-labelledby="settings-appearance-dark-label"
+                          aria-describedby="settings-appearance-dark-desc"
+                          onClick={() =>
+                            setTheme(theme === "dark" ? "light" : "dark")
+                          }
+                        >
+                          <span className="settings-switch-thumb" aria-hidden />
+                        </button>
+                      </div>
+                      <div className="settings-toggle-row">
+                        <div className="settings-toggle-row-text">
+                          <div
+                            className="settings-toggle-title"
+                            id="settings-appearance-values-label"
+                          >
+                            Show original table values
+                          </div>
+                          <p
+                            className="settings-toggle-desc"
+                            id="settings-appearance-values-desc"
+                          >
+                            When off, tables display normalized values.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          className="settings-switch"
+                          aria-checked={valueMode === "original"}
+                          aria-labelledby="settings-appearance-values-label"
+                          aria-describedby="settings-appearance-values-desc"
+                          onClick={() =>
+                            setValueMode(
+                              valueMode === "original"
+                                ? "normalized"
+                                : "original",
+                            )
+                          }
+                        >
+                          <span className="settings-switch-thumb" aria-hidden />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {activeTab === "mcp" && (
+                <section
+                  className="settings-pane settings-pane--mcp"
+                  aria-label="MCP"
+                >
+                  <McpTokenPanel embedded />
+                </section>
+              )}
             </div>
           </div>
         </div>
       </div>
 
       {editProfileOpen ? (
-        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          aria-hidden="true"
+        >
           <div
             className="settings-modal-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-edit-profile-title"
           >
-            <h2 id="settings-edit-profile-title" className="settings-modal-title">
+            <h2
+              id="settings-edit-profile-title"
+              className="settings-modal-title"
+            >
               Edit profile
             </h2>
-            <label className="settings-workspace-rename-label" htmlFor="settings-edit-profile-name">
+            <label
+              className="settings-workspace-rename-label"
+              htmlFor="settings-edit-profile-name"
+            >
               Display name
             </label>
             <input
@@ -747,7 +901,9 @@ export default function Settings() {
               disabled={nameSaving}
             />
             {nameError ? (
-              <p className="login-error" role="alert">{nameError}</p>
+              <p className="login-error" role="alert">
+                {nameError}
+              </p>
             ) : null}
             <div className="settings-modal-actions">
               <button
@@ -765,20 +921,28 @@ export default function Settings() {
                 type="button"
                 className="login-btn"
                 disabled={
-                  nameSaving
-                  || !nameDraft.trim()
-                  || nameDraft.trim() === (authMe?.display_name || "").trim()
+                  nameSaving ||
+                  !nameDraft.trim() ||
+                  nameDraft.trim() === (authMe?.display_name || "").trim()
                 }
                 onClick={async () => {
                   setNameSaving(true);
                   setNameError(null);
                   try {
                     const result = await updateDisplayName(nameDraft.trim());
-                    setAuthMe((prev) => prev ? { ...prev, display_name: result.display_name } : prev);
+                    setAuthMe((prev) =>
+                      prev
+                        ? { ...prev, display_name: result.display_name }
+                        : prev,
+                    );
                     bumpSession();
                     setEditProfileOpen(false);
                   } catch (err) {
-                    setNameError(err instanceof Error ? err.message : "Failed to update name");
+                    setNameError(
+                      err instanceof Error
+                        ? err.message
+                        : "Failed to update name",
+                    );
                   } finally {
                     setNameSaving(false);
                   }
@@ -792,20 +956,35 @@ export default function Settings() {
       ) : null}
 
       {deleteModalOpen ? (
-        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          aria-hidden="true"
+        >
           <div
             className="settings-modal-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-delete-account-title"
           >
-            <h2 id="settings-delete-account-title" className="settings-modal-title">
+            <h2
+              id="settings-delete-account-title"
+              className="settings-modal-title"
+            >
               Delete your account?
             </h2>
             <p className="settings-modal-body">
-              {authMe?.has_password
-                ? <>This action is permanent. Enter your <strong>password</strong> to confirm.</>
-                : <>This action is permanent. Type <strong>DELETE</strong> to confirm.</>}
+              {authMe?.has_password ? (
+                <>
+                  This action is permanent. Enter your <strong>password</strong>{" "}
+                  to confirm.
+                </>
+              ) : (
+                <>
+                  This action is permanent. Type <strong>DELETE</strong> to
+                  confirm.
+                </>
+              )}
             </p>
             {authMe?.has_password ? (
               <input
@@ -859,19 +1038,27 @@ export default function Settings() {
       ) : null}
 
       {disbandModalOpen ? (
-        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          aria-hidden="true"
+        >
           <div
             className="settings-modal-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-disband-dialog-title"
           >
-            <h2 id="settings-disband-dialog-title" className="settings-modal-title">
+            <h2
+              id="settings-disband-dialog-title"
+              className="settings-modal-title"
+            >
               Disband workspace?
             </h2>
             <p className="settings-modal-body">
-              This permanently deletes the workspace <strong>{activeWorkspaceName}</strong>, all datasets in it, and all
-              memberships. This cannot be undone.
+              This permanently deletes the workspace{" "}
+              <strong>{activeWorkspaceName}</strong>, all datasets in it, and
+              all memberships. This cannot be undone.
             </p>
             <p className="settings-modal-body settings-modal-body--muted">
               Type the workspace name exactly to confirm:
@@ -918,19 +1105,27 @@ export default function Settings() {
       ) : null}
 
       {leaveModalOpen ? (
-        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          aria-hidden="true"
+        >
           <div
             className="settings-modal-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-leave-dialog-title"
           >
-            <h2 id="settings-leave-dialog-title" className="settings-modal-title">
+            <h2
+              id="settings-leave-dialog-title"
+              className="settings-modal-title"
+            >
               Leave workspace?
             </h2>
             <p className="settings-modal-body">
-              You will lose access to <strong>{activeWorkspaceName}</strong> until someone invites you again. This does
-              not delete the workspace or its data.
+              You will lose access to <strong>{activeWorkspaceName}</strong>{" "}
+              until someone invites you again. This does not delete the
+              workspace or its data.
             </p>
             {leaveError ? (
               <p className="login-error" role="alert">
@@ -963,18 +1158,29 @@ export default function Settings() {
       ) : null}
 
       {renameConfirmOpen ? (
-        <div className="settings-modal-backdrop" role="presentation" aria-hidden="true">
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          aria-hidden="true"
+        >
           <div
             className="settings-modal-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-rename-confirm-title"
           >
-            <h2 id="settings-rename-confirm-title" className="settings-modal-title">
+            <h2
+              id="settings-rename-confirm-title"
+              className="settings-modal-title"
+            >
               Update workspace name?
             </h2>
             <p className="settings-modal-body">
-              Change workspace name to <strong>{renamePendingName || workspaceRenameDraft.trim()}</strong>?
+              Change workspace name to{" "}
+              <strong>
+                {renamePendingName || workspaceRenameDraft.trim()}
+              </strong>
+              ?
             </p>
             {renameError ? (
               <p className="login-error" role="alert">
