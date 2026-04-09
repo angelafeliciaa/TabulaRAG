@@ -17,110 +17,134 @@
 
 ---
 
-## Prerequisites
+## Features
 
-Before you begin, install the following:
-
-| Tool                                                       | Version | Download                            |
-| ---------------------------------------------------------- | ------- | ----------------------------------- |
-| [Docker](https://docs.docker.com/get-docker/)              | Latest  | https://docs.docker.com/get-docker/ |
-| [Docker Compose](https://docs.docker.com/compose/install/) | v2+     | Included with Docker Desktop        |
-
-> Docker Compose v2 is required (uses `docker compose`, not `docker-compose`). It is bundled with [Docker Desktop](https://www.docker.com/products/docker-desktop/) for Mac and Windows. Linux users may need to install it separately.
-
-You do **not** need to install Python or Node locally — everything runs inside Docker containers.
+- **CSV/TSV ingestion** — upload tabular files with automatic header detection, delimiter inference, and column type recognition (dates, money, measurements)
+- **Semantic search** — each row is embedded via `sentence-transformers/all-MiniLM-L6-v2` and indexed in Qdrant for natural-language retrieval with cell-level citations
+- **Structured queries** — filter and aggregate data through the API with SQL over PostgreSQL JSON columns
+- **Multi-tenant workspaces** — enterprises with invite codes, roles (owner / admin / querier), and switchable active workspace
+- **Folders & access control** — public, protected, and private folders with user-group-based permissions
+- **MCP server** — exposes Streamable HTTP + SSE endpoints so AI assistants can use your tables as a retrieval tool
+- **Auth** — Google OAuth and email/password with verification codes and password reset (via Brevo SMTP)
+- **Background indexing** — threaded worker pool for non-blocking embedding and Qdrant upserts with progress tracking
 
 ---
 
-## Environment
+## Architecture
 
-| Component    | Runtime           |
-| ------------ | ----------------- |
-| Backend      | Python 3.11 (pip) |
-| Frontend     | Node 20 (npm)     |
-| Database     | PostgreSQL 16     |
-| Vector store | Qdrant v1.13.4    |
-| Web server   | Nginx 1.27        |
+| Layer | Technology |
+| ------------ | --------------------------------------------------- |
+| Frontend | React 19, TypeScript 5.9, Vite 7, React Router 7 |
+| Backend | Python 3.11, FastAPI, SQLAlchemy 2.x, Uvicorn |
+| Database | PostgreSQL 16 |
+| Vector store | Qdrant v1.13.4 (FastEmbed, 384-dim dense vectors) |
+| Auth | JWT, Google OAuth, bcrypt |
+| MCP | fastapi-mcp (Streamable HTTP + SSE) |
+| Web server | Nginx 1.27 (production frontend) |
+| CI | GitHub Actions (pytest, ESLint, Docker builds) |
 
 ---
 
-## Environment variables
+## MCP integration
 
-Copy the example file and fill in the required values:
+TabulaRAG exposes endpoints for AI assistant integration:
 
-```bash
-cp .env.example .env
-```
+| Type | URL |
+| --------------------- | ------------------------------------ |
+| OpenAPI | `http://localhost:8000/openapi.json` |
+| MCP (Streamable HTTP) | `http://localhost:8000/mcp` |
 
-| Variable            | Required | Description                                       |
-| ------------------- | -------- | ------------------------------------------------- |
-| `API_KEY`           | No       | Optional static key for script/API access         |
-| `DATABASE_URL`      | Yes      | Set automatically in docker-compose for local use |
-| `QDRANT_URL`        | Yes      | Set automatically in docker-compose for local use |
-| `POSTGRES_DB`       | Yes      | Database name (default: `tabularag`)              |
-| `POSTGRES_USER`     | Yes      | Database user (default: `tabularag`)              |
-| `POSTGRES_PASSWORD` | Yes      | Database password                                 |
+**Authentication:** use a personal MCP token (generated from the app's MCP section) in `Authorization: Bearer <token>`, or the server `API_KEY` for automation. Tokens are scoped per user and workspace.
 
-The remaining variables in `.env.example` control embedding model behaviour and Qdrant tuning — the defaults are fine for local use.
+> If your MCP client runs outside the browser (e.g. Docker, desktop app), replace `localhost` with your machine's IP (`ipconfig` on Windows, `ifconfig` on Mac/Linux).
+
+---
+
+## Local vs. Deployed
+
+| Feature      | Local (Docker Compose) | Deployed            |
+| ------------ | ---------------------- | ------------------- |
+| Database     | PostgreSQL in Docker   | External PostgreSQL |
+| Vector store | Qdrant in Docker       | External Qdrant     |
+
+---
+
+## Prerequisites (Local)
+
+| Tool | Version | Notes |
+| ---- | ------- | ----- |
+| [Docker](https://docs.docker.com/get-docker/) | Latest | https://docs.docker.com/get-docker/ |
+| [Docker Compose](https://docs.docker.com/compose/install/) | v2+ | Bundled with Docker Desktop |
+
+> Docker Compose v2 is required (`docker compose`, not `docker-compose`). It ships with [Docker Desktop](https://www.docker.com/products/docker-desktop/) on Mac and Windows. Linux users may need to install it separately.
+
+You do **not** need to install Python or Node locally — everything runs inside containers.
 
 ---
 
 ## Quick start
 
 ```bash
-cp .env.example .env
-./scripts/dev-up.sh         # 2. build and start all services
+cp .env.example .env      # create config (edit values as needed)
+./scripts/dev-up.sh        # build and start all services
 ```
 
 Once running:
 
-| Service     | URL                   |
-| ----------- | --------------------- |
-| Frontend    | http://localhost:5173 |
+| Service | URL |
+| ----------- | ---------------------- |
+| Frontend | http://localhost:5173 |
 | Backend API | http://localhost:8000 |
-| PostgreSQL  | localhost:5433        |
-| Qdrant      | http://localhost:6333 |
+| PostgreSQL | localhost:5433 |
+| Qdrant | http://localhost:6333 |
 
-Check backend health:
+Health checks:
 
 ```bash
 curl http://localhost:8000/health
 curl http://localhost:8000/health/deps
 ```
 
-Stop services:
+Stop / logs:
 
 ```bash
 ./scripts/dev-down.sh
-```
-
-Stream logs:
-
-```bash
-./scripts/dev-logs.sh             # all services
-./scripts/dev-logs.sh backend     # backend only
+./scripts/dev-logs.sh              # all services
+./scripts/dev-logs.sh backend      # single service
 ```
 
 ---
 
-## Connecting via external tools
+## Environment variables
 
-TabulaRAG exposes two endpoints for integration with AI assistants and tool runners:
+Copy `.env.example` to `.env`. The key variables:
 
-| Type                  | URL                                  |
-| --------------------- | ------------------------------------ |
-| OpenAPI               | `http://localhost:8000/openapi.json` |
-| MCP (Streamable HTTP) | `http://localhost:8000/mcp`          |
+| Variable | Required | Description |
+| ---------------------- | -------- | --------------------------------------------------- |
+| `POSTGRES_DB` | Yes | Database name (default: `tabularag`) |
+| `POSTGRES_USER` | Yes | Database user (default: `tabularag`) |
+| `POSTGRES_PASSWORD` | Yes | Database password |
+| `DATABASE_URL` | Yes | PostgreSQL connection string (set in docker-compose) |
+| `QDRANT_URL` | Yes | Qdrant endpoint (set in docker-compose) |
+| `JWT_SECRET` | Yes | Secret for signing JWT tokens |
+| `PUBLIC_API_BASE_URL` | Yes | Backend URL used in email links (default: `http://localhost:8000`) |
+| `PUBLIC_UI_BASE_URL` | Yes | Frontend URL used in email links (default: `http://localhost:5173`) |
+| `API_KEY` | No | Optional static key for script/API access |
+| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | No | Google OAuth client secret |
+| `SMTP_HOST` | No | Brevo SMTP relay for verification/reset emails |
+| `SMTP_PORT` | No | SMTP port (default: `587`) |
+| `SMTP_USER` | No | SMTP login |
+| `SMTP_PASSWORD` | No | SMTP key |
+| `SMTP_FROM` | No | Sender email address |
 
-MCP requires authentication: use a **personal MCP token** from the app home page (MCP section) in `Authorization: Bearer <token>`, or the server **`API_KEY`** (automation/tests). Tokens are per user and workspace; they stop working if you leave that enterprise.
+> **SMTP is optional for local development.** If `SMTP_HOST` is empty, verification and reset codes are written to the backend logs instead of being emailed. For any real deployment, configure SMTP so users receive emails.
 
-> **Note:** If your client is running outside the browser (e.g. inside Docker or a desktop app), replace `localhost` with your machine's local IP address. Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) to find it.
+The remaining variables in `.env.example` control embedding model tuning, Qdrant HNSW parameters, batch sizes, and indexing concurrency. The defaults work for local development.
 
 ---
 
-## Local vs. deployment differences
 
-| Feature      | Local (Docker Compose) | Deployed            |
-| ------------ | ---------------------- | ------------------- |
-| Database     | PostgreSQL in Docker   | External PostgreSQL |
-| Vector store | Qdrant in Docker       | External Qdrant     |
+## License
+
+[MIT](LICENSE)
