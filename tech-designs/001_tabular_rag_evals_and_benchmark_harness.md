@@ -192,7 +192,30 @@ Three kinds of cases, all grounded in DataBench tables:
 }
 ```
 
-### 3. Arms — the systems being compared
+### 3. Stratification by table size (decided *before* generating cases)
+
+The CSV-attached baseline is not a uniform arm — its performance depends strongly on whether the table fits in Claude's context window. If we blend all cases into a single headline number, we are secretly measuring context-window limits, not retrieval quality.
+
+**Two strata, decided upfront:**
+
+| Stratum | Definition | What it measures |
+|---|---|---|
+| `fits_in_context` | Table serializes to ≤ *N* tokens under Claude Sonnet's tokenizer, where *N* = 0.5 × the model's context (so ~100K tokens for Sonnet's 200K window, leaving room for question + answer + instructions). | Tool-based retrieval vs. in-context reasoning when both arms see the full data. The honest accuracy comparison. |
+| `requires_truncation` | Table exceeds *N* tokens. CSV-attached arm must downsample (first-N-rows sampling matching Claude Desktop file-attach behaviour). | Tool-based retrieval vs. the realistic fallback a user hits today when their CSV is too big. Still a fair comparison — this is the real-world experience of the baseline. |
+
+**Pre-implementation audit (step 0 of Phase 1, before any case generation):**
+
+1. Compute token count for each candidate DataBench CSV using `anthropic`'s tokenizer (or a deterministic approximation: `row_count × avg_row_serialization_tokens`).
+2. Log the distribution. Pick the DataBench subset to have **balanced coverage** across both strata — target ≥ 25 cases per stratum per family (so `aggregate.pandas_oracle × fits` ≥ 25, `aggregate.pandas_oracle × requires_truncation` ≥ 25, same for `semantic.lookup`).
+3. Commit the token-count audit as `evals/datasets/databench/token_audit.json` so reviewers can reproduce the stratum assignment.
+
+**Report implications:**
+
+- The headline scorecard shows **two sub-tables**, one per stratum, with a note that no single "overall" accuracy number is reported. This is a design choice, not an oversight — blending strata hides the mechanism.
+- Each metric in each stratum gets a **95% Wilson confidence interval** next to the point estimate (see §4 on sample-size adequacy).
+- Latency is reported **per stratum** because prompt size dominates it for the CSV-attached arm.
+
+### 4. Arms — the systems being compared
 
 All arms implement:
 
@@ -223,70 +246,147 @@ class Arm(Protocol):
 
 **LLM client (shared by all arms):** `evals/arms/_llm.py` — thin wrapper around the Anthropic SDK with prompt caching, retry on transient errors, deterministic `temperature=0` for reproducibility. One model for v1: `claude-sonnet-4-6` (swap via config).
 
-### 4. Metrics & scoring
+### 5. Metrics & scoring
 
-All scoring is **deterministic.** The scorer inspects `ArmResult.answer_parsed` and compares to `case.expected`:
+**Honest framing.** Calling this "deterministic" on free-form LLM output is misleading — a substring check on prose is a weak rule-based judge. To deserve the "deterministic" label, both arms must emit **structured output** under a fixed schema, and the scorer compares schema fields directly (not prose).
 
-| `expected.type` | Comparison |
+**Structured-output contract (both arms, enforced at prompt level):**
+
+Each arm receives a system prompt instructing it to return a final JSON payload conforming to a `CaseAnswer` schema that depends on `case.expected.type`:
+
+```python
+# evals/arms/schemas.py
+class RowValueAnswer(TypedDict):
+    answer: str                    # the specific value/entity the question asks for
+    supporting_columns: list[str]  # which column(s) of the table carried the answer
+
+class GroupedNumericAnswer(TypedDict):
+    groups: dict[str, float]       # {group_key: numeric_value}
+
+class SingleNumericAnswer(TypedDict):
+    value: float
+
+class RefuseAnswer(TypedDict):
+    refuse: bool                   # must be true on a legitimate refuse
+    reason: str                    # "column not in table" / "no matching rows" / etc.
+```
+
+- **TabulaRAG arm** — achieves this naturally (tool returns structured data; we instruct Claude to format the final answer as the target schema and stop).
+- **CSV-attached arm** — uses Anthropic's structured-output / JSON-mode parameter with the same schema. No tools.
+- **Parse-failure handling** — if the final payload does not validate against the schema, the case is recorded as `parse_failed` for that arm. `parse_failed` is reported as its own metric (see below); it is **not** silently counted as a score of 0.
+
+**Scoring rules per `expected.type`:**
+
+| `expected.type` | Comparison (all on the parsed structured payload, not prose) |
 |---|---|
-| `row_value` | Does `answer_text` contain any value from `answer_value_contains` (case-insensitive)? + did the arm's citation (`tool_calls[*].highlights[0].column` for TabulaRAG) match `expected_columns_cited`? |
-| `grouped_numeric` | Extract `{group: value}` dict from answer (regex + JSON-mode hint in arm prompt). Compute per-group `\|pred - truth\| / max(\|truth\|, 1e-9)` and require < `tolerance` for all groups. |
-| `single_numeric` | Extract number from answer; same tolerance check. |
-| `should_refuse` | True if answer is empty, matches any `acceptable_answers` phrase, or below a confidence signal (for TabulaRAG: zero results returned). |
+| `row_value` | `answer.strip().casefold()` equals any entry in `expected.answer_value_contains` after the same normalization. *Substring matching is not used.* Citation check (TabulaRAG-only): set intersection of `supporting_columns` with `expected_columns_cited` must be non-empty. |
+| `grouped_numeric` | All keys in `expected.groups` present in `groups`; for each group, `\|pred - truth\| / max(\|truth\|, 1e-9) < tolerance`. Extra groups in the answer are a penalty (precision degradation) but do not fail the case outright. |
+| `single_numeric` | Same tolerance check on `value`. |
+| `should_refuse` | `refuse == true`. See "Refuse-set integrity" below. |
 
-**Per-arm metrics reported:**
+**Refuse-set integrity.** `should_refuse` scoring is gameable if an arm just refuses everything. To catch this we always pair the refuse set with a **control set** — cases that look superficially similar but *do* have a correct answer. The reported metric is:
 
-- **`answer_accuracy`** — fraction of cases scored "correct" by its `expected.type` rule. *Primary headline metric.*
+- **`refuse_precision`** — of cases where the arm refused, how many were supposed to be refused
+- **`refuse_recall`** — of cases that were supposed to be refused, how many were
+- **Primary**: F1 of the above, not pass/fail
+
+An arm that refuses everything gets high recall but near-zero precision → low F1. An arm that never refuses gets recall 0 → low F1. Discrimination is rewarded.
+
+**Per-arm, per-stratum metrics reported:**
+
+- **`answer_accuracy`** + 95% Wilson confidence interval — fraction of cases scored correct (excluding parse failures from the denominator, counting them separately).
+- **`parse_failure_rate`** — fraction of cases where the arm's output did not conform to the schema. **Asymmetric parse failure between arms invalidates the accuracy comparison**; the runner emits a warning in the report header if the two arms differ by > 3pp on this.
 - **`median_latency_ms`** and **`p95_latency_ms`**
-- **`total_tokens`** (input + output, for cost proxy)
+- **`time_to_first_token_ms`** (median) — separated out because TTFT often matters more for perceived UX than total latency, and it isolates prompt-ingestion from generation time.
+- **`input_tokens`**, **`output_tokens`** — reported separately; cache-hit tokens reported separately from billed input tokens when available.
 
-**TabulaRAG-only additional metrics (not comparative, internal signal):**
+**Statistical adequacy.** With ≥ 25 cases per stratum per family, a 5pp accuracy gap has a 95% CI of roughly ±10pp. Target for **publishable** claims is ≥ 50 per stratum per family (~200 cases total across strata × families); v1 ships with the minimum adequate size and the roadmap expands to publishable.
 
-- **`retrieval.recall@5`** — for `semantic.lookup` cases, did `expected.row_ids_any_of` appear in `semantic_search()`'s top-5 before the LLM answered? Inspected via the MCP tool call trace.
-- **`citation.precision`** — for cases with `expected_columns_cited`, did the arm's cited column match?
+**Prompt-caching symmetry.** Anthropic prompt caching is disabled for both arms in v1 (enable only once we've established baseline comparability). The TabulaRAG arm would naturally benefit from caching the MCP tool-schema preamble across cases; the CSV-attached arm cannot cache (different CSV per case). Leaving caching on asymmetrically inflates the cost/latency gap. Revisit in v2 after the baseline comparison is credible.
 
-### 5. Report format
+**TabulaRAG-internal diagnostic metrics (not comparative):**
 
-Written to `evals/reports/benchmark-<YYYY-MM-DD>.md` and `.json`. The markdown version is human-scannable; the JSON version is what future runs diff against.
+These measure *our system's* retrieval without going through the LLM arm — they are produced by a **separate retrieval-probe pass** that calls `semantic_search()` directly (from `backend/app/retrieval.py`) for each `semantic.lookup` case. They do not rely on scraping MCP tool-call traces, which is not a stable interface.
+
+- **`retrieval.recall@5`** — for `semantic.lookup` cases, did any row-id in `expected.row_ids_any_of` appear in the top-5 returned rows?
+- **`retrieval.mrr`** — mean reciprocal rank of the first matching row id.
+- **`citation.precision`** — for cases with `expected_columns_cited`, did `generate_highlights()[0].column` match?
+
+These are published in a separate "TabulaRAG internals" subsection of the report — clearly flagged as *not* comparable to the CSV-attached arm.
+
+### 6. Report format
+
+Written to `evals/reports/benchmark-<YYYY-MM-DD>.md` and `.json`. The markdown version is human-scannable; the JSON version is what future runs diff against. Numbers in the example below are illustrative only.
+
+**No single overall accuracy number is reported.** The headline is always stratified, per the rationale in §3.
 
 Markdown example:
 
 ```markdown
 # TabulaRAG Benchmark — 2026-04-14
 
-## Headline
+**Config**: model=claude-sonnet-4-6, temp=0, prompt_caching=off,
+           subset_seed=42, embedding=MiniLM-L6, databench@abc1234, backend@def5678
 
-|                    | TabulaRAG | CSV-attached | Open WebUI |
-|--------------------|-----------|--------------|------------|
-| answer_accuracy    | 0.78      | 0.52         | (deferred) |
-| median_latency     | 2.1s      | 11.4s        | —          |
-| p95_latency        | 4.8s      | 28.0s        | —          |
-| total_tokens       | 72,400    | 861,000      | —          |
-| cost ($USD est.)   | $0.58     | $4.12        | —          |
-| cases              | 80        | 80           | 0          |
+## Headline — stratified
 
-## By suite
+### Stratum: `fits_in_context` (table ≤ ~100K tokens)
 
-### semantic.lookup (n=30)
+|                          | TabulaRAG           | CSV-attached        | Open WebUI |
+|--------------------------|---------------------|---------------------|------------|
+| answer_accuracy (95% CI) | 0.84 [0.75 – 0.91]  | 0.81 [0.71 – 0.88]  | (deferred) |
+| parse_failure_rate       | 0.02                | 0.04                | —          |
+| median_latency           | 2.4s                | 3.1s                | —          |
+| time_to_first_token      | 0.6s                | 1.2s                | —          |
+| input_tokens (median)    | 1,200               | 24,000              | —          |
+| output_tokens (median)   | 280                 | 310                 | —          |
+| cases                    | 50                  | 50                  | 0          |
+
+### Stratum: `requires_truncation` (table > ~100K tokens)
+
+|                          | TabulaRAG           | CSV-attached (truncated to first 2000 rows) | Open WebUI |
+|--------------------------|---------------------|--------|---|
+| answer_accuracy (95% CI) | 0.72 [0.61 – 0.81]  | 0.18 [0.11 – 0.29] | (deferred) |
+| parse_failure_rate       | 0.03                | 0.03   | — |
+| median_latency           | 3.1s                | 14.2s  | — |
+| input_tokens (median)    | 1,400               | 94,000 | — |
+| cases                    | 40                  | 40     | 0 |
+
+> ⚠️ Parse-failure rates differ by < 3pp → accuracy comparison is valid within this stratum.
+
+## By family (within each stratum)
+
+### semantic.lookup — fits_in_context (n=25)
 ... per-case breakdown ...
 
-### aggregate.pandas_oracle (n=30)
+### aggregate.pandas_oracle — fits_in_context (n=25)
 ... per-case breakdown ...
 
-### semantic.edge (n=20)
-... per-case breakdown ...
+### semantic.edge (refuse set, n=20) — refusal discrimination
 
-## TabulaRAG internals (not comparative)
+|                     | TabulaRAG | CSV-attached |
+|---------------------|-----------|--------------|
+| refuse_precision    | 0.85      | 0.40         |
+| refuse_recall       | 0.75      | 0.90         |
+| refuse_f1           | 0.80      | 0.55         |
+
+## TabulaRAG internals (not comparative — direct retrieval probe)
 
 retrieval.recall@5: 0.83
+retrieval.mrr:      0.71
 citation.precision: 0.67
 
 ## Failures worth looking at
-- sem_lookup_019: TabulaRAG scored 0 (returned wrong row); CSV-attached scored 1. [link to trace]
-- agg_gen_017: Both arms got group totals wrong by the same amount — suggests CSV-ingest normalization issue, not retrieval.
+- sem_lookup_019 (fits): TabulaRAG scored 0 (returned wrong row); CSV-attached scored 1. [link to trace]
+- agg_gen_017 (truncation): Both arms got group totals wrong by the same amount — suggests CSV-ingest normalization issue, not retrieval.
+
+## Known caveats
+- DataBench labels have ~5-10% known noise; absolute accuracy ceilings ~0.90-0.95.
+- n=50 per stratum per family gives 95% CI halfwidths of ~10pp — treat gaps < 10pp as non-significant.
+- CSV-attached truncation rule matches Claude Desktop file-attach behavior (first-N-rows). Other clients may behave differently.
 ```
 
-The "Failures worth looking at" section is auto-generated from cases where arms disagree — the highest-signal debug artifact.
+The **"Failures worth looking at"** section is auto-generated from cases where arms disagree — the highest-signal debug artifact.
 
 ---
 
@@ -294,22 +394,32 @@ The "Failures worth looking at" section is auto-generated from cases where arms 
 
 Phased so each phase ships useful value.
 
-### Phase 1 — Local-only harness (v1; ~1 week)
+### Phase 1 — Local-only harness (v1; realistic: 2-3 weeks)
 
+*Previous estimate of ~1 week was optimistic. MCP + Anthropic client wiring (step 9), DataBench import + license review (step 2), and structured-output contract enforcement (step 10) are each 2-4 days in practice. 2-3 weeks covers both implementation and a verification pass that doesn't get dropped under deadline pressure.*
+
+0. **Table-size audit — DO FIRST.** Before generating any test cases:
+   - Survey DataBench's available tables, compute per-table serialized token count under Claude Sonnet's tokenizer.
+   - Pick the DataBench subset (10-12 tables) aiming for balanced coverage above and below the `fits_in_context` boundary (~100K tokens). Use a fixed seed; document the seed in `datasets/manifest.json`.
+   - Commit `evals/datasets/databench/token_audit.json` — the reviewable evidence that stratum assignment was decided before case generation.
+   - If the audit reveals that <25% of suitable tables fall in one stratum, revisit the design (may need larger DataBench subset or a different benchmark).
 1. **Scaffold `evals/`** directory and empty `__init__.py` files. Add `evals/` to the pytest configuration's ignore list so it doesn't accidentally run as part of `pytest tests/`.
-2. **Implement `harness/loader.py`** with the `Case` dataclass and JSONL parser.
-3. **Implement `harness/fixtures.py`** — session-scoped fixture that, given a `table` path, ingests it via `ingest_table()` (calling into `backend/app/main.py` in-process) and returns the `dataset_id`. Cache by file hash.
-4. **Implement `generators/databench_import.py`** — fetch DataBench subset (10-12 tables, pseudo-randomly selected with a fixed seed documented in `datasets/manifest.json`). Write CSVs to `datasets/databench/`.
-5. **Implement `generators/aggregate_gen.py`** — for each imported table, pick 3-5 `{group_by, metric, op}` combinations where the pandas computation is unambiguous (numeric metric columns only, categorical group-by columns only). Emit JSONL cases with pandas-computed ground truth.
-6. **Hand-author `cases/semantic_edge.jsonl`** — 20-30 cases including: ambiguous questions with multiple plausible answers, out-of-scope questions (question about a column that doesn't exist), questions that should return "no matching rows."
-7. **Implement `arms/_llm.py`** — Anthropic SDK wrapper, retry, deterministic temp=0.
-8. **Implement `arms/tabularag.py`** — issues MCP token via the app's token-generation path, configures Claude to use `http://localhost:8000/mcp` as a tool, sends question, captures trace + answer.
-9. **Implement `arms/csv_attached.py`** — sends CSV content + question in a single prompt with no tools.
-10. **Implement `metrics/answer_match.py`** — the per-`expected.type` comparison functions.
-11. **Implement `harness/runner.py`** — loops cases × arms, dispatches, collects `ArmResult`s, persists intermediate state to `evals/reports/.cache/` so interrupted runs can resume.
-12. **Implement `run.py`** — CLI with `--suite`, `--arms`, `--limit`, `--only-case-ids` flags; prints a summary table to stdout and writes markdown + JSON to `reports/`.
-13. **Write `evals/README.md`** — how to run, how to add a case, how to interpret the report, how to regenerate `cases/*.jsonl` after changing a generator.
-14. **Commit a first baseline run** to `reports/` and link it from the repo README.
+2. **Implement `generators/databench_import.py`** — fetch the subset selected in step 0. Confirm license compatibility and add attribution file.
+3. **Implement `harness/loader.py`** with the `Case` dataclass (including `stratum` field) and JSONL parser.
+4. **Implement `harness/fixtures.py`** — session-scoped fixture that, given a `table` path, ingests it via `ingest_table()` in-process (`backend/app/main.py`) and returns `dataset_id`. Cache by file hash.
+5. **Implement `generators/aggregate_gen.py`** — emit JSONL cases with pandas-computed ground truth, respecting the stratum balance from step 0.
+6. **Implement `metrics/schemas.py`** — the `CaseAnswer` TypedDicts + a `validate_and_parse(payload, expected_type)` helper used by both the arms (to shape prompts) and the scorer (to check outputs). One source of truth.
+7. **Hand-author `cases/semantic_edge.jsonl`** — ~20 refuse cases **plus a matched control set** of cases that look similar but *do* have answers. Target n ≥ 40 total (20 refuse + 20 control) so `refuse_f1` is meaningful.
+8. **Implement `metrics/answer_match.py`** — per-`expected.type` comparison, parse-failure classification, Wilson CI helper.
+9. **Implement `arms/_llm.py`** — Anthropic SDK wrapper. Enforces structured-output schema per case. Retry on transient errors with logging so retries don't silently mask regressions. Deterministic `temperature=0`. Prompt caching disabled in v1.
+10. **Implement `arms/tabularag.py`** — issues MCP token, configures Claude to use `http://localhost:8000/mcp`, sends question *with the `CaseAnswer` schema requirement*, captures trace + answer. Detects when Claude fails to invoke the tool at all (answering from general knowledge) and flags the case as `tool_bypassed`.
+11. **Implement `arms/csv_attached.py`** — sends CSV content + question under the same structured-output contract, no tools. For tables in `requires_truncation` stratum, applies the documented truncation rule (first 2000 rows).
+12. **Implement `harness/retrieval_probe.py`** — separate non-LLM pass that calls `semantic_search()` directly for `semantic.lookup` cases to compute internal retrieval metrics. Does not require MCP trace scraping.
+13. **Implement `harness/runner.py`** — loops cases × arms × strata. Persists intermediate state so interrupted runs can resume.
+14. **Implement `run.py`** — CLI; prints a summary to stdout and writes stratified markdown + JSON to `reports/`.
+15. **Write `evals/README.md`** — how to run, how to add a case, how to interpret the stratified report, how to regenerate cases.
+16. **Commit a first baseline run** to `reports/` and link it from the repo README.
+17. **Manual spot-check** — pull 10 random cases per stratum, read arm outputs alongside `expected`, confirm the grading decisions match a human eye. Blocks the v1 announcement.
 
 ### Phase 2 — Nightly CI report (~1 day on top of Phase 1)
 
@@ -356,14 +466,21 @@ Evals are themselves code that can be wrong. We verify with:
 
 ## Open Questions / Risks
 
-1. **DataBench subset selection bias.** Picking the "easy" tables inflates the headline number. Mitigation: seeded pseudo-random selection; document seed + selection criteria in `manifest.json`; include at least 2 tables flagged by DataBench as "hard."
-2. **Ground-truth noise in DataBench.** Known ~5-10% of labels are noisy; this caps maximum accuracy meaningfully below 1.0. We should note this in the report header and *not* aim for a number like "we hit 95%" — the absolute number is less meaningful than the **gap between arms** on the same cases.
-3. **CSV-attached baseline fairness.** How we construct the CSV-attached prompt matters — if we dump a 10MB CSV in the context window, the arm fails trivially; if we clean it up too aggressively, we're unfairly helping the baseline. Mitigation: choose an approach that mirrors what a real user would do in Open WebUI or Claude Desktop (file attachment UI, typical truncation). Document the prompt in `arms/csv_attached.py`.
-4. **LLM determinism.** Even at temp=0, Claude answers can drift slightly. Mitigation: `k=1` runs for v1 (single-pass), add `k=3` majority voting in v2 if we see flakiness > 3% on a case.
-5. **Cost.** ~$3-8 per full run is fine for on-demand, but Phase 2 nightly = ~$200-250/month. Budget and enforce a per-run hard cap in `config.py`.
-6. **"We're not better."** The eval may reveal that TabulaRAG loses to CSV-attached on some category of questions. That's the point. We publish what we find.
-7. **Embedding model drift.** The FastEmbed model is pinned in code, but if someone changes `EMBEDDING_MODEL` env var, eval numbers move independently of quality changes. Mitigation: the report header records `EMBEDDING_MODEL`, `qdrant-client` version, Python package hashes for reproducibility.
-8. **Dataset schema drift.** If we change the shape of `UnifiedQueryRequest` or MCP tool descriptions, old cases may fail not because the system got worse but because the eval harness needs updating. Mitigation: cases pin the backend commit they were authored against; runner warns if the active backend commit differs materially.
+1. **DataBench subset selection bias.** Picking the "easy" tables inflates the headline number. Mitigation: seeded pseudo-random selection from step-0 token audit; document seed + selection criteria in `manifest.json`; include at least 2 tables flagged by DataBench as "hard" in each stratum.
+2. **Ground-truth noise in DataBench.** Known ~5-10% of labels are noisy; this caps maximum accuracy meaningfully below 1.0, and it also caps *gap-between-arms* detection — if both arms hit the noisy ceiling differently, some of the gap is noise. Mitigation: run a one-time label audit on the chosen subset before generating cases; flag the noisiest 10% for exclusion or extra caution.
+3. **CSV-attached baseline fairness.** The truncation rule for the `requires_truncation` stratum mirrors Claude Desktop's first-N-rows file-attach behaviour. We document it in `arms/csv_attached.py` and disclose it in the report. Other clients (ChatGPT, Cursor) may truncate differently — we note this as a limitation of the comparison, not a bug.
+4. **Asymmetric parse-failure rates invalidate accuracy comparison.** If the two arms have materially different parse_failure_rate, we are partly measuring "which model follows the schema better," not retrieval quality. Mitigation: the runner emits a warning in the report header if the two arms' parse_failure_rates differ by > 3pp; that warning is prominent, not buried.
+5. **TabulaRAG arm: silent tool-bypass.** Claude may answer from general knowledge without ever calling the MCP tool, effectively turning TabulaRAG-arm into a slightly-worse CSV-attached arm. We detect this per case (no MCP tool calls in trace) and record `tool_bypassed=true`; those cases are reported separately — their accuracy contribution is a signal of how compelling the tool's description is, not of retrieval quality.
+6. **`retrieval.recall@5` is measured by a separate probe pass**, not scraped from MCP traces. MCP transport doesn't stably surface internal `semantic_search()` results to the client. The probe invokes `semantic_search()` directly (in-process), which is a clean, reproducible interface.
+7. **LLM determinism.** Even at temp=0, Claude answers can drift slightly (~1-3% case-level flip rate in practice). Mitigation: `k=1` runs for v1 (single-pass), add `k=3` majority voting in v2 if we see flakiness > 3% on a given case.
+8. **Retry masking regressions.** Anthropic SDK wrapper retries transient 5xx / rate-limit errors. If retries succeed silently, real timeout regressions in production configurations stay hidden from the eval. Mitigation: every retry is logged with reason and count; the report header surfaces total retry-count and any cases that needed >1 retry.
+9. **Sample-size adequacy.** With ≥ 25 cases per stratum per family, a 5pp accuracy gap has a ~±10pp 95% CI. Results < 10pp gap should be treated as non-significant. Publishable claims need ≥ 50 per stratum per family; v1 ships with the minimum adequate size and the roadmap expands to publishable.
+10. **Cost.** ~$3-8 per full run for v1 is fine for on-demand. Phase 2 nightly = ~$200-250/month. Phase 3 PR-smoke-set multiplies that by PR volume. Hard per-run cost cap enforced in `config.py`.
+11. **"We're not better" (or "we're not better where it counts").** The stratified report may reveal that TabulaRAG ties with CSV-attached on small tables (the `fits_in_context` stratum) and only wins on large ones. That's still a real claim — just a narrower one than "TabulaRAG wins across the board." We publish what we find.
+12. **Embedding model drift.** The FastEmbed model is pinned in code, but if someone changes `EMBEDDING_MODEL` between the eval ingestion and production, numbers move independently of quality. Mitigation: report header records `EMBEDDING_MODEL` at ingestion time AND at query time; a mismatch is a blocker, not a warning.
+13. **Dataset schema drift.** If we change the shape of `UnifiedQueryRequest` or MCP tool descriptions between nightly runs, apparent regressions may be harness-misalignment, not real. Mitigation: each case records `authored_against_backend_sha`; runner logs when the active backend sha differs and flags results from that run as "backend drift — re-author cases if schema changed."
+14. **DataBench upstream updates.** If DataBench publishes new versions of tables or revises answers, our committed JSONL cases may diverge from upstream ground truth without us noticing. Mitigation: `databench_import.py` pins a DataBench commit/version; regeneration requires a deliberate bump.
+15. **`supporting_columns` is still LLM-produced prose.** For the `row_value` citation check we ask Claude to name the columns that carried its answer. That is an arm-produced string; treating it as ground-truth for citation scoring slightly circular. It is fine as a diagnostic signal, but we should not use it as a pass/fail gate for the headline accuracy number.
 
 ---
 
