@@ -65,3 +65,43 @@ Thumbs.db
 
 .claude/
 CLAUDE.md
+
+# ----------------------------------------------------------------------------
+# Imported from cedar repos (agent tooling, superpowers skills, drafts, misc)
+# ----------------------------------------------------------------------------
+
+# Claude Code / agent tooling
+.claude/worktrees/
+.claude/.scout-progress.json
+.claude/.scout-last-seen
+.cursorignore
+
+# Superpowers skill caches + generated docs
+.superpowers/
+docs/superpowers/
+
+# Private / draft tech designs (tech-designs/ itself is tracked)
+.tech-designs
+
+# Env files — keep .env.example tracked
+.env*
+!.env.example
+
+# Frontend build / tool caches
+*.tsbuildinfo
+.eslintcache
+.vercel
+
+# Frontend debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Playwright / e2e (if added later)
+.playwright-mcp
+playwright-report
+test-results
+
+# Superset local data / state
+.superset/
