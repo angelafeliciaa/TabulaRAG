@@ -212,7 +212,7 @@ The CSV-attached baseline is not a uniform arm — its performance depends stron
 **Report implications:**
 
 - The headline scorecard shows **two sub-tables**, one per stratum, with a note that no single "overall" accuracy number is reported. This is a design choice, not an oversight — blending strata hides the mechanism.
-- Each metric in each stratum gets a **95% Wilson confidence interval** next to the point estimate (see §4 on sample-size adequacy).
+- Each metric in each stratum gets a **95% Wilson confidence interval** next to the point estimate (see Section 5 on sample-size adequacy).
 - Latency is reported **per stratum** because prompt size dominates it for the CSV-attached arm.
 
 ### 4. Arms — the systems being compared
@@ -318,7 +318,7 @@ These are published in a separate "TabulaRAG internals" subsection of the report
 
 Written to `evals/reports/benchmark-<YYYY-MM-DD>.md` and `.json`. The markdown version is human-scannable; the JSON version is what future runs diff against. Numbers in the example below are illustrative only.
 
-**No single overall accuracy number is reported.** The headline is always stratified, per the rationale in §3.
+**No single overall accuracy number is reported.** The headline is always stratified, per the rationale in Section 3.
 
 Markdown example:
 
