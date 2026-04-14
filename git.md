@@ -1,5 +1,15 @@
 # Git Conventions — TabulaRAG
 
+## Workflow
+
+**Never push directly to `main`.** Every change — even a one-line typo fix — goes through a branch and a pull request.
+
+- Create a branch off `main` for every change (name it anything descriptive; no mandated convention).
+- Open a **draft PR** as soon as the branch has commits, so the work is visible.
+- Promote the PR to ready for review only after CI is green.
+- Merge to `main` only via a PR. Direct pushes to `main` are disallowed (enforce with a branch protection rule on GitHub when practical).
+- After merge, delete the remote branch.
+
 ## Commit Format
 
 Conventional Commits: `type(scope): subject`
