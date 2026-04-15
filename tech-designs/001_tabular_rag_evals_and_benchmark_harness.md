@@ -33,6 +33,29 @@ The purpose is **trust-building through evidence**: a number we can publish on t
 
 ---
 
+## Prior art & research influences
+
+The 2025 eval landscape is noisy. Most published "RAG eval" tooling assumes LLM-generated answers; most "MCP eval" tooling is either scaffolding or LLM-judge prompts of dubious rigor. A few sources are worth building on.
+
+| Source | What we borrowed | Where it shows up in this design |
+|---|---|---|
+| [GitHub MCP offline evaluation](https://github.blog/ai-and-ml/generative-ai/measuring-what-matters-how-offline-evaluation-of-github-mcp-server-works/) | **Tool-selection confusion matrix** — diagnose "did the LLM pick the right mode?" as a side-metric, not a gate. | Section 5 (diagnostic metrics) + Section 6 (report layout). |
+| [`jorses/databench_eval`](https://github.com/jorses/databench_eval) | Use the official DataBench scorer library as a dependency — numeric tolerance (2dp truncation), category exact match, set equality — instead of reimplementing. | Section 5 and Phase 1 step 8. |
+| [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) | *"Sanity-check brittle tasks with a tool-less baseline; a 0% pass rate usually means the eval is broken, not the model."* | Section 4 (new pre-pass), Verification §5. |
+| [τ-bench (Sierra)](https://github.com/sierra-research/tau-bench) | `pass^k` consistency (run N times, require consistency). **Not adopted for v1** because it 3×s our LLM cost; flagged in Risk 7 and deferred to v2. | Risks §7 + Deferred §v2. |
+| [Sentry `mcp-server-evals`](https://github.com/getsentry/sentry-mcp) | Structural model for MCP eval checked into the same repo as the product, run in CI. | Directory layout §1, Phase 2. |
+| [Stainless `mcp-evals-harness`](https://github.com/stainless-api/mcp-evals-harness) | "Efficiency" intuition: turns + tokens budget matters alongside correctness. | Section 5 metrics (token budget as a first-class metric). |
+| [Hamel Husain — Evals FAQ](https://hamel.dev/blog/posts/evals-faq/) and [Eugene Yan — Task-specific LLM evals](https://eugeneyan.com/writing/evals/) | Binary/deterministic scoring over Likert; avoid LLM-as-judge where a deterministic oracle exists. | Goals §3, Section 5 framing. |
+
+**What we explicitly *don't* borrow:**
+- The LLM-as-judge stack (Ragas metrics that require a generator, TruLens, most MCP-eval prompts). Only useful for generative RAG; we don't have one.
+- `mclenhard/mcp-evals` and `mcpx-eval` style "how helpful was the answer? 1–5" scoring. Called out by [Glama.ai's MCP-eval review](https://glama.ai/blog/2025-05-01-mcp-evals) as exactly the anti-pattern to avoid.
+- ToolBench / agent-SDK benchmarks built for multi-tool orchestration. Our server is a single MCP tool with a handful of modes.
+
+**Note on novelty.** We searched the major MCP server repos (Sentry, GitHub, Stainless, Canva, Block, Cloudflare, Linear, Notion) — **none publish a head-to-head comparison against a "no tool, raw file in context" baseline.** That's the core contribution of this harness and the reason it needs to be built rather than copied.
+
+---
+
 ## Current State
 
 ### What exists
@@ -142,15 +165,15 @@ evals/
 
 ### 2. Test case families
 
-Three kinds of cases, all grounded in DataBench tables:
+Three kinds of cases, all grounded in DataBench tables. Counts are sized to give each stratum adequate statistical power (see Section 3 on stratification and Section 5 on CIs).
 
 | Family | Question source | Ground-truth source | Target count v1 |
 |---|---|---|---|
-| `semantic.lookup` | DataBench's natural-language questions | DataBench's labeled answer (row ids or answer string) | ~30 |
-| `aggregate.pandas_oracle` | Templated (*"What's the sum of X grouped by Y?"*) | `pandas.groupby().agg()` on the CSV | ~30 |
-| `semantic.edge` | Hand-authored (~20-30, one-time cost) | Hand-labeled acceptable-answer-set (incl. "should return nothing") | ~20 |
+| `semantic.lookup` | DataBench's natural-language questions | DataBench's labeled answer (row ids or answer string) | ~50 (≥25 per stratum) |
+| `aggregate.pandas_oracle` | Templated (*"What's the sum of X grouped by Y?"*) | `pandas.groupby().agg()` on the CSV | ~50 (≥25 per stratum) |
+| `semantic.edge` | Hand-authored — **matched refuse + control pair** | Hand-labeled acceptable-answer-set (incl. "should return nothing" on refuse cases; real answers on control cases) | ~40 (20 refuse + 20 control) |
 
-**Total ≈ 80 cases v1.** 80 × 2 arms × ~1-2 LLM calls/arm = ~200 LLM calls/run. At Claude Sonnet pricing this is roughly **$3-8 per full run.** Acceptable for on-demand use.
+**Total ≈ 140 cases v1.** 140 × 2 arms × ~1-2 LLM calls/arm = ~350 LLM calls/run. At Claude Sonnet pricing this is roughly **$8-15 per full run.** Acceptable for on-demand use. Per-run cost cap enforced in `config.py`.
 
 **Case JSONL format (stable schema across families):**
 
@@ -241,10 +264,12 @@ class Arm(Protocol):
 **v1 arms:**
 
 - **`tabularag.py`** — starts (or connects to) a running TabulaRAG backend, ensures the case's CSV is ingested (idempotent — keyed on file hash), issues an MCP token, spawns a Claude client with the MCP tool configured, sends the case question, captures the final answer.
-- **`csv_attached.py`** — reads the CSV file, attaches it (as a file block or large prompt inclusion, depending on size), sends the same question to Claude with no tools. For CSVs over ~200 KB, downsample with a note in the prompt ("[dataset truncated; first 2000 of 8000 rows shown]"); this mirrors how ChatGPT/Claude file attachments behave in practice.
+- **`csv_attached.py`** — reads the CSV file, attaches it to the prompt, sends the same question to Claude with no tools. For tables in the `requires_truncation` stratum (defined in Section 3 — serialized size > ~100K tokens), downsample with a note in the prompt (`[dataset truncated; first 2000 of N rows shown]`). This mirrors how ChatGPT / Claude Desktop file attachments behave in practice; it is documented in the report header so readers know what the baseline actually saw.
 - **`open_webui.py`** — v1.5. Stub raises `NotImplementedError` with a TODO pointing at this design doc.
 
-**LLM client (shared by all arms):** `evals/arms/_llm.py` — thin wrapper around the Anthropic SDK with prompt caching, retry on transient errors, deterministic `temperature=0` for reproducibility. One model for v1: `claude-sonnet-4-6` (swap via config).
+**LLM client (shared by all arms):** `evals/arms/_llm.py` — thin wrapper around the Anthropic SDK. Retry on transient errors (with per-retry logging so retries don't silently mask regressions). Deterministic `temperature=0`. **Prompt caching is disabled in v1** for arm symmetry — the TabulaRAG arm would benefit from caching the MCP tool preamble across cases, but CSV-attached cannot cache a different CSV per case, so leaving caching on would inflate the cost/latency gap artificially. One model for v1: `claude-sonnet-4-6` (swap via config).
+
+**Pre-pass — raw-Claude sanity check (before the main run).** Before we declare any TabulaRAG regression, we run each test case through a third "control" arm: **raw Claude with no tools and no CSV, just the question.** Any question this arm answers correctly is almost certainly too general ("what is the capital of France?") — such questions don't actually test tabular retrieval and should be flagged for removal from the suite. Any question on which *all arms* score 0, including this tool-less control, is likely a broken case (bad DataBench label, ambiguous phrasing) and should be excluded from the headline, not charged against the tool. This pattern is recommended explicitly in [Anthropic's agent eval guidance](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) — *a 0% pass rate usually means the task is broken, not the model.* The pre-pass runs once per eval suite version, not per run; results are committed alongside cases as `cases/_prepass_results.json` and used to auto-filter the main run.
 
 ### 5. Metrics & scoring
 
@@ -284,6 +309,8 @@ class RefuseAnswer(TypedDict):
 | `single_numeric` | Same tolerance check on `value`. |
 | `should_refuse` | `refuse == true`. See "Refuse-set integrity" below. |
 
+**Scoring dependency — `databench_eval`.** Where possible, we use the official [`jorses/databench_eval`](https://github.com/jorses/databench_eval) scorer library rather than reimplementing comparison primitives. It provides: numeric tolerance (2-decimal truncation matching SemEval-2025 Task 8 scoring), category exact match, and order-independent set equality. These map directly onto our `single_numeric`, `row_value`, and parts of `grouped_numeric`. Keeping the dependency means our scores match the DataBench leaderboard's official scoring, which is useful if we ever want to report an absolute number (not just a gap).
+
 **Refuse-set integrity.** `should_refuse` scoring is gameable if an arm just refuses everything. To catch this we always pair the refuse set with a **control set** — cases that look superficially similar but *do* have a correct answer. The reported metric is:
 
 - **`refuse_precision`** — of cases where the arm refused, how many were supposed to be refused
@@ -304,7 +331,25 @@ An arm that refuses everything gets high recall but near-zero precision → low 
 
 **Prompt-caching symmetry.** Anthropic prompt caching is disabled for both arms in v1 (enable only once we've established baseline comparability). The TabulaRAG arm would naturally benefit from caching the MCP tool-schema preamble across cases; the CSV-attached arm cannot cache (different CSV per case). Leaving caching on asymmetrically inflates the cost/latency gap. Revisit in v2 after the baseline comparison is credible.
 
-**TabulaRAG-internal diagnostic metrics (not comparative):**
+**Tool-selection diagnostic — mode confusion matrix (TabulaRAG arm only).**
+
+Each `Case` carries an `expected_mode` label (semantic / aggregate / filter / filter_row_indices) — the mode a competent tool user *should* pick for that question. For every TabulaRAG-arm run we record which mode Claude actually invoked (extracted from `tool_calls[0].arguments.mode` in `ArmResult`) and tabulate a confusion matrix at the end of the run:
+
+```
+                   Claude picked →
+                semantic  aggregate  filter  filter_row_indices
+Expected ↓
+semantic            20        3         2          0
+aggregate            1       18         1          0
+filter               0        2         8          0
+filter_row_indices   0        0         0          0
+```
+
+The diagonal is correct mode-selection; off-diagonal entries reveal systematic confusions — e.g., "when aggregate is correct, Claude often picks filter" suggests your `UnifiedQueryRequest` mode descriptions are ambiguous between those two. This is a **diagnostic for tool-description quality**, not a pass/fail score. Pattern borrowed from [GitHub's MCP offline evaluation](https://github.blog/ai-and-ml/generative-ai/measuring-what-matters-how-offline-evaluation-of-github-mcp-server-works/), where confusion-matrix analysis was the highest-signal lever for improving their tool descriptions.
+
+We also log the **tool-bypass rate**: fraction of cases where Claude answered without any MCP tool call at all. High tool-bypass rate on tabular questions is a sign the tool description doesn't read as useful enough — another signal that feeds back into prompt/schema improvements, not a bug in retrieval.
+
+**TabulaRAG-internal retrieval metrics (not comparative):**
 
 These measure *our system's* retrieval without going through the LLM arm — they are produced by a **separate retrieval-probe pass** that calls `semantic_search()` directly (from `backend/app/retrieval.py`) for each `semantic.lookup` case. They do not rely on scraping MCP tool-call traces, which is not a stable interface.
 
@@ -410,21 +455,21 @@ Phased so each phase ships useful value.
 5. **Implement `generators/aggregate_gen.py`** — emit JSONL cases with pandas-computed ground truth, respecting the stratum balance from step 0.
 6. **Implement `metrics/schemas.py`** — the `CaseAnswer` TypedDicts + a `validate_and_parse(payload, expected_type)` helper used by both the arms (to shape prompts) and the scorer (to check outputs). One source of truth.
 7. **Hand-author `cases/semantic_edge.jsonl`** — ~20 refuse cases **plus a matched control set** of cases that look similar but *do* have answers. Target n ≥ 40 total (20 refuse + 20 control) so `refuse_f1` is meaningful.
-8. **Implement `metrics/answer_match.py`** — per-`expected.type` comparison, parse-failure classification, Wilson CI helper.
+8. **Implement `metrics/answer_match.py`** — wrap the [`databench_eval`](https://github.com/jorses/databench_eval) scorer library for numeric tolerance / category EM / set equality, plus parse-failure classification and a Wilson CI helper. Do not reimplement comparison primitives that already exist upstream.
 9. **Implement `arms/_llm.py`** — Anthropic SDK wrapper. Enforces structured-output schema per case. Retry on transient errors with logging so retries don't silently mask regressions. Deterministic `temperature=0`. Prompt caching disabled in v1.
 10. **Implement `arms/tabularag.py`** — issues MCP token, configures Claude to use `http://localhost:8000/mcp`, sends question *with the `CaseAnswer` schema requirement*, captures trace + answer. Detects when Claude fails to invoke the tool at all (answering from general knowledge) and flags the case as `tool_bypassed`.
 11. **Implement `arms/csv_attached.py`** — sends CSV content + question under the same structured-output contract, no tools. For tables in `requires_truncation` stratum, applies the documented truncation rule (first 2000 rows).
 12. **Implement `harness/retrieval_probe.py`** — separate non-LLM pass that calls `semantic_search()` directly for `semantic.lookup` cases to compute internal retrieval metrics. Does not require MCP trace scraping.
-13. **Implement `harness/runner.py`** — loops cases × arms × strata. Persists intermediate state so interrupted runs can resume.
-14. **Implement `run.py`** — CLI; prints a summary to stdout and writes stratified markdown + JSON to `reports/`.
-15. **Write `evals/README.md`** — how to run, how to add a case, how to interpret the stratified report, how to regenerate cases.
-16. **Commit a first baseline run** to `reports/` and link it from the repo README.
-17. **Manual spot-check** — pull 10 random cases per stratum, read arm outputs alongside `expected`, confirm the grading decisions match a human eye. Blocks the v1 announcement.
+13. **Raw-Claude sanity pre-pass (Section 4).** Run each case through a tool-less, no-CSV control arm. Commit `cases/_prepass_results.json`. Flag and exclude from the headline any case that the tool-less control answers correctly (too general — not testing retrieval) or that scores 0 on every arm (likely broken case). Runs once per suite version, not per run.
+14. **Implement `harness/runner.py`** — loops cases × arms × strata. Respects the pre-pass exclusion list. Persists intermediate state so interrupted runs can resume.
+15. **Implement `run.py`** — CLI; prints a summary to stdout and writes stratified markdown + JSON to `reports/`.
+16. **Write `evals/README.md`** — how to run, how to add a case, how to interpret the stratified report, how to regenerate cases.
+17. **Commit a first baseline run** to `reports/` and link it from the repo README. Manual spot-check and read-30-transcripts gates (covered in Verification) must pass before announcement.
 
 ### Phase 2 — Nightly CI report (~1 day on top of Phase 1)
 
 - GitHub Action on a cron schedule (02:00 UTC, `main` branch only).
-- Runs `python evals/run.py --suite all`. Budget: wall-clock < 20 minutes, cost < $10/run.
+- Runs `python evals/run.py --suite all`. Budget: wall-clock < 20 minutes, cost < $20/run (updated from earlier $10 estimate — see Section 2 on case-count inflation after stratification).
 - Posts results as a workflow artifact and comments on a pinned issue (`#evals-nightly-results`).
 - **No merge gating.**
 - Two weeks of nightly data gives the variance we need to set Phase 3 thresholds responsibly.
@@ -448,8 +493,10 @@ Evals are themselves code that can be wrong. We verify with:
 
 1. **Unit tests for metrics** — `tests/evals/test_answer_match.py` covering numeric tolerance, set equality, case-insensitive string match, "should_refuse" classification. Small, fast, run with the normal test suite.
 2. **Golden-run test** — a tiny `cases/_selftest.jsonl` with 3 hand-crafted cases whose answers we know; a runner test mocks the arms with canned `ArmResult`s and asserts the scorer produces the expected report. Catches breakage in the runner/scorer pipeline without needing live LLM calls.
-3. **Manual spot-check** after first baseline run — pull 10 random cases, look at arm outputs alongside `expected`, sanity-check the grading decisions.
-4. **Comparing arms on trivially different cases** — e.g., a case where CSV-attached *must* win (tiny CSV, lookup question) and one where TabulaRAG *must* win (thousands of rows, needs semantic search). If the scorer rewards the "wrong" arm in the obvious cases, something's off.
+3. **Manual spot-check** after first baseline run — pull 10 random cases per stratum, look at arm outputs alongside `expected`, sanity-check the grading decisions match a human eye. Blocks v1 announcement.
+4. **Read-30-transcripts rule** — for every major eval run (first baseline, before any publication of numbers, and whenever accuracy moves > 5pp run-over-run), read 30 random raw transcripts. Graders fail silently all the time; this catches it. Pattern recommended explicitly in [Anthropic's agent eval guidance](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) ("you won't know if your graders work unless you read transcripts").
+5. **Trivial case sanity check** — a case where CSV-attached *must* win (tiny CSV, lookup question) and one where TabulaRAG *must* win (thousands of rows, needs semantic search). If the scorer rewards the "wrong" arm in the obvious cases, something's off.
+6. **Pre-pass exclusion review** — after the raw-Claude sanity pre-pass (Phase 1 step 13), manually review the "excluded as too general" and "excluded as 0% across all arms" lists. The exclusion heuristic is conservative; any excluded case a human disagrees with should be re-added.
 
 ---
 
@@ -459,7 +506,7 @@ Evals are themselves code that can be wrong. We verify with:
 - **TabulaRAG backend down** — runner checks `/health` before starting; aborts with a clear message. No silent failures.
 - **MCP tool call loop** — hard cap of 10 tool calls per case; breaking the cap records an error for that case and moves on.
 - **Latency outlier** — per-case timeout (30s). Timed-out cases are scored 0 and flagged in the report.
-- **Ground-truth parsing failure** — if the arm's answer can't be parsed into `answer_parsed`, the case is scored 0 and the raw answer is logged for manual review. (Expected to happen on ~5% of cases where the LLM phrases things unusually — this is a known noise floor.)
+- **Structured-output parse failure** — if the arm's output does not validate against its `CaseAnswer` schema, the case is recorded as `parse_failed` for that arm. **Parse failures are a separate reported metric — `parse_failure_rate` — not silently counted as an accuracy of 0** (see Section 5). The raw answer is logged for manual review. Asymmetric parse-failure rates between arms (> 3pp gap) trigger a warning in the report header; a large gap means we are partly measuring "which model follows the schema better," not retrieval quality.
 - **Partial CSV ingestion** — if `ingest_table()` errors on a DataBench CSV (encoding, bad delimiters, etc.), the table is excluded from the run with a warning. Log the exclusion so we can fix the ingest gap.
 
 ---
@@ -475,7 +522,7 @@ Evals are themselves code that can be wrong. We verify with:
 7. **LLM determinism.** Even at temp=0, Claude answers can drift slightly (~1-3% case-level flip rate in practice). Mitigation: `k=1` runs for v1 (single-pass), add `k=3` majority voting in v2 if we see flakiness > 3% on a given case.
 8. **Retry masking regressions.** Anthropic SDK wrapper retries transient 5xx / rate-limit errors. If retries succeed silently, real timeout regressions in production configurations stay hidden from the eval. Mitigation: every retry is logged with reason and count; the report header surfaces total retry-count and any cases that needed >1 retry.
 9. **Sample-size adequacy.** With ≥ 25 cases per stratum per family, a 5pp accuracy gap has a ~±10pp 95% CI. Results < 10pp gap should be treated as non-significant. Publishable claims need ≥ 50 per stratum per family; v1 ships with the minimum adequate size and the roadmap expands to publishable.
-10. **Cost.** ~$3-8 per full run for v1 is fine for on-demand. Phase 2 nightly = ~$200-250/month. Phase 3 PR-smoke-set multiplies that by PR volume. Hard per-run cost cap enforced in `config.py`.
+10. **Cost.** ~$8-15 per full run for v1 (140 cases × 2 arms at Claude Sonnet pricing, stratified = more baseline input tokens than the earlier back-of-envelope). Fine for on-demand. Phase 2 nightly ≈ ~$300/month. Phase 3 PR-smoke-set multiplies that by PR volume. Hard per-run cost cap enforced in `config.py`. If Anthropic Startups / AWS Bedrock / GCP Vertex credits are available, use those — see Misc section.
 11. **"We're not better" (or "we're not better where it counts").** The stratified report may reveal that TabulaRAG ties with CSV-attached on small tables (the `fits_in_context` stratum) and only wins on large ones. That's still a real claim — just a narrower one than "TabulaRAG wins across the board." We publish what we find.
 12. **Embedding model drift.** The FastEmbed model is pinned in code, but if someone changes `EMBEDDING_MODEL` between the eval ingestion and production, numbers move independently of quality. Mitigation: report header records `EMBEDDING_MODEL` at ingestion time AND at query time; a mismatch is a blocker, not a warning.
 13. **Dataset schema drift.** If we change the shape of `UnifiedQueryRequest` or MCP tool descriptions between nightly runs, apparent regressions may be harness-misalignment, not real. Mitigation: each case records `authored_against_backend_sha`; runner logs when the active backend sha differs and flags results from that run as "backend drift — re-author cases if schema changed."
@@ -506,6 +553,10 @@ Evals are themselves code that can be wrong. We verify with:
 
 Add a `filter.pandas_oracle` case family — templated filter conditions (`{column, op, value}` chains) with pandas computing the expected row indices. Only worth building if Phase 2 surfaces filter-mode regressions that unit tests miss, or if we want to add a mode-routing arm where the LLM picks the mode itself.
 
+### v2.5 — `pass^k` consistency metric
+
+Each case is run N times (k=3 minimum, k=8 ideal per [τ-bench's findings](https://github.com/sierra-research/tau-bench)). Report `pass@1` (at-least-one-success rate) alongside `pass^k` (all-k-succeed rate). The gap between these two numbers is a direct measure of non-determinism: τ-bench found `pass^8` under 25% on tasks where `pass@1` was 50% — single-run numbers massively overstate reliability. **Explicitly deferred from v1 because it triples LLM cost.** Add once we have credits or the baseline comparison is trusted enough to justify the budget.
+
 ### v3 — Ingestion / type-inference eval
 
 Separate corpus of CSVs with labeled ground truth for: correct delimiter, correct header row, money/date/measurement columns. F1-scored. Measures `normalization.py` and ingestion-time inference logic in `backend/app/main.py`. Different shape of eval — no LLM involved.
@@ -520,5 +571,6 @@ Open-ended research territory. Not planned.
 
 - **License of DataBench CSVs**: DataBench is released under a permissive license per the SemEval 2025 Task 8 paper. Confirm license compatibility and add attribution in `datasets/databench/README.md` during Phase 1.
 - **Secrets handling**: `ANTHROPIC_API_KEY` and TabulaRAG API keys must be in env, never in files. `evals/config.py` reads from env only and errors loudly if missing.
+- **Paying for runs**: Cursor credits do not apply (Cursor is a separate brokerage). Use direct Anthropic API credits (apply to [Anthropic for Startups](https://www.anthropic.com/startups) — TabulaRAG should qualify), AWS Bedrock credits (Claude is available on Bedrock), or GCP Vertex credits (Claude is on Vertex). For one-off v1 runs at ~$8-15 each, paying out of pocket is fine.
 - **Reproducibility**: Every report includes: seed, DataBench subset commit, LLM model ID, `EMBEDDING_MODEL`, Python `requirements.txt` hash. Anyone with the same inputs should reproduce the numbers within LLM-determinism noise.
 - **Naming**: "eval" and "benchmark" are used interchangeably in casual conversation; in this repo, the user-visible artifact is always called a **benchmark report** (the comparison is the point). "Eval" is the internal word for the harness.
