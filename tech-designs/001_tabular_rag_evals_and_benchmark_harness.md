@@ -267,7 +267,7 @@ class Arm(Protocol):
 - **`csv_attached.py`** — reads the CSV file, attaches it to the prompt, sends the same question to Claude with no tools. For tables in the `requires_truncation` stratum (defined in Section 3 — serialized size > ~100K tokens), downsample with a note in the prompt (`[dataset truncated; first 2000 of N rows shown]`). This mirrors how ChatGPT / Claude Desktop file attachments behave in practice; it is documented in the report header so readers know what the baseline actually saw.
 - **`open_webui.py`** — v1.5. Stub raises `NotImplementedError` with a TODO pointing at this design doc.
 
-**LLM client (shared by all arms):** `evals/arms/_llm.py` — thin wrapper around the Anthropic SDK. Retry on transient errors (with per-retry logging so retries don't silently mask regressions). Deterministic `temperature=0`. **Prompt caching is disabled in v1** for arm symmetry — the TabulaRAG arm would benefit from caching the MCP tool preamble across cases, but CSV-attached cannot cache a different CSV per case, so leaving caching on would inflate the cost/latency gap artificially. One model for v1: `claude-sonnet-4-6` (swap via config).
+**LLM client (shared by all arms):** `evals/arms/_llm.py` — thin Anthropic SDK wrapper. Retry on transient errors with per-retry logging. Deterministic `temperature=0`. Prompt caching disabled in v1 (see Section 5 for the symmetry rationale). One model for v1: `claude-sonnet-4-6` (swap via config).
 
 **Pre-pass — raw-Claude sanity check (before the main run).** Before we declare any TabulaRAG regression, we run each test case through a third "control" arm: **raw Claude with no tools and no CSV, just the question.** Any question this arm answers correctly is almost certainly too general ("what is the capital of France?") — such questions don't actually test tabular retrieval and should be flagged for removal from the suite. Any question on which *all arms* score 0, including this tool-less control, is likely a broken case (bad DataBench label, ambiguous phrasing) and should be excluded from the headline, not charged against the tool. This pattern is recommended explicitly in [Anthropic's agent eval guidance](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) — *a 0% pass rate usually means the task is broken, not the model.* The pre-pass runs once per eval suite version, not per run; results are committed alongside cases as `cases/_prepass_results.json` and used to auto-filter the main run.
 
@@ -506,28 +506,30 @@ Evals are themselves code that can be wrong. We verify with:
 - **TabulaRAG backend down** — runner checks `/health` before starting; aborts with a clear message. No silent failures.
 - **MCP tool call loop** — hard cap of 10 tool calls per case; breaking the cap records an error for that case and moves on.
 - **Latency outlier** — per-case timeout (30s). Timed-out cases are scored 0 and flagged in the report.
-- **Structured-output parse failure** — if the arm's output does not validate against its `CaseAnswer` schema, the case is recorded as `parse_failed` for that arm. **Parse failures are a separate reported metric — `parse_failure_rate` — not silently counted as an accuracy of 0** (see Section 5). The raw answer is logged for manual review. Asymmetric parse-failure rates between arms (> 3pp gap) trigger a warning in the report header; a large gap means we are partly measuring "which model follows the schema better," not retrieval quality.
+- **Structured-output parse failure** — recorded as `parse_failed`, logged for review, reported as its own metric; see Section 5 for full semantics.
 - **Partial CSV ingestion** — if `ingest_table()` errors on a DataBench CSV (encoding, bad delimiters, etc.), the table is excluded from the run with a warning. Log the exclusion so we can fix the ingest gap.
 
 ---
 
 ## Open Questions / Risks
 
-1. **DataBench subset selection bias.** Picking the "easy" tables inflates the headline number. Mitigation: seeded pseudo-random selection from step-0 token audit; document seed + selection criteria in `manifest.json`; include at least 2 tables flagged by DataBench as "hard" in each stratum.
-2. **Ground-truth noise in DataBench.** Known ~5-10% of labels are noisy; this caps maximum accuracy meaningfully below 1.0, and it also caps *gap-between-arms* detection — if both arms hit the noisy ceiling differently, some of the gap is noise. Mitigation: run a one-time label audit on the chosen subset before generating cases; flag the noisiest 10% for exclusion or extra caution.
-3. **CSV-attached baseline fairness.** The truncation rule for the `requires_truncation` stratum mirrors Claude Desktop's first-N-rows file-attach behaviour. We document it in `arms/csv_attached.py` and disclose it in the report. Other clients (ChatGPT, Cursor) may truncate differently — we note this as a limitation of the comparison, not a bug.
-4. **Asymmetric parse-failure rates invalidate accuracy comparison.** If the two arms have materially different parse_failure_rate, we are partly measuring "which model follows the schema better," not retrieval quality. Mitigation: the runner emits a warning in the report header if the two arms' parse_failure_rates differ by > 3pp; that warning is prominent, not buried.
-5. **TabulaRAG arm: silent tool-bypass.** Claude may answer from general knowledge without ever calling the MCP tool, effectively turning TabulaRAG-arm into a slightly-worse CSV-attached arm. We detect this per case (no MCP tool calls in trace) and record `tool_bypassed=true`; those cases are reported separately — their accuracy contribution is a signal of how compelling the tool's description is, not of retrieval quality.
-6. **`retrieval.recall@5` is measured by a separate probe pass**, not scraped from MCP traces. MCP transport doesn't stably surface internal `semantic_search()` results to the client. The probe invokes `semantic_search()` directly (in-process), which is a clean, reproducible interface.
-7. **LLM determinism.** Even at temp=0, Claude answers can drift slightly (~1-3% case-level flip rate in practice). Mitigation: `k=1` runs for v1 (single-pass), add `k=3` majority voting in v2 if we see flakiness > 3% on a given case.
-8. **Retry masking regressions.** Anthropic SDK wrapper retries transient 5xx / rate-limit errors. If retries succeed silently, real timeout regressions in production configurations stay hidden from the eval. Mitigation: every retry is logged with reason and count; the report header surfaces total retry-count and any cases that needed >1 retry.
-9. **Sample-size adequacy.** With ≥ 25 cases per stratum per family, a 5pp accuracy gap has a ~±10pp 95% CI. Results < 10pp gap should be treated as non-significant. Publishable claims need ≥ 50 per stratum per family; v1 ships with the minimum adequate size and the roadmap expands to publishable.
-10. **Cost.** ~$8-15 per full run for v1 (140 cases × 2 arms at Claude Sonnet pricing, stratified = more baseline input tokens than the earlier back-of-envelope). Fine for on-demand. Phase 2 nightly ≈ ~$300/month. Phase 3 PR-smoke-set multiplies that by PR volume. Hard per-run cost cap enforced in `config.py`. If Anthropic Startups / AWS Bedrock / GCP Vertex credits are available, use those — see Misc section.
-11. **"We're not better" (or "we're not better where it counts").** The stratified report may reveal that TabulaRAG ties with CSV-attached on small tables (the `fits_in_context` stratum) and only wins on large ones. That's still a real claim — just a narrower one than "TabulaRAG wins across the board." We publish what we find.
-12. **Embedding model drift.** The FastEmbed model is pinned in code, but if someone changes `EMBEDDING_MODEL` between the eval ingestion and production, numbers move independently of quality. Mitigation: report header records `EMBEDDING_MODEL` at ingestion time AND at query time; a mismatch is a blocker, not a warning.
-13. **Dataset schema drift.** If we change the shape of `UnifiedQueryRequest` or MCP tool descriptions between nightly runs, apparent regressions may be harness-misalignment, not real. Mitigation: each case records `authored_against_backend_sha`; runner logs when the active backend sha differs and flags results from that run as "backend drift — re-author cases if schema changed."
-14. **DataBench upstream updates.** If DataBench publishes new versions of tables or revises answers, our committed JSONL cases may diverge from upstream ground truth without us noticing. Mitigation: `databench_import.py` pins a DataBench commit/version; regeneration requires a deliberate bump.
-15. **`supporting_columns` is still LLM-produced prose.** For the `row_value` citation check we ask Claude to name the columns that carried its answer. That is an arm-produced string; treating it as ground-truth for citation scoring slightly circular. It is fine as a diagnostic signal, but we should not use it as a pass/fail gate for the headline accuracy number.
+Items already covered in detail in earlier sections are listed here as 1-line cross-refs.
+
+1. **DataBench subset bias.** Easy-table picking inflates headlines. Mitigation: seeded random selection from the step-0 audit, ≥2 "hard" tables per stratum.
+2. **DataBench label noise (~5-10%).** Caps both absolute accuracy and gap detectability. Mitigation: label audit on the chosen subset, flag noisiest 10%.
+3. **CSV truncation rule** — see Section 4. Mirrors Claude Desktop behaviour; other clients may truncate differently (disclosed in report).
+4. **Asymmetric parse-failure** — see Section 5. >3pp arm gap triggers report-header warning.
+5. **Silent tool-bypass** — see Section 5 (diagnostic metrics). Bypassed cases reported separately.
+6. **`retrieval.recall@5` probe, not trace-scrape** — see Section 5.
+7. **LLM non-determinism.** Even at temp=0, ~1-3% case-level flips. v1 runs `k=1`; upgrade to `k=3` if flakiness > 3%. Full `pass^k` is deferred (v2.5).
+8. **Retry masking regressions.** SDK retries succeed silently. Mitigation: log every retry with reason; report header surfaces retry counts.
+9. **Sample-size adequacy** — see Section 5. v1 (≥25/stratum/family) is minimum-adequate; publishable claims need ≥50.
+10. **Cost.** ~$8-15/run for v1; Phase 2 nightly ~$300/month. Hard per-run cap in `config.py`.
+11. **Narrow-result outcome.** TabulaRAG may tie in `fits_in_context` and win only in `requires_truncation`. Still a real claim; we publish what we find.
+12. **Embedding model drift.** `EMBEDDING_MODEL` changes decouple eval numbers from product quality. Mitigation: report records it at ingestion AND query time; mismatch is a blocker.
+13. **Backend schema drift.** Shape changes to `UnifiedQueryRequest`/MCP tool descriptions may look like regressions. Mitigation: each case pins `authored_against_backend_sha`; runner flags drift.
+14. **DataBench upstream updates.** New versions may diverge from our committed JSONL. Mitigation: `databench_import.py` pins a version; regeneration is deliberate.
+15. **`supporting_columns` is LLM-produced.** Diagnostic signal for citation precision, not a pass/fail gate for the headline number.
 
 ---
 
@@ -571,6 +573,5 @@ Open-ended research territory. Not planned.
 
 - **License of DataBench CSVs**: DataBench is released under a permissive license per the SemEval 2025 Task 8 paper. Confirm license compatibility and add attribution in `datasets/databench/README.md` during Phase 1.
 - **Secrets handling**: `ANTHROPIC_API_KEY` and TabulaRAG API keys must be in env, never in files. `evals/config.py` reads from env only and errors loudly if missing.
-- **Paying for runs**: Cursor credits do not apply (Cursor is a separate brokerage). Use direct Anthropic API credits (apply to [Anthropic for Startups](https://www.anthropic.com/startups) — TabulaRAG should qualify), AWS Bedrock credits (Claude is available on Bedrock), or GCP Vertex credits (Claude is on Vertex). For one-off v1 runs at ~$8-15 each, paying out of pocket is fine.
 - **Reproducibility**: Every report includes: seed, DataBench subset commit, LLM model ID, `EMBEDDING_MODEL`, Python `requirements.txt` hash. Anyone with the same inputs should reproduce the numbers within LLM-determinism noise.
 - **Naming**: "eval" and "benchmark" are used interchangeably in casual conversation; in this repo, the user-visible artifact is always called a **benchmark report** (the comparison is the point). "Eval" is the internal word for the harness.
